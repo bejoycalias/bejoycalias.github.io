@@ -188,6 +188,82 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p></p>
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a</p>
+<br>
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Introduction (Part 1 of 4)</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-05-30T15:03:34+00:00">30 MAY 2017</time> | 
+<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2102" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2102&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Introduction+%28Part+1+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2102');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
+<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
+<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
+<p>Deriving insights from data is foundational to nearly every organization, and many customers process high volumes of data every day. One common requirement of customers in life sciences is the need to analyze these data in a high-throughput fashion without sacrificing time-to-insight.</p> 
+<p>Such analyses, which tend to be composed of a series of massively parallel processes (MPP) are well suited to the AWS Cloud. Many AWS customers and partners today, such as <a href="https://aws.amazon.com/solutions/case-studies/illumina/">Illumina</a>, <a href="https://aws.amazon.com/solutions/case-studies/dnanexus/">DNAnexus</a>, <a href="https://aws.amazon.com/solutions/case-studies/seven-bridges-genomics/">Seven Bridges Genomics</a>, <a href="https://www.youtube.com/watch?v=AW_JylyCZLM">AstraZeneca</a>, <a href="https://aws.amazon.com/solutions/case-studies/uc-santa-cruz-genomics-institute/">UCSC Genomics Institute</a>, and <a href="https://www.youtube.com/watch?v=ooMA9J7suh8&amp;index=2&amp;list=PLhr1KZpdzukdeX8mQ2qO73bg6UKQHYsHb">Human Longevity, Inc.</a>, have built scalable and elastic genomics processing solutions on AWS.</p> 
+<p>One such use case is genomic sequencing. Modern DNA sequencers, such as Illumina’s <a href="https://www.illumina.com/systems/sequencing-platforms/novaseq.html">NovaSeq</a>, can produce multiple terabytes of raw data each day. The data must then be processed into meaningful information that clinicians and research can act on in a timely fashion. This processing of genomic data is commonly referred to as “secondary analysis”.</p> 
+<p>Most common secondary analysis workflows take raw reads generated from sequencers and then process them in a multi-step workflow to identify the variation in a biological sample compared to a standard genome reference. The individual steps are normally similar to the following:<span id="more-2102"></span></p> 
+<ol> 
+<li>DNA sequences are mapped to a standard genome reference by use of an alignment algorithm, such as Smith-Waterman or Burrows-Wheeler.</li> 
+<li>After the sequences are mapped to the reference, the differences are identified as single nucleotide variations, insertions, deletions, or complex structural variation in a process known as variant calling.</li> 
+<li>The resulting variants are often combined with other information to identify genomic variants highly correlated with disease or drug response. They might also be analyzed in the context of clinical data such as to identify disease susceptibility or state for a patient.</li> 
+<li>Along the way, quality metrics are collected or computed to ensure that the generated data is of the appropriate quality for use in requisite research or clinical settings.</li> 
+</ol> 
+<p>In this post series, you can build a secondary analysis workflow similar to the one just described. Here is a diagram of the workflow:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png"><img class="aligncenter size-full wp-image-2112" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png" alt="" width="2241" height="554" /></a></p> 
+<hr /> 
+<b id="toc_1">Secondary analysis is a batch workflow</b> 
+<p>At its core, a genomics pipeline is similar to a series of Extract Transform and Load (ETL) steps that convert raw files from a DNA sequencer to a list of variants for one or more individuals. Each step extracts a set of input files from a data source, processes them as a compute-intensive workload (transform), and then loads the output into another location for subsequent storage or analysis.</p> 
+<p>These steps are often chained together to build a flexible genomics processing workflow. The files can then be used for downstream analysis, such as population scale analytics with <a href="https://aws.amazon.com/blogs/big-data/interactive-analysis-of-genomic-datasets-using-amazon-athena/">Amazon Athena</a> or <a href="https://blogs.aws.amazon.com/bigdata/post/Tx1GE3J0NATVJ39/Will-Spark-Power-the-Data-behind-Precision-Medicine">Spark on Amazon EMR</a>. These ETL processes can be represented as individual batch steps in an overall workflow.</p> 
+<p>When we discuss batch processing with customers, we often focus on the following three layers:</p> 
+<p><strong>Jobs (analytical modules):</strong> These jobs are individual units of work that take a set of inputs, run a single process, and produce a set of outputs. In this series, you use Docker containers to define these analytical modules. For genomics, these commonly include alignment, variant calling, quality control, or another module in your workflow. <a href="https://aws.amazon.com/ecs">Amazon ECS</a> is an AWS service that orchestrates and runs these Docker containerized modules on top of <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances.</p> 
+<p><strong>Batch engine:</strong> This is a framework for submitting individual analytical modules with the appropriate requirements for computational resources, such as memory and number of CPUs. Each step of the analysis pipeline requires a definition of how to run a job:</p> 
+<ul> 
+<li>Computational resources (disk, memory, CPU)</li> 
+<li>The compute environment to run it in (Docker container, runtime parameters)</li> 
+<li>Information about the priority of different jobs</li> 
+<li>Any dependencies between jobs</li> 
+</ul> 
+<p>You can leverage concepts such as container placement and bin packing to maximize performance of your genomic pipeline while concurrently optimizing for cost. We will use <a href="https://aws.amazon.com/batch/">AWS Batch</a> for this layer. AWS Batch dynamically provisions the optimal quantity and type of compute resources (for example, CPU or memory optimized instances) based on the volume and specific resource requirements of the submitted batch jobs.</p> 
+<p><strong>Workflow orchestration:</strong> This layer sits on top of the batch engine and allows you to decouple your workflow definition from the execution of the individual jobs. You can envision this layer as a state machine where you define a series of steps and pass appropriate metadata between states. We will use <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to submit the jobs to AWS Batch and use <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> to define and orchestrate the workflow.</p> 
+<b id="toc_2">Architecture</b> 
+<p>In the next three posts, you build a genome analysis pipeline using the following architecture. You don’t explicitly build the grayed out section, but we wanted to include them in the diagram as they are natural extensions to the core architecture. We discuss these and other extensions, briefly, in the concluding post. All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
+<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2 covers the job layer</a></strong>. We demonstrate how you can package bioinformatics applications in Docker containers, and discuss best practices when developing these containers for use in a multitenant batch environment.</p> 
+<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3 dives deep into the batch, or data processing layer</a></strong>. We discuss common considerations for deploying Docker containers to be used in batch analysis as well as demonstrate how you can use AWS Batch for a scalable and elastic batch engine.</p> 
+<p><strong>Part 4 dives into workflow layer orchestration</strong>. We show how you might architect that layer with AWS services. You take the components built in parts 2 and 3 and combine them into an entire secondary analysis workflow. This workflow manages dependencies as well as continually checking the progress of existing jobs. We conclude by running a secondary analysis end-to-end for under $1 and discuss some extensions you can build on top of this core workflow.</p> 
+<b id="toc_3">What you can expect to learn</b> 
+<p>At the end of this series, you will have built a scalable and elastic solution to process genomes on AWS, as well as gained a general understanding of architectural choices available to you. The solution is generally applicable to other workloads, such as image processing. Even non-life science workloads such as trade analytics in financial services can benefit.</p> 
+<p>In your solution, you use <a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot Instances</a> to optimize for cost. Spot Instances allow you to bid on spare EC2 compute capacity, which can save up to 90% off of traditional On-Demand prices. In many cases, this translates into the ability to analyze genomes at scale for as low as $1 per analysis.</p> 
+<p>Let’s get building!</p> 
+<p>Other posts in this four-part series:</p> 
+<ul> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
+</ul> 
+<p>Please leave any questions and comments below.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2102');
+});
+</script> 
+</article> 
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Deep Learning on AWS Batch</b> 
@@ -1999,207 +2075,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-1941');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Creating a Simple “Fetch &amp; Run” AWS Batch Job</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Bryan Liston</span></span> | on 
-<time property="datePublished" datetime="2017-03-09T15:39:23+00:00">09 MAR 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-batch/" title="View all posts in AWS Batch"><span property="articleSection">AWS Batch</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/creating-a-simple-fetch-and-run-aws-batch-job/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-1944" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=1944&amp;disqus_title=Creating+a+Simple+%E2%80%9CFetch+%26amp%3B+Run%E2%80%9D+AWS+Batch+Job&amp;disqus_url=https://aws.amazon.com/blogs/compute/creating-a-simple-fetch-and-run-aws-batch-job/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1944');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/Dougal_Ballantyne_47_09-14.jpg" alt="Dougal Ballantyne" /><br /> <strong>Dougal Ballantyne, Principal Product Manager – AWS Batch</strong></p> 
-<p>Docker enables you to create highly customized images that are used to execute your jobs. These images allow you to easily share complex applications between teams and even organizations. However, sometimes you might just need to run a script!</p> 
-<p>This post details the steps to create and run a simple “fetch &amp; run” job in <a href="https://aws.amazon.com/batch">AWS Batch</a>. AWS Batch executes jobs as Docker containers using <a href="https://aws.amazon.com/ecs">Amazon ECS</a>. You build a simple Docker image containing a helper application that can download your script or even a zip file from Amazon S3. AWS Batch then launches an instance of your container image to retrieve your script and run your job.<span id="more-1944"></span></p> 
-<b id="toc_0">AWS Batch overview</b> 
-<p>AWS Batch enables developers, scientists, and engineers to easily and efficiently run hundreds of thousands of batch computing jobs on AWS. AWS Batch dynamically provisions the optimal quantity and type of compute resources (e.g., CPU or memory optimized instances) based on the volume and specific resource requirements of the batch jobs submitted.</p> 
-<p>With AWS Batch, there is no need to install and manage batch computing software or server clusters that you use to run your jobs, allowing you to focus on analyzing results and solving problems. AWS Batch plans, schedules, and executes your batch computing workloads across the full range of AWS compute services and features, such as Amazon EC2 Spot Instances.</p> 
-<b id="toc_1">“Fetch &amp; run” walkthrough</b> 
-<p>The following steps get everything working:</p> 
-<ul> 
-<li>Build a Docker image with the fetch &amp; run script</li> 
-<li>Create an <a href="https://aws.amazon.com/ecr">Amazon ECR</a> repository for the image</li> 
-<li>Push the built image to ECR</li> 
-<li>Create a simple job script and upload it to S3</li> 
-<li>Create an IAM role to be used by jobs to access S3</li> 
-<li>Create a job definition that uses the built image</li> 
-<li>Submit and run a job that execute the job script from S3</li> 
-</ul> 
-<b id="toc_2">Prerequisites</b> 
-<p>Before you get started, there a few things to prepare. If this is the first time you have used AWS Batch, you should follow the <a href="http://docs.aws.amazon.com/batch/latest/userguide/Batch_GetStarted.html">Getting Started Guide</a> and ensure you have a valid job queue and compute environment.</p> 
-<p>After you are up and running with AWS Batch, the next thing is to have an environment to build and register the Docker image to be used. For this post, register this image in an ECR repository. This is a private repository by default and can easily be used by AWS Batch jobs</p> 
-<p>You also need a working Docker environment to complete the walkthrough. For the examples, I used <a href="https://www.docker.com/products/docker">Docker for Mac</a>. Alternatively, you could easily <a href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-basics.html">launch an EC2 instance running Amazon Linux and install Docker</a>.</p> 
-<p>You need the <a href="https://aws.amazon.com/cli">AWS CLI</a> installed. For more information, see <a href="https://docs.aws.amazon.com/cli/latest/userguide/installing.html">Installing the AWS Command Line Interface</a>.</p> 
-<p> 
-<!--more--></p> 
-<b id="toc_3">Building the fetch &amp; run Docker image</b> 
-<p>The fetch &amp; run Docker image is based on Amazon Linux. It includes a simple script that reads some environment variables and then uses the AWS CLI to download the job script (or zip file) to be executed.</p> 
-<p>To get started, download the source code from the aws-batch-helpers GitHub repository. The following link pulls the latest version: <a href="https://github.com/awslabs/aws-batch-helpers/archive/master.zip">https://github.com/awslabs/aws-batch-helpers/archive/master.zip</a>. Unzip the downloaded file and navigate to the “fetch-and-run” folder. Inside this folder are two files:</p> 
-<ul> 
-<li>Dockerfile</li> 
-<li>fetch_and_run.sh</li> 
-</ul> 
-<p><a href="https://docs.docker.com/engine/reference/builder/">Dockerfile</a> is used by Docker to build an image. Look at the contents; you should see something like the following:</p> 
-<pre><code class="language-none">FROM amazonlinux:latest
-RUN yum -y install unzip aws-cli
-ADD fetch_and_run.sh /usr/local/bin/fetch_and_run.sh
-WORKDIR /tmp
-USER nobody
-ENTRYPOINT [&quot;/usr/local/bin/fetch_and_run.sh&quot;]</code></pre> 
-<ul> 
-<li>The FROM line instructs Docker to pull the base image from the <a href="https://hub.docker.com/r/_/amazonlinux/">amazonlinux</a> repository, using the latest tag.</li> 
-<li>The RUN line executes a shell command as part of the image build process.</li> 
-<li>The ADD line, copies the fetch_and_run.sh script into the /usr/local/bin directory inside the image.</li> 
-<li>The WORKDIR line, sets the default directory to /tmp when the image is used to start a container.</li> 
-<li>The USER line sets the default user that the container executes as.</li> 
-<li>Finally, the ENTRYPOINT line instructs Docker to call the /usr/local/bin/fetch_and_run.sh script when it starts the container. When running as an AWS Batch job, it is passed the contents of the command parameter.</li> 
-</ul> 
-<p>Now, build the Docker image! Assuming that the docker command is in your PATH and you don’t need sudo to access it, you can build the image with the following command (note the dot at the end of the command):</p> 
-<pre><code class="language-bash">docker build -t awsbatch/fetch_and_run .   </code></pre> 
-<p>This command should produce an output similar to the following:</p> 
-<pre><code class="language-none">Sending build context to Docker daemon 373.8 kB
-Step 1/6 : FROM amazonlinux:latest
-latest: Pulling from library/amazonlinux
-c9141092a50d: Pull complete
-Digest: sha256:2010c88ac1e7c118d61793eec71dcfe0e276d72b38dd86bd3e49da1f8c48bf54
-Status: Downloaded newer image for amazonlinux:latest
----&gt; 8ae6f52035b5
-Step 2/6 : RUN yum -y install unzip aws-cli
----&gt; Running in e49cba995ea6
-Loaded plugins: ovl, priorities
-Resolving Dependencies
---&gt; Running transaction check
----&gt; Package aws-cli.noarch 0:1.11.29-1.45.amzn1 will be installed
-&lt;&lt; removed for brevity &gt;&gt;
-Complete!
----&gt; b30dfc9b1b0e
-Removing intermediate container e49cba995ea6
-Step 3/6 : ADD fetch_and_run.sh /usr/local/bin/fetch_and_run.sh
----&gt; 256343139922
-Removing intermediate container 326092094ede
-Step 4/6 : WORKDIR /tmp
----&gt; 5a8660e40d85
-Removing intermediate container b48a7b9c7b74
-Step 5/6 : USER nobody
----&gt; Running in 72c2be3af547
----&gt; fb17633a64fe
-Removing intermediate container 72c2be3af547
-Step 6/6 : ENTRYPOINT /usr/local/bin/fetch_and_run.sh
----&gt; Running in aa454b301d37
----&gt; fe753d94c372
-Removing intermediate container aa454b301d37
-Successfully built 9aa226c28efc</code></pre> 
-<p>In addition, you should see a new local repository called fetch_and_run, when you run the following command:</p> 
-<pre><code class="language-bash">docker images</code></pre> 
-<pre><code class="language-none">REPOSITORY               TAG              IMAGE ID            CREATED             SIZE
-awsbatch/fetch_and_run   latest           9aa226c28efc        19 seconds ago      374 MB
-amazonlinux              latest           8ae6f52035b5        5 weeks ago         292 MB</code></pre> 
-<p>To add more packages to the image, you could update the RUN line or add a second one, right after it.</p> 
-<b id="toc_4">Creating an ECR repository</b> 
-<p>The next step is to create an ECR repository to store the Docker image, so that it can be retrieved by AWS Batch when running jobs.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/ecs/home?region=us-east-1">ECR console</a>, choose <strong>Get Started</strong> or <strong>Create repository</strong>.</li> 
-<li>Enter a name for the repository, for example: awsbatch/fetch_and_run.</li> 
-<li>Choose <strong>Next step</strong> and follow the instructions. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_1.png" alt="fetchAndRunBatch_1.png" /></p></li> 
-</ol> 
-<p>You can keep the console open, as the tips can be helpful.</p> 
-<b id="toc_5">Push the built image to ECR</b> 
-<p>Now that you have a Docker image and an ECR repository, it is time to push the image to the repository. Use the following AWS CLI commands, if you have used the previous example names. Replace the AWS account number in red with your own account.</p> 
-<pre><code class="language-bash">aws ecr get-login --region us-east-1
-docker tag awsbatch/fetch_and_run:latest 012345678901.dkr.ecr.us-east-1.amazonaws.com/awsbatch/fetch_and_run:latest
-docker push 012345678901.dkr.ecr.us-east-1.amazonaws.com/awsbatch/fetch_and_run:latest</code></pre> 
-<b id="toc_6">Create a simple job script and upload to S3</b> 
-<p>Next, create and upload a simple job script that is executed using the fetch_and_run image that you just built and registered in ECR. Start by creating a file called myjob.sh with the example content below:</p> 
-<pre><code class="language-bash">
-#!/bin/bash
-date
-echo &quot;Args: $@&quot;
-env
-echo &quot;This is my simple test job!.&quot;
-echo &quot;jobId: $AWS_BATCH_JOB_ID&quot;
-echo &quot;jobQueue: $AWS_BATCH_JQ_NAME&quot;
-echo &quot;computeEnvironment: $AWS_BATCH_CE_NAME&quot;
-sleep $1
-date
-echo &quot;bye bye!!&quot;</code></pre> 
-<p>Upload the script to an S3 bucket.</p> 
-<pre><code class="language-bash">aws s3 cp myjob.sh s3://&lt;bucket&gt;/myjob.sh</code></pre> 
-<b id="toc_8">Create an IAM role</b> 
-<p>When the fetch_and_run image runs as an AWS Batch job, it fetches the job script from Amazon S3. You need an IAM role that the AWS Batch job can use to access S3.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/iam/home?region=us-east-1">IAM console</a>, choose <strong>Roles</strong>, <strong>Create New Role</strong>.</li> 
-<li>Enter a name for your new role, for example: batchJobRole, and choose <strong>Next Step</strong>.</li> 
-<li>For <strong>Role Type</strong>, under <strong>AWS Service Roles</strong>, choose <strong>Select</strong> next to “Amazon EC2 Container Service Task Role” and then choose <strong>Next Step</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_2.png" alt="fetchAndRunBatch_2.png" /></p></li> 
-<li>On the <strong>Attach Policy</strong> page, type “AmazonS3ReadOnlyAccess” into the <strong>Filter</strong> field and then select the check box for that policy. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_3.png" alt="fetchAndRunBatch_3.png" /></p></li> 
-<li>Choose <strong>Next Step</strong>, <strong>Create Role</strong>. You see the details of the new role. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_4.png" alt="fetchAndRunBatch_4.png" /></p></li> 
-</ol> 
-<b id="toc_9">Create a job definition</b> 
-<p>Now that you’ve have created all the resources needed, pull everything together and build a job definition that you can use to run one or many AWS Batch jobs.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/batch/home?region=us-east-1">AWS Batch console</a>, choose <strong>Job Definitions</strong>, <strong>Create</strong>.</li> 
-<li>For the <strong>Job Definition</strong>, enter a name, for example, fetch_and_run.</li> 
-<li>For <strong>IAM Role</strong>, choose the role that you created earlier, batchJobRole.</li> 
-<li>For <strong>ECR Repository URI</strong>, enter the URI where the fetch_and_run image was pushed, for example: 012345678901.dkr.ecr.us-east-1.amazonaws.com/awsbatch/fetch_and_run.</li> 
-<li>Leave the <strong>Command</strong> field blank.</li> 
-<li>For <strong>vCPUs</strong>, enter 1. For <strong>Memory</strong>, enter 500. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_5.png" alt="fetchAndRunBatch_5.png" /></p></li> 
-<li>For <strong>User</strong>, enter “nobody”.</li> 
-<li>Choose <strong>Create job definition</strong>.</li> 
-</ol> 
-<b id="toc_10">Submit and run a job</b> 
-<p>Now, submit and run a job that uses the fetch_and_run image to download the job script and execute it.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/batch/home?region=us-east-1">AWS Batch console</a>, choose <strong>Jobs</strong>, <strong>Submit Job</strong>.</li> 
-<li>Enter a name for the job, for example: script_test.</li> 
-<li>Choose the latest fetch_and_run job definition.</li> 
-<li>For <strong>Job Queue</strong>, choose a queue, for example: first-run-job-queue.</li> 
-<li>For <strong>Command</strong>, enter myjob.sh,60.</li> 
-<li>Choose <strong>Validate Command</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_6.png" alt="fetchAndRunBatch_6.png" /></p></li> 
-<li>Enter the following environment variables and then choose <strong>Submit job</strong>. 
-<ul> 
-<li>Key=BATCH_FILE_TYPE, Value=script</li> 
-<li>Key=BATCH_FILE_S3_URL, Value=s3:///myjob.sh. Don’t forget to use the correct URL for your file.</li> 
-</ul> <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_7.png" alt="fetchAndRunBatch_7.png" /></p></li> 
-<li>After the job is completed, check the final status in the console. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_8.png" alt="fetchAndRunBatch_8.png" /></p></li> 
-<li>In the job details page, you can also choose <strong>View logs for this job in CloudWatch console</strong> to see your job log. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/fetchAndRunBatch/fetchAndRunBatch_9.png" alt="fetchAndRunBatch_9.png" /></p></li> 
-</ol> 
-<b id="toc_11">How the fetch and run image works</b> 
-<p>The fetch_and_run image works as a combination of the Docker ENTRYPOINT and COMMAND feature, and a shell script that reads environment variables set as part of the AWS Batch job. When building the Docker image, it starts with a base image from Amazon Linux and installs a few packages from the yum repository. This becomes the execution environment for the job.</p> 
-<p>If the script you planned to run needed more packages, you would add them using the RUN parameter in the Dockerfile. You could even change it to a different base image such as Ubuntu, by updating the FROM parameter.</p> 
-<p>Next, the fetch_and_run.sh script is added to the image and set as the container ENTRYPOINT. The script simply reads some environment variables and then downloads and runs the script/zip file from S3. It is looking for the following environment variables BATCH_FILE_TYPE and BATCH_FILE_S3_URL. If you run fetch_and_run.sh, with no environment variables, you get the following usage message:</p> 
-<ul> 
-<li>BATCH_FILE_TYPE not set, unable to determine type (zip/script) of</li> 
-</ul> 
-<p>Usage:</p> 
-<pre><code class="language-bash">export BATCH_FILE_TYPE=&quot;script&quot;
-export BATCH_FILE_S3_URL=&quot;s3://my-bucket/my-script&quot;
-fetch_and_run.sh script-from-s3 [ &lt;script arguments&gt; ]</code></pre> 
-<p>– or –</p> 
-<pre><code class="language-bash">export BATCH_FILE_TYPE=&quot;zip&quot;
-export BATCH_FILE_S3_URL=&quot;s3://my-bucket/my-zip&quot;
-fetch_and_run.sh script-from-zip [ &lt;script arguments&gt; ]</code></pre> 
-<p>This shows that it supports two values for BATCH_FILE_TYPE, either “script” or “zip”. When you set “script”, it causes fetch_and_run.sh to download a single file and then execute it, in addition to passing in any further arguments to the script. If you set it to “zip”, this causes fetch_and_run.sh to download a zip file, then unpack it and execute the script name passed and any further arguments. You can use the “zip” option to pass more complex jobs with all the applications dependencies in one file.</p> 
-<p>Finally, the ENTRYPOINT parameter tells Docker to execute the /usr/local/bin/fetch_and_run.sh script when creating a container. In addition, it passes the contents of the COMMAND parameter as arguments to the script. This is what enables you to pass the script and arguments to be executed by the fetch_and_run image with the <strong>Command</strong> field in the SubmitJob API action call.</p> 
-<b id="toc_12">Summary</b> 
-<p>In this post, I detailed the steps to create and run a simple “fetch &amp; run” job in <a href="https://aws.amazon.com/batch">AWS Batch</a>. You can now easily use the same job definition to run as many jobs as you need by uploading a job script to Amazon S3 and calling SubmitJob with the appropriate environment variables.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1944');
 });
 </script> 
 </article> 

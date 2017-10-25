@@ -188,6 +188,136 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p></p>
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a</p>
+<br>
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Synchronizing Amazon S3 Buckets Using AWS Step Functions</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-06-25T22:26:59+00:00">25 JUN 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions"><span property="articleSection">AWS Step Functions</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/synchronizing-amazon-s3-buckets-using-aws-step-functions/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2404" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2404&amp;disqus_title=Synchronizing+Amazon+S3+Buckets+Using+AWS+Step+Functions&amp;disqus_url=https://aws.amazon.com/blogs/compute/synchronizing-amazon-s3-buckets-using-aws-step-functions/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2404');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg"><img class="alignnone size-full wp-image-2406" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg" alt="" width="120" height="160" /></a></p> 
+<p><strong>Constantin Gonzalez is a Principal Solutions Architect at AWS</strong></p> 
+<p>In my free time, I run a small blog that uses Amazon S3 to host static content and Amazon CloudFront to distribute it world-wide. I use a home-grown, static website generator to create and upload my blog content onto S3.</p> 
+<p>My blog uses two S3 buckets: one for staging and testing, and one for production. As a website owner, I want to update the production bucket with all changes from the staging bucket in a reliable and efficient way, without having to create and populate a new bucket from scratch. Therefore, to synchronize files between these two buckets, I use <a href="https://aws.amazon.com/lambda" target="_blank" rel="noopener noreferrer">AWS Lambda</a> and <a href="https://aws.amazon.com/step-functions" target="_blank" rel="noopener noreferrer">AWS Step Functions</a>.</p> 
+<p>In this post, I show how you can use Step Functions to build a scalable synchronization engine for S3 buckets and learn some common patterns for designing Step Functions state machines while you do so.<span id="more-2404"></span></p> 
+<b id="toc_1">Step Functions overview</b> 
+<p>Step Functions makes it easy to coordinate the components of distributed applications and microservices using visual workflows. Building applications from individual components that each perform a discrete function lets you scale and change applications quickly.</p> 
+<p>While this particular example focuses on synchronizing objects between two S3 buckets, it can be generalized to any other use case that involves coordinated processing of any number of objects in S3 buckets, or other, similar data processing patterns.</p> 
+<b id="toc_2">Bucket replication options</b> 
+<p>Before I dive into the details on how this particular example works, take a look at some alternatives for copying or replicating data between two Amazon S3 buckets:</p> 
+<ul> 
+<li>The <a href="https://aws.amazon.com/cli">AWS CLI</a> provides customers with a powerful <a href="http://docs.aws.amazon.com/cli/latest/reference/s3/sync.html" target="_blank" rel="noopener noreferrer">aws s3 sync</a> command that can synchronize the contents of one bucket with another.</li> 
+<li><a href="http://docs.aws.amazon.com/emr/latest/ReleaseGuide/UsingEMR_s3distcp.html">S3DistCP</a> is a powerful tool for users of <a href="https://aws.amazon.com/emr/" target="_blank" rel="noopener noreferrer">Amazon EMR</a> that can efficiently load, save, or copy large amounts of data between S3 buckets and HDFS.</li> 
+<li>The S3 <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/crr.html" target="_blank" rel="noopener noreferrer">cross-region replication</a> functionality enables automatic, asynchronous copying of objects across buckets in different AWS regions.</li> 
+</ul> 
+<p>In this use case, you are looking for a slightly different bucket synchronization solution that:</p> 
+<ul> 
+<li>Works within the same region</li> 
+<li>Is more scalable than a CLI approach running on a single machine</li> 
+<li>Doesn’t require managing any servers</li> 
+<li>Uses a more finely grained cost model than the hourly based Amazon EMR approach</li> 
+</ul> 
+<p>You need a scalable, serverless, and customizable bucket synchronization utility.</p> 
+<b id="toc_3">Solution architecture</b> 
+<p>Your solution needs to do three things:</p> 
+<ol> 
+<li>Copy all objects from a source bucket into a destination bucket, but leave out objects that are already present, for efficiency.</li> 
+<li>Delete all “orphaned” objects from the destination bucket that aren’t present on the source bucket, because you don’t want obsolete objects lying around.</li> 
+<li>Keep track of all objects for #1 and #2, regardless of how many objects there are.</li> 
+</ol> 
+<p>In the beginning, you read in the source and destination buckets as parameters and perform basic parameter validation. Then, you operate two separate, independent loops, one for copying missing objects and one for deleting obsolete objects. Each loop is a sequence of Step Functions states that read in chunks of S3 object lists and use the continuation token to decide in a choice state whether to continue the loop or not.</p> 
+<p>This solution is based on the following architecture that uses Step Functions, Lambda, and two S3 buckets:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1.png"><img class="aligncenter size-medium wp-image-2417" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1-300x250.png" alt="" width="300" height="250" /></a></p> 
+<p>As you can see, this setup involves no servers, just two main building blocks:</p> 
+<ul> 
+<li>Step Functions manages the overall flow of synchronizing the objects from the source bucket with the destination bucket.</li> 
+<li>A set of Lambda functions carry out the individual steps necessary to perform the work, such as validating input, getting lists of objects from source and destination buckets, copying or deleting objects in batches, and so on.</li> 
+</ul> 
+<p>To understand the synchronization flow in more detail, look at the Step Functions state machine diagram for this example.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1.png"><img class="aligncenter size-medium wp-image-2415" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1-267x300.png" alt="" width="267" height="300" /></a></p> 
+<b id="toc_4">Walkthrough</b> 
+<p>Here’s a detailed discussion of how this works.</p> 
+<p>To follow along, use the code in the <a href="https://github.com/awslabs/sync-buckets-state-machine" target="_blank" rel="noopener noreferrer">sync-buckets-state-machine</a> GitHub repo. The code comes with a ready-to-run deployment script in Python that takes care of all the IAM roles, policies, Lambda functions, and of course the Step Functions state machine deployment using <a href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>, as well as instructions on how to use it.</p> 
+<h3 id="toc_5">Fine print: Use at your own risk</h3> 
+<p>Before I start, here are some disclaimers:</p> 
+<ul> 
+<li><strong>Educational purposes only.</strong> <p>The following example and code are intended for educational purposes only. Make sure that you customize, test, and review it on your own before using any of this in production.</p></li> 
+<li><strong>S3 object deletion.</strong> <p>In particular, using the code included below may delete objects on S3 in order to perform synchronization. Make sure that you have backups of your data. In particular, consider using the <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/Versioning.html" target="_blank" rel="noopener noreferrer">Amazon S3 Versioning feature</a> to protect yourself against unintended data modification or deletion.</p></li> 
+</ul> 
+<p>Step Functions execution starts with an initial set of parameters that contain the source and destination bucket names in JSON:</p> 
+<pre><code class="language-none">{
+&quot;source&quot;:       &quot;my-source-bucket-name&quot;,
+&quot;destination&quot;:  &quot;my-destination-bucket-name&quot;
+}</code></pre> 
+<p>Armed with this data, Step Functions execution proceeds as follows.</p> 
+<h3 id="toc_6">Step 1: Detect the bucket region</h3> 
+<p>First, you need to know the regions where your buckets reside. In this case, take advantage of the Step Functions <em>Parallel</em> state. This allows you to use a Lambda function <code>get_bucket_location.py</code> inside two different, parallel branches of <em>task</em> states:</p> 
+<ul> 
+<li><code>FindRegionForSourceBucket</code></li> 
+<li><code>FindRegionForDestinationBucket</code></li> 
+</ul> 
+<p>Each task state receives one bucket name as an input parameter, then detects the region corresponding to “their” bucket. The output of these functions is collected in a result array containing one element per parallel function.</p> 
+<h3 id="toc_7">Step 2: Combine the parallel states</h3> 
+<p>The output of a parallel state is a list with all the individual branches’ outputs. To combine them into a single structure, use a Lambda function called <code>combine_dicts.py</code> in its own <code>CombineRegionOutputs</code> <em>task</em> state. The function combines the two outputs from step 1 into a single JSON dict that provides you with the necessary region information for each bucket.</p> 
+<h3 id="toc_8">Step 3: Validate the input</h3> 
+<p>In this walkthrough, you only support buckets that reside in the same region, so you need to decide if the input is valid or if the user has given you two buckets in different regions. To find out, use a Lambda function called <code>validate_input.py</code> in the <code>ValidateInput</code> <em>task</em> state that tests if the two regions from the previous step are equal. The output is a Boolean.</p> 
+<h3 id="toc_9">Step 4: Branch the workflow</h3> 
+<p>Use another type of Step Functions state, a <em>Choice</em> state, which branches into a <em>Failure</em> state if the comparison in step 3 yields false, or proceeds with the remaining steps if the comparison was successful.</p> 
+<h3 id="toc_10">Step 5: Execute in parallel</h3> 
+<p>The actual work is happening in another <em>Parallel</em> state. Both branches of this state are very similar to each other and they re-use some of the Lambda function code.</p> 
+<p>Each parallel branch implements a looping pattern across the following steps:</p> 
+<ol> 
+<li>Use a <em>Pass</em> state to inject either the string value <code>&quot;source&quot;</code> (<code>InjectSourceBucket</code>) or <code>&quot;destination&quot;</code> (<code>InjectDestinationBucket</code>) into the <code>listBucket</code> attribute of the state document.The next step uses either the source or the destination bucket, depending on the branch, while executing the same, generic Lambda function. You don’t need two Lambda functions that differ only slightly. This step illustrates how to use <em>Pass</em> states as a way of injecting constant parameters into your state machine and as a way of controlling step behavior while re-using common step execution code.</li> 
+<li>The next step <code>UpdateSourceKeyList/UpdateDestinationKeyList</code> lists objects in the given bucket. <p>Remember that the previous step injected either <code>&quot;source&quot;</code> or <code>&quot;destination&quot;</code> into the state document’s <code>listBucket</code> attribute. This step uses the same <code>list_bucket.py</code> Lambda function to list objects in an S3 bucket. The <code>listBucket</code> attribute of its input decides which bucket to list. In the left branch of the main parallel state, use the list of source objects to work through copying missing objects. The right branch uses the list of destination objects, to check if they have a corresponding object in the source bucket and eliminate any orphaned objects. Orphans don’t have a source object of the same S3 key.</p></li> 
+<li>This step performs the actual work. In the left branch, the <code>CopySourceKeys</code> step uses the <code>copy_keys.py</code> Lambda function to go through the list of source objects provided by the previous step, then copies any missing object into the destination bucket. Its sister step in the other branch, <code>DeleteOrphanedKeys</code>, uses its destination bucket key list to test whether each object from the destination bucket has a corresponding source object, then deletes any orphaned objects.</li> 
+<li>The S3 <code>ListObjects</code> API action is designed to be scalable across many objects in a bucket. Therefore, it returns object lists in chunks of configurable size, along with a continuation token. If the API result has a continuation token, it means that there are more objects in this list. You can work from token to token to continue getting object list chunks, until you get no more continuation tokens.</li> 
+</ol> 
+<p>By breaking down large amounts of work into chunks, you can make sure each chunk is completed within the timeframe allocated for the Lambda function, and within the maximum input/output data size for a Step Functions state.</p> 
+<p>This approach comes with a slight tradeoff: the more objects you process at one time in a given chunk, the faster you are done. There’s less overhead for managing individual chunks. On the other hand, if you process too many objects within the same chunk, you risk going over time and space limits of the processing Lambda function or the Step Functions state so the work cannot be completed.</p> 
+<p>In this particular case, use a Lambda function that maximizes the number of objects listed from the S3 bucket that can be stored in the input/output state data. This is currently up to 32,768 bytes, assuming (based on some experimentation) that the execution of the <code>COPY/DELETE</code> requests in the processing states can always complete in time.</p> 
+<p>A more sophisticated approach would use the Step Functions <em>retry/catch</em> state attributes to account for any time limits encountered and adjust the list size accordingly through some list site adjusting.</p> 
+<h3 id="toc_11">Step 6: Test for completion</h3> 
+<p>Because the presence of a continuation token in the S3 ListObjects output signals that you are not done processing all objects yet, use a <em>Choice</em> state to test for its presence. If a continuation token exists, it branches into the <code>UpdateSourceKeyList</code> step, which uses the token to get to the next chunk of objects. If there is no token, you’re done. The state machine then branches into the <code>FinishCopyBranch/FinishDeleteBranch</code> state.</p> 
+<p>By using <em>Choice</em> states like this, you can create loops exactly like the old times, when you didn’t have for statements and used branches in assembly code instead!</p> 
+<h3 id="toc_12">Step 7: Success!</h3> 
+<p>Finally, you’re done, and can step into your final <em>Success</em> state.</p> 
+<b id="toc_13">Lessons learned</b> 
+<p>When implementing this use case with Step Functions and Lambda, I learned the following things:</p> 
+<ul> 
+<li>Sometimes, it is necessary to manipulate the JSON state of a Step Functions state machine with just a few lines of code that hardly seem to warrant their own Lambda function. This is ok, and the cost is actually pretty low given Lambda’s 100 millisecond billing granularity. The upside is that functions like these can be helpful to make the data more palatable for the following steps or for facilitating <em>Choice</em> states. An example here would be the <code>combine_dicts.py</code> function.</li> 
+<li><em>Pass</em> states can be useful beyond debugging and tracing, they can be used to inject arbitrary values into your state JSON and guide generic Lambda functions into doing specific things.</li> 
+<li><em>Choice</em> states are your friend because you can build while-loops with them. This allows you to reliably grind through large amounts of data with the patience of an engine that currently supports execution times of up to 1 year. <p>Currently, there is an execution history limit of 25,000 events. Each Lambda task state execution takes up 5 events, while each choice state takes 2 events for a total of 7 events per loop. This means you can loop about 3500 times with this state machine. For even more scalability, you can split up work across multiple Step Functions executions through object key sharding or similar approaches.</p></li> 
+<li>It’s not necessary to spend a lot of time coding exception handling within your Lambda functions. You can delegate all exception handling to Step Functions and instead simplify your functions as much as possible.</li> 
+<li>Step Functions are great replacements for shell scripts. This could have been a shell script, but then I would have had to worry about where to execute it reliably, how to scale it if it went beyond a few thousand objects, etc. Think of Step Functions and Lambda as tools for scripting at a cloud level, beyond the boundaries of servers or containers. “Serverless” here also means “boundary-less”.</li> 
+</ul> 
+<b id="toc_14">Summary</b> 
+<p>This approach gives you scalability by breaking down any number of S3 objects into chunks, then using Step Functions to control logic to work through these objects in a scalable, serverless, and fully managed way.</p> 
+<p>To take a look at the code or tweak it for your own needs, use the code in the <a href="https://github.com/awslabs/sync-buckets-state-machine" target="_blank" rel="noopener noreferrer">sync-buckets-state-machine</a> GitHub repo.</p> 
+<p>To see more examples, please visit the <a href="https://aws.amazon.com/step-functions/getting-started/" target="_blank" rel="noopener noreferrer">Step Functions Getting Started</a> page.</p> 
+<p>Enjoy!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-storage-service/" rel="tag">Amazon Simple Storage Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/s3/" rel="tag">S3</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2404');
+});
+</script> 
+</article> 
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Kotlin and Groovy JVM Languages with AWS Lambda</b> 
@@ -341,7 +471,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2430');
 by 
 <span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
 <time property="datePublished" datetime="2017-06-20T12:56:00+00:00">20 JUN 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2"><span property="articleSection">Amazon EC2</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a></span> | 
+<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2369" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2369&amp;disqus_title=Building+Loosely+Coupled%2C+Scalable%2C+C%23+Applications+with+Amazon+SQS+and+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -496,12 +626,12 @@ Console.WriteLine(&quot;Could not process message due to error. Exception: {0}&q
 }
 </code></pre> 
 <h3>Using SQS to adapt to changing business requirements</h3> 
-<p>One of the benefits of introducing a message queue is that you can accommodate new business requirements without dramatically affecting your application.</p> 
+<p>One of the benefits of introducing a <a href="https://aws.amazon.com/message-queue/">message queue</a> is that you can accommodate new business requirements without dramatically affecting your application.</p> 
 <p>If, for example, the business decided that all orders placed over $5000 are to be handled as a priority, you could introduce a new “priority order” queue. The way the orders are processed does not change. The only significant change to the processing application is to ensure that messages from the “priority order” queue are processed before the “standard order” queue.</p> 
 <p>The following diagram shows how this logic could be isolated in an “order dispatcher,” whose only purpose is to route order messages to the appropriate queue based on whether the order exceeds $5000. Nothing on the web application or the processing nodes changes other than the target queue to which the order is sent. The rates at which orders are processed can be achieved by modifying the poll rates and scalability settings that I have already discussed.</p> 
 <p><img class="aligncenter wp-image-2377 size-large" title="Order_Dispatcher" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher-1024x534.png" alt="" width="640" height="334" /></p> 
 <h3>Extending the design pattern with Amazon SNS</h3> 
-<p>Amazon SNS supports reliable publish-subscribe (pub-sub) scenarios and push notifications to known endpoints across a wide variety of protocols. It eliminates the need to periodically check or poll for new information and updates. SNS supports:</p> 
+<p>Amazon SNS supports reliable <a href="https://aws.amazon.com/pub-sub-messaging/">publish-subscribe (pub-sub) scenarios</a> and push notifications to known endpoints across a wide variety of protocols. It eliminates the need to periodically check or poll for new information and updates. SNS supports:</p> 
 <ul> 
 <li>Reliable storage of messages for immediate or delayed processing</li> 
 <li>Publish / subscribe – direct, broadcast, targeted “push” messaging</li> 
@@ -749,7 +879,7 @@ TAGS:
 by 
 <span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
 <time property="datePublished" datetime="2017-06-07T13:18:10+00:00">07 JUN 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2"><span property="articleSection">Amazon EC2</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a></span> | 
+<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2216" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2216&amp;disqus_title=Using+Amazon+SQS+Dead-Letter+Queues+to+Control+Message+Failure&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -763,8 +893,8 @@ AWS.Blog.commenting('#aws-comment-trigger-2216');
 </footer> 
 <h5><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot.jpg"><img class="alignnone wp-image-2218 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot-150x150.jpg" alt="" width="150" height="150" /></a><strong><br /> Michael G. Khmelnitsky, Senior Programmer Writer</strong></h5> 
 <p>&nbsp;</p> 
-<p>Sometimes, messages can’t be processed because of a variety of possible issues, such as erroneous conditions within the producer or consumer application. For example, if a user places an order within a certain number of minutes of creating an account, the producer might pass a message with an empty string instead of a customer identifier. Occasionally, producers and consumers might fail to interpret aspects of the protocol that they use to communicate, causing message corruption or loss. Also, the consumer’s hardware errors might corrupt message payload. For these reasons, messages that can’t be processed in a timely manner are delivered to a <em>dead-letter queue</em>.<span id="more-2216"></span></p> 
-<p>The recent post <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> gives an overview of messaging in the microservice architecture of modern applications. This post explains how and when you should use dead-letter queues to gain better control over message handling in your applications. It also offers some resources for configuring a dead-letter queue in <a href="https://aws.amazon.com/sqs/">Amazon Simple Queue Service (SQS)</a>.</p> 
+<p>Sometimes, messages can’t be processed because of a variety of possible issues, such as erroneous conditions within the producer or consumer application. For example, if a user places an order within a certain number of minutes of creating an account, the producer might pass a message with an empty string instead of a customer identifier. Occasionally, producers and consumers might fail to interpret aspects of the protocol that they use to communicate, causing message corruption or loss. Also, the consumer’s hardware errors might corrupt message payload. For these reasons, messages that can’t be processed in a timely manner are delivered to a <em>dead-letter message queue</em>.<span id="more-2216"></span></p> 
+<p>The recent post <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> gives an overview of messaging in the microservice architecture of modern applications. This post explains how and when you should use dead-letter queues to gain better control over message handling in your applications. It also offers some resources for configuring a dead-letter <a href="https://aws.amazon.com/message-queue/">message queue in Amazon Simple Queue Service (SQS)</a>.</p> 
 <h3>What are the benefits of dead-letter queues?</h3> 
 <p>The main task of a dead-letter queue is handling message failure. A dead-letter queue lets you set aside and isolate messages that can’t be processed correctly to determine why their processing didn’t succeed. Setting up a dead-letter queue allows you to do the following:</p> 
 <ul> 
@@ -1658,81 +1788,6 @@ $ docker push $(REPO\_URI):03.17.03.01</code></pre>
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2123');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Introduction (Part 1 of 4)</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-05-30T15:03:34+00:00">30 MAY 2017</time> | 
-<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2102" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2102&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Introduction+%28Part+1+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2102');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
-<p>Deriving insights from data is foundational to nearly every organization, and many customers process high volumes of data every day. One common requirement of customers in life sciences is the need to analyze these data in a high-throughput fashion without sacrificing time-to-insight.</p> 
-<p>Such analyses, which tend to be composed of a series of massively parallel processes (MPP) are well suited to the AWS Cloud. Many AWS customers and partners today, such as <a href="https://aws.amazon.com/solutions/case-studies/illumina/">Illumina</a>, <a href="https://aws.amazon.com/solutions/case-studies/dnanexus/">DNAnexus</a>, <a href="https://aws.amazon.com/solutions/case-studies/seven-bridges-genomics/">Seven Bridges Genomics</a>, <a href="https://www.youtube.com/watch?v=AW_JylyCZLM">AstraZeneca</a>, <a href="https://aws.amazon.com/solutions/case-studies/uc-santa-cruz-genomics-institute/">UCSC Genomics Institute</a>, and <a href="https://www.youtube.com/watch?v=ooMA9J7suh8&amp;index=2&amp;list=PLhr1KZpdzukdeX8mQ2qO73bg6UKQHYsHb">Human Longevity, Inc.</a>, have built scalable and elastic genomics processing solutions on AWS.</p> 
-<p>One such use case is genomic sequencing. Modern DNA sequencers, such as Illumina’s <a href="https://www.illumina.com/systems/sequencing-platforms/novaseq.html">NovaSeq</a>, can produce multiple terabytes of raw data each day. The data must then be processed into meaningful information that clinicians and research can act on in a timely fashion. This processing of genomic data is commonly referred to as “secondary analysis”.</p> 
-<p>Most common secondary analysis workflows take raw reads generated from sequencers and then process them in a multi-step workflow to identify the variation in a biological sample compared to a standard genome reference. The individual steps are normally similar to the following:<span id="more-2102"></span></p> 
-<ol> 
-<li>DNA sequences are mapped to a standard genome reference by use of an alignment algorithm, such as Smith-Waterman or Burrows-Wheeler.</li> 
-<li>After the sequences are mapped to the reference, the differences are identified as single nucleotide variations, insertions, deletions, or complex structural variation in a process known as variant calling.</li> 
-<li>The resulting variants are often combined with other information to identify genomic variants highly correlated with disease or drug response. They might also be analyzed in the context of clinical data such as to identify disease susceptibility or state for a patient.</li> 
-<li>Along the way, quality metrics are collected or computed to ensure that the generated data is of the appropriate quality for use in requisite research or clinical settings.</li> 
-</ol> 
-<p>In this post series, you can build a secondary analysis workflow similar to the one just described. Here is a diagram of the workflow:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png"><img class="aligncenter size-full wp-image-2112" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png" alt="" width="2241" height="554" /></a></p> 
-<hr /> 
-<b id="toc_1">Secondary analysis is a batch workflow</b> 
-<p>At its core, a genomics pipeline is similar to a series of Extract Transform and Load (ETL) steps that convert raw files from a DNA sequencer to a list of variants for one or more individuals. Each step extracts a set of input files from a data source, processes them as a compute-intensive workload (transform), and then loads the output into another location for subsequent storage or analysis.</p> 
-<p>These steps are often chained together to build a flexible genomics processing workflow. The files can then be used for downstream analysis, such as population scale analytics with <a href="https://aws.amazon.com/blogs/big-data/interactive-analysis-of-genomic-datasets-using-amazon-athena/">Amazon Athena</a> or <a href="https://blogs.aws.amazon.com/bigdata/post/Tx1GE3J0NATVJ39/Will-Spark-Power-the-Data-behind-Precision-Medicine">Spark on Amazon EMR</a>. These ETL processes can be represented as individual batch steps in an overall workflow.</p> 
-<p>When we discuss batch processing with customers, we often focus on the following three layers:</p> 
-<p><strong>Jobs (analytical modules):</strong> These jobs are individual units of work that take a set of inputs, run a single process, and produce a set of outputs. In this series, you use Docker containers to define these analytical modules. For genomics, these commonly include alignment, variant calling, quality control, or another module in your workflow. <a href="https://aws.amazon.com/ecs">Amazon ECS</a> is an AWS service that orchestrates and runs these Docker containerized modules on top of <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances.</p> 
-<p><strong>Batch engine:</strong> This is a framework for submitting individual analytical modules with the appropriate requirements for computational resources, such as memory and number of CPUs. Each step of the analysis pipeline requires a definition of how to run a job:</p> 
-<ul> 
-<li>Computational resources (disk, memory, CPU)</li> 
-<li>The compute environment to run it in (Docker container, runtime parameters)</li> 
-<li>Information about the priority of different jobs</li> 
-<li>Any dependencies between jobs</li> 
-</ul> 
-<p>You can leverage concepts such as container placement and bin packing to maximize performance of your genomic pipeline while concurrently optimizing for cost. We will use <a href="https://aws.amazon.com/batch/">AWS Batch</a> for this layer. AWS Batch dynamically provisions the optimal quantity and type of compute resources (for example, CPU or memory optimized instances) based on the volume and specific resource requirements of the submitted batch jobs.</p> 
-<p><strong>Workflow orchestration:</strong> This layer sits on top of the batch engine and allows you to decouple your workflow definition from the execution of the individual jobs. You can envision this layer as a state machine where you define a series of steps and pass appropriate metadata between states. We will use <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to submit the jobs to AWS Batch and use <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> to define and orchestrate the workflow.</p> 
-<b id="toc_2">Architecture</b> 
-<p>In the next three posts, you build a genome analysis pipeline using the following architecture. You don’t explicitly build the grayed out section, but we wanted to include them in the diagram as they are natural extensions to the core architecture. We discuss these and other extensions, briefly, in the concluding post. All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
-<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2 covers the job layer</a></strong>. We demonstrate how you can package bioinformatics applications in Docker containers, and discuss best practices when developing these containers for use in a multitenant batch environment.</p> 
-<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3 dives deep into the batch, or data processing layer</a></strong>. We discuss common considerations for deploying Docker containers to be used in batch analysis as well as demonstrate how you can use AWS Batch for a scalable and elastic batch engine.</p> 
-<p><strong>Part 4 dives into workflow layer orchestration</strong>. We show how you might architect that layer with AWS services. You take the components built in parts 2 and 3 and combine them into an entire secondary analysis workflow. This workflow manages dependencies as well as continually checking the progress of existing jobs. We conclude by running a secondary analysis end-to-end for under $1 and discuss some extensions you can build on top of this core workflow.</p> 
-<b id="toc_3">What you can expect to learn</b> 
-<p>At the end of this series, you will have built a scalable and elastic solution to process genomes on AWS, as well as gained a general understanding of architectural choices available to you. The solution is generally applicable to other workloads, such as image processing. Even non-life science workloads such as trade analytics in financial services can benefit.</p> 
-<p>In your solution, you use <a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot Instances</a> to optimize for cost. Spot Instances allow you to bid on spare EC2 compute capacity, which can save up to 90% off of traditional On-Demand prices. In many cases, this translates into the ability to analyze genomes at scale for as low as $1 per analysis.</p> 
-<p>Let’s get building!</p> 
-<p>Other posts in this four-part series:</p> 
-<ul> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
-</ul> 
-<p>Please leave any questions and comments below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2102');
 });
 </script> 
 </article> 
