@@ -19,13 +19,13 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 
     <meta property="og:url" content="https://bejoycalias.github.io/blogsataws/mgmtblogs1.html" />
     <meta property="og:site_name" content="Bejoy's TechNotes"/>
-    <meta property="og:title" content="Bejoy's TechNotes - Management Tools Blogs Blogs @ AWS" />
+    <meta property="og:title" content="Bejoy's TechNotes - Management Tools Blogs @ AWS" />
     <meta property="og:image" content="https://bejoycalias.github.io/assets/images/og-image.png"/>
     <meta property="og:image:width" content="1200"/>
     <meta property="og:image:height" content="1200"/>
     <meta property="og:description" content="" />
 
-    <title>Bejoy's TechNotes - Management Tools Blogs Blogs @ AWS</title>
+    <title>Bejoy's TechNotes - Management Tools Blogs @ AWS</title>
     <link href="../assets/stylesheets/application-832aa42c.css" rel="stylesheet" />
 
     <!--[if lt IE 9]>
@@ -189,6 +189,850 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a</p>
 <br>
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Supercharge Multi-Account Management with AWS CloudFormation</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Adam McLean</span></span> | on 
+<time property="datePublished" datetime="2017-08-04T10:17:17+00:00">04 AUG 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/supercharge-multi-account-management-with-aws-cloudformation/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>As your use of Amazon Web Services evolves, you will probably outgrow your first account, and need to move into a multi-account model.</p> 
+<p>There are plenty of benefits to using more than one AWS account:</p> 
+<ul> 
+<li><b>An administrative boundary:</b> I can choose how permissive or restrictive my policies are based on the account type. Separating user authority within an account can be complicated and error prone. Using separate accounts is often the answer.</li> 
+<li><b>A workload boundary:</b> I can choose to peer (or not to peer) various workloads together within accounts, ensuring that my ‘blast radius’ for a poorly behaved application is minimized.</li> 
+<li><b>A billing entity:</b> Detailed bills are generated at an account level. An account has higher ‘resolution’ than is afforded by billing tags, and can be easier to implement.</li> 
+</ul> 
+<p>However, management complexities increase using multiple accounts. How do you manage the administrative boundaries? Who can log in and how? How do you manage your baseline infrastructure, such as VPCs and CloudTrail? Is it possible to deploy these by hand and not make potentially critical mistakes?</p> 
+<p>In this blog post I’ll explore ways to manage deployments in your multi-account AWS environment.</p> 
+<p><span id="more-917"></span></p> 
+<p>The broad answer to the questions above is to use infrastructure as code, and tools like <a title="AWS CloudFormation" href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>. CloudFormation gives you a language to describe your desired state, and have it implemented programmatically. For complex multi-account deployments, this can get difficult to manage quickly, especially for complex subjects such as IAM users, groups, polices, and roles.</p> 
+<p>The recent release of <a title="AWS Orgnizations" href="https://aws.amazon.com/organizations/" target="_blank" rel="noopener noreferrer">AWS Organizations</a> has certainly helped with this complexity. Using policies, you can broadly permit or deny service use within your AWS account organizational structure. Layering these capabilities with consistently deployed IAM elements gets the most value from a multi-account model.</p> 
+<b>A tool to help</b> 
+<p>I’d like to introduce a tool I wrote while working with multiple AWS customers as a Professional Services Consultant. This tool allows you to describe complex multi-account IAM elements using simple YAML, and Jinja2 templates. Running a build produces a CloudFormation template per account that can be deployed in your preferred fashion.</p> 
+<p>Some customers have even built a pipeline so that when the configuration YAML is changed, a build is run and deployed automatically. They’re managing multiple accounts completely hands-off, from a central source of truth!</p> 
+<p>I’ll discuss the tool a bit. First, the tool assumes that you’re using a ‘parent’ account model where everyone logs in, or federates, into a single account. Then, users assume roles in the ‘child’ accounts for which they have permissions. This model was explored in more detail by an AWS customer with hundreds of accounts. For more information, see <a title="SEC315" href="https://youtu.be/CY-xvo8Cc54" target="_blank" rel="noopener noreferrer">(SEC315) AWS Directory Service Deep Dive</a> re:Invent session video.</p> 
+<p>I’ve included a simplification of the model for reference. Your child accounts can be one or many.</p> 
+<p><img class="alignnone size-medium wp-image-926" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/Parent-Child-Account-Model.png" alt="" width="708" height="303" /></p> 
+<b>Tool walk-through</b> 
+<h3>Prerequisites</h3> 
+<p>To go through this walkthrough, you need the following:</p> 
+<ul> 
+<li>A bash environment</li> 
+<li>A Python 2.7 interpreter</li> 
+<li>At least two AWS accounts that you can experiment with. You can use AWS Organizations to create them programmatically</li> 
+<li>The <a title="Tropsophere" href="https://github.com/cloudtools/troposphere" target="_blank" rel="noopener noreferrer">troposphere</a> and the <a title="Tropsophere" href="https://github.com/pallets/jinja" target="_blank" rel="noopener noreferrer">jinja2</a> libraries installed</li> 
+</ul> 
+<pre><code class="lang-bash">
+sudo pip install troposphere
+sudo pip install jinja2
+</code></pre> 
+<h3>Download the code</h3> 
+<p>Clone or download the project from /awslabs/ on GitHub:</p> 
+<pre><code class="lang-bash">
+git clone git@github.com:awslabs/aws-iam-generator.git
+</code></pre> 
+<h3>Build your configuration file</h3> 
+<p>Start with a simple configuration and grow it over time, as you would naturally evolve your AWS environment.</p> 
+<p>Create a file called config.yaml in the downloaded projects root directory. Cut and paste the example configuration below into the file. <b>Substitute the account IDs with the account IDs that you’re using for this walkthrough.</b></p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of your central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of a child account for specific roles.
+id: 109876543210
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser Role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Use the name you've given your account in the 'accounts' section.
+- lab
+in_accounts:
+# Use the keyword 'parent' to match the account that has 'parent: true'
+- parent
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Use the keyword 'children' to match all accounts except the one marked 'parent: true'
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>What happens now?</h3> 
+<p>Because you have two accounts, expect two CloudFormation templates to be created.</p> 
+<p>The CloudFormation template for your <code>central</code> account should contain:</p> 
+<ul> 
+<li>A managed policy called <code>AssumeLabPowerUser</code>. The policy document permits sts::AssumeRole on your child account.</li> 
+<li>A group called <code>LabUsers</code>. This group has built-in AWS policies attached to it to allow self service credential management. It also has the <code>AssumeLabPowerUser</code> policy attached that you created under the <code>policies:</code> section.</li> 
+<li>A user called <code>TestUser</code> who is a member of the <code>LabUser</code> group.</li> 
+</ul> 
+<p>The CloudFormation template for your <code>lab</code> account should contain:</p> 
+<ul> 
+<li>A role called <code>PowerUser</code>. This role has a trust document that allows it to be assumed from the <code>central</code> account. The roles policy document is modeled from the AWS built-in PowerUserAccess policy document.</li> 
+</ul> 
+<h3>Run the build</h3> 
+<p>Executing the build.py script reads the contents of the config.yaml file and creates CloudFormation templates in your output_templates/ directory. If the build is successful, you won’t see any output. When a build fails, the output should produce an meaningful error to help figure out what’s wrong. Most of the time, the problem is in the yaml formatting (usually, indentation).</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>If your build ran, you should see output in the <code>output_templates/</code> directory</p> 
+<pre><code class="lang-bash">
+ls -l output_templates/
+-rw-r--r-- 1 user user Users 3367 Apr 10 10:14 central(012345678910)-IAM.template
+-rw-r--r-- 1 user user Users 1680 Apr 10 10:14 lab(109876543210)-IAM.template
+</code></pre> 
+<p>You can see both of your CloudFormation templates. They are named so that you can easily identify the account in which they should be run. Also notice that your <code>central</code> template is about double the size of the <code>lab</code> template. This is expected as <code>central</code> contains a lot more information.</p> 
+<h3>Explore the output</h3> 
+<p>View the <code>central</code> template in your favorite viewer.</p> 
+<p>Your managed policy is there, with the sts::AssumeRole correctly formed:</p> 
+<pre><code class="lang-json">
+...
+&quot;AssumeLabPowerUser&quot;: {
+&quot;Properties&quot;: {
+&quot;Description&quot;: &quot;Allow assumption of the PowerUser role in the lab account&quot;,
+&quot;Groups&quot;: [],
+&quot;PolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: &quot;arn:aws:iam::109876543210:role/PowerUser&quot;
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;Roles&quot;: [],
+&quot;Users&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
+},
+...
+</code></pre> 
+<p>You can also see the group that uses this managed policy:</p> 
+<pre><code class="lang-json">
+....
+&quot;LabUsersGroup&quot;: {
+&quot;Properties&quot;: {
+&quot;GroupName&quot;: &quot;LabUsers&quot;,
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials&quot;,
+&quot;arn:aws:iam::aws:policy/IAMUserChangePassword&quot;,
+&quot;arn:aws:iam::aws:policy/IAMUserSSHKeys&quot;,
+&quot;arn:aws:iam::aws:policy/IAMReadOnlyAccess&quot;,
+{
+&quot;Ref&quot;: &quot;AssumeLabPowerUser&quot;
+}
+],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::Group&quot;
+}
+...
+</code></pre> 
+<p>Finally, your user is here as a member of the group you’ve created:</p> 
+<pre><code class="lang-json">
+...
+&quot;TestUserUser&quot;: {
+&quot;Properties&quot;: {
+&quot;Groups&quot;: [
+&quot;LabUsers&quot;
+],
+&quot;ManagedPolicyArns&quot;: [],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: [],
+&quot;UserName&quot;: &quot;TestUser&quot;
+},
+&quot;Type&quot;: &quot;AWS::IAM::User&quot;
+}
+...
+</code></pre> 
+<p>When you view the <code>lab</code> template, you can see the PowerUser role that you’re permitted to assume, with the trust set correctly to the parent.</p> 
+<pre><code class="lang-json">
+...
+&quot;PowerUserRole&quot;: {
+&quot;Properties&quot;: {
+&quot;AssumeRolePolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::012345678910:root&quot;
+}
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;
+],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: [],
+&quot;RoleName&quot;: &quot;PowerUser&quot;
+},
+&quot;Type&quot;: &quot;AWS::IAM::Role&quot;
+}
+...
+</code></pre> 
+<h3>Deploy in your accounts</h3> 
+<p>Deploy the CloudFormation templates in your favorite way, either through the console or the <a title="AWS CLI" href="https://aws.amazon.com/cli" target="_blank" rel="noopener noreferrer">AWS CLI</a>. I’ve included example CLI commands.</p> 
+<p>To use multiple accounts from the AWS CLI, configure profiles. For more information about setting up profiles, see <a title="Configuring the AWS CLI" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html#cli-multiple-profiles" target="_blank" rel="noopener noreferrer">AWS CLI</a>.</p> 
+<p>Deploy in your <code>central</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>Deploy in your <code>lab</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<h3>Explore the results</h3> 
+<p>Sign into the <code>central</code> account with an existing role or user and <a title="Set the password" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_admin-change-user.html" target="_blank" rel="noopener noreferrer">set the password</a> for the <code>TestUser</code> user. You could have set a password in the CloudFormation template, but then it would be in plaintext!</p> 
+<p>Sign into the <code>central</code> account as <code>TestUser</code>. Verify that you have read-only access. You should be able to self-manage your credentials though (set your own password, etc.).</p> 
+<p>Now, switch roles to the <code>PowerUser</code> role in the <code>lab</code> account. Switching roles can be done through the console. For more information, see <a title="Switching to a Role" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-console.html" target="_blank" rel="noopener noreferrer">Switching to a Role</a> (AWS Management Console).</p> 
+<p>Confirm that you can now perform expected activities in the <code>lab</code> account. You should be able to create resources, as per the PowerUserAccess reference policy.</p> 
+<b>Add a new account</b> 
+<p>A new line of business has decided to use AWS and has asked for a new lab environment. You used AWS Organizations to create a new account for them. Now, bring their IAM policies up to the central standard.</p> 
+<p>Edit config.yaml and add the new account:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+...
+</code></pre> 
+<p>This automatically creates the <code>PowerUser</code> role definition in the <code>newlab</code> account because you’ve used a keyword of <code>children</code> in the <code>in_accounts</code> section of the <code>PowerUser</code> role definition. This is a great way to assure that roles are kept consistent across all accounts. Only the users who can assume those roles change.</p> 
+<p>You also need to create a managed policy, group, and a test user in the <code>central</code> account to make use of the new account.</p> 
+<p>For reference your config.yaml should now look like this:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+- lab
+in_accounts:
+- parent
+# The new managed policy lets users assume PowerUser in the newlab account.
+AssumeNewLabPowerUser:
+description: Allow assumption of the PowerUser role in the newlab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Here is the new account added in the accounts section
+- newlab
+in_accounts:
+- parent
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Because you use the keyword 'children' here, the newlab account gets this role
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+# This group services the newlab account users.
+NewLabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+# This matches our new policy above.
+- AssumeNewLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+NewTestUser:
+groups:
+- NewLabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>Build and deploy</h3> 
+<p>Run the build:</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>Now, you see a new set of CloudFormation templates in output_templates/:</p> 
+<pre><code class="lang-bash">
+ls -l output_templates/
+-rw-r--r-- 1 user user Users 6307 Apr 10 10:59 central(012345678910)-IAM.template
+-rw-r--r-- 1 user user Users 1680 Apr 10 10:59 lab(109876543210)-IAM.template
+-rw-r--r-- 1 user user Users 1683 Apr 10 10:59 newlab(543210123456)-IAM.template
+</code></pre> 
+<p>View one of the templates, and notice that the build number has changed:</p> 
+<pre><code class="lang-json">
+...
+&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
+&quot;Description&quot;: &quot;Build 2017-07-25Z19:35:41 - IAM Users, Groups, Roles, and Policies for account central (012345678910)&quot;,
+...
+</code></pre> 
+<p>The build number is the datestamp when the build was executed. It will be the same across all of the templates generated during that build. Use it to assure the environment remtains consistent. You can audit all of your accounts to assure this number is identical to assure deployment conssitency.</p> 
+<p>Again, deploy using your favorite mechanism or use the AWS CLI commands below.</p> 
+<p>In <code>central</code> this is an update which creates the new managed policy, group, and user.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>In <code>lab</code>, this is a simple version increment. Nothing else changes but keeping the version consistent ensures that your environment is consistently deployed.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<p>In <code>newlab</code>, this is the first deployment.</p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile newlab \
+--region us-east-2
+</code></pre> 
+<h3>Explore the results</h3> 
+<p>You’ve enabled a new account and brought it in line with centrally managed IAM policies, with a few changes to a configuration yaml file.</p> 
+<p>As before, create a password for <code>NewTestUser</code> and assume the <code>PowerUser</code> Role in the <code>newlab</code> account. As a test step, confirm that you cannot assume the <code>PowerUser</code> role in the <code>lab</code> account from this user because you didn’t permit that in the config.yaml file.</p> 
+<b>Corral users into a specific region</b> 
+<p>As your use of AWS has grown, you’ve noticed that your users are creating EC2 instances in multiple regions. This is becoming difficult to manage, and you’d like to restrict their region use to us-east-2.</p> 
+<p>There is no ‘off the shelf’ managed policy for this, so you need to create one. Going through the <a title="IAM Policy Generator" href="https://awspolicygen.s3.amazonaws.com/policygen.html" target="_blank" rel="noopener noreferrer">IAM Policy Generator</a>, create a policy that looks like the following:</p> 
+<pre><code class="lang-json">
+{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;DenyAllButOhio&quot;,
+&quot;Action&quot;: &quot;ec2:*&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Resource&quot;: &quot;*&quot;,
+&quot;Condition&quot;: {
+&quot;StringNotEquals&quot;: {
+&quot;ec2:Region&quot;: &quot;us-east-2&quot;
+}
+}
+}
+]
+}
+</code></pre> 
+<h3>Update the configuration</h3> 
+<p>To support the region restrictions, create a file called <code>policy/restrictEc2Region.j2</code>, and copy the policy json contents above into it.</p> 
+<p>Edit the config.yaml file and make some changes.</p> 
+<p>Define the new managed policy to restrict regions based on the template in the <code>policy/</code> directory.</p> 
+<pre><code class="lang-yaml">
+...
+policies:
+...
+restrictEc2Region:
+description: Prevent EC2 actions outside of us-east-2
+# Get the policy json content from the file in the policy/ directory
+policy_file: restrictEc2Region.j2
+in_accounts:
+- children
+...
+</code></pre> 
+<p>Modify the <code>PowerUser</code> role to include this region restriction policy:</p> 
+<pre><code class="lang-yaml">
+...
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+# Add our new managed policy
+- restrictEc2Region
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+- children
+...
+</code></pre> 
+<p>For reference your config.yaml should now look like this:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+- lab
+in_accounts:
+- parent
+# The new managed policy lets users assume PowerUser in the newlab account.
+AssumeNewLabPowerUser:
+description: Allow assumption of the PowerUser role in the newlab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Here is the new account added in the accounts section
+- newlab
+in_accounts:
+- parent
+# A policy document taken from a jinja template
+restrictEc2Region:
+description: Prevent EC2 actions outside of us-east-2
+# Get the policy json content from the file in the policy/ directory
+policy_file: restrictEc2Region.j2
+in_accounts:
+- children
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+# Add our new managed policy
+- restrictEc2Region
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Because you use the keyword 'children' here, the newlab account gets this role
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+# This group services the newlab account users.
+NewLabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+# This matches our new policy above.
+- AssumeNewLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+NewTestUser:
+groups:
+- NewLabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>Build and deploy</h3> 
+<p>Build the CloudFormation templates:</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>View the <code>lab</code> CloudFormation template. You can see the new managed policy:</p> 
+<pre><code class="lang-json">
+...
+&quot;restrictEc2Region&quot;: {
+&quot;Properties&quot;: {
+&quot;Description&quot;: &quot;Prevent EC2 actions outside of us-east-2&quot;,
+&quot;Groups&quot;: [],
+&quot;PolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;ec2:*&quot;,
+&quot;Condition&quot;: {
+&quot;StringNotEquals&quot;: {
+&quot;ec2:Region&quot;: &quot;us-east-2&quot;
+}
+},
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Resource&quot;: &quot;*&quot;,
+&quot;Sid&quot;: &quot;DenyAllButOhio&quot;
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;Roles&quot;: [],
+&quot;Users&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
+}
+...
+</code></pre> 
+<p>You can also see that <code>PowerUser</code> definition now includes the following:</p> 
+<pre><code class="lang-json">
+...
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;,
+{
+&quot;Ref&quot;: &quot;restrictEc2Region&quot;
+}
+],
+...
+</code></pre> 
+<p>If you look at <code>newlab</code>, you see the same set of definitions are there too. If you had tens or even hundreds of child accounts, those would all reflect the new policy and updated role definitions as well. This scales very nicely!</p> 
+<p>Now, deploy to your three accounts.</p> 
+<p>In <code>central</code>, nothing actually changes. It’s just a deployment version update.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>In <code>lab</code> and <code>newlab</code>, this deploys the new managed policy, and update the <code>PowerUser</code> role.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile newlab \
+--region us-east-2
+</code></pre> 
+<b>Conclusion</b> 
+<p>I hope you find this tool as useful as I have. The tool is capable of much more complex deployments as well, which leverage the power of Jinja2 templating. Explore the contents of <code>sample_configs/config-complex.yaml</code> and the policy examples in the <code>sample_policy/</code> directory in the project.</p> 
+<p>The <a title="README.md" href="https://github.com/awslabs/aws-iam-generator/blob/master/README.md" target="_blank" rel="noopener noreferrer">README.md</a> file has more detailed explanations of functionality and syntax usage.</p> 
+<h4>About the Author</h4> 
+<p><img class="size-full wp-image-831 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/apmclean.jpeg" alt="" width="119" height="160" /><br /> <a title="LinkedIn Profile" href="https://www.linkedin.com/in/adam-mclean-90bb3020/" target="_blank" rel="noopener noreferrer">Adam McLean</a> is a Cloud Infrastructure Architect with AWS Professional Services. Adam enjoys helping his Canadian enterprise customers achieve success on their cloud journey. In his spare time, Adam enjoys spending time with his family and three small children.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-multi-account-management/" rel="tag">AWS Multi-Account Management</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">How Cloudticity Automates Security Patches for Linux and Windows using Amazon EC2 Systems Manager and AWS Step Functions</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-08-02T19:14:49+00:00">02 AUG 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions"><span property="articleSection">AWS Step Functions</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/how-cloudticity-automates-security-patches-for-linux-and-windows-using-amazon-ec2-systems-manager-and-aws-step-functions/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><em>This guest post was written by Uri Katsir, AWS Architect at Cloudticity, and Thomas Zinn, Project Manager at Cloudticity.</em></p> 
+<p>As a provider of HIPAA-compliant solutions using AWS, Cloudticity always has security as the base of everything we do. HIPAA breaches would be an end-of-life event for most of our customers. Having been born in the cloud with automation in our DNA, Cloudticity embeds automation into all levels of infrastructure management including security, monitoring, and continuous compliance. As mandated by the HIPAA Security Rule (45 CFR <a href="http://www.access.gpo.gov/nara/cfr/waisidx_07/45cfr160_07.html">Part 160</a> and Subparts A and C of <a href="http://www.access.gpo.gov/nara/cfr/waisidx_07/45cfr164_07.html">Part 164</a>), patches at the operating system and application level are required to prevent security vulnerabilities. As a result, patches are a major component of infrastructure management.</p> 
+<p><span id="more-988"></span></p> 
+<p>Cloudticity strives to provide consistent and reliable services to all of our customers. As such, we needed to create a custom patching solution that supports both Linux and Windows. The minimum requirements for such a solution were to read from a manifest file that contains instance names and a list of knowledge base articles (KBs) or security packages to apply to each instance. Below is a simplified, high-level process overview.</p> 
+<p><img class="size-full wp-image-1016 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/flowchart-patching.png" alt="" width="340" height="423" /></p> 
+<p>There were a few guidelines to be considered when designing the solution:</p> 
+<ol> 
+<li>Each customer has a defined maintenance window that patches can be completed within. As such, the solution must be able to perform the updates within the specified maintenance window.</li> 
+<li>The solution must be able to provide patches to one or many instances and finish within the maintenance window.</li> 
+<li>The solution should use as many AWS services as possible to reduce time-to-market and take advantage of the built-in scaling that many AWS services provide.</li> 
+<li>Code reusability is essential.</li> 
+</ol> 
+<p>In this post, we walk through our solution and discuss how combining <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> and <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> is ideal for this particular use case.</p> 
+<h3>Systems Manager for Patch Management</h3> 
+<p>We have been using Systems Manager to remotely manage instances from its inception, so it was natural to consider it as part of the solution. We use Systems Manager in many ways:</p> 
+<ol> 
+<li>Installing New Relic and Trend Micro agents for every new instance that is launched (whether manually or via Auto Scaling).</li> 
+<li>Ensuring that EC2Config and the SSM agents are running the latest versions.</li> 
+<li>Deploying software updates to multiple remote instances.</li> 
+</ol> 
+<p>We began with the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">Systems Manager predefined documents</a> “AWS-InstallWindowsUpdates” for Windows and “AWS-RunShellScript” for Linux. To achieve maximum code reusability, we created several AWS Lambda functions to perform individual tasks, such as identifying operating system type (Linux or Windows) or applying patches using the SSM agents. Each process (rectangle) in the flowchart above is implemented using a single Lambda function. The Systems Manager document is smart enough to apply multiple patches provided by a manifest file stored in Amazon S3 and only perform a single reboot, if a reboot is required to complete the patch process. Below is a code snippet from the Lambda function that runs Linux patches:</p> 
+<pre><code class="lang-clike">if (IncludedKB === '') {	
+// Build the yum command based on the entry in the manifest file
+command = 'sudo yum update -y';
+} else if (IncludedKB.toUpperCase() == 'SECURITY') {
+command = 'yum update --security -y';
+} else {
+command = 'yum --security update ' + IncludedKB + ' -y';
+}
+var commands = [];
+commands.push(command);
+//prepare parameters for the Systems Manager command. Specify the output folder to hold the run //results.
+var params = {
+DocumentName: 'AWS-RunShellScript',
+InstanceIds: [instanceId],
+Comment: 'OS Patch command',
+OutputS3BucketName: bucket,
+OutputS3KeyPrefix: OutputFolder,
+Parameters: {
+commands: commands
+},
+TimeoutSeconds: 60
+};
+console.log('Sending command to InstanceID: ' + instanceId);
+console.log('Command is: ' + command);
+ssm.sendCommand(params, function(err, data) {
+//console.log('err= ' + err);
+if (err) {
+callback(command + ', Error, ' + err.code);
+} else {
+console.log(command + ', ' + data.Command.CommandId + ', ' + data.Command.Status);
+callback(null);
+}
+});
+</code></pre> 
+<h3>Step Functions for workflow orchestration</h3> 
+<p>Given the nature of the solution (microservices that perform unique and distinct tasks), we needed a centralized service to manage and drive the process end-to-end, as well as pass parameters between Lambda functions. In other words, a state machine of Lambda functions. At AWS re:Invent 2016, AWS Step Functions was released. It allowed us to spin up multiple concurrent processes for completing the patches (one for each row in the manifest file) without the need to worry about scale, <a href="https://en.wikipedia.org/wiki/Deadlock">deadlocks</a>, timeouts, or <a href="https://en.wikipedia.org/wiki/Race_condition">race conditions</a>. By running concurrent processes, we can complete the patch process in the minimum time required for the patches to be applied without introducing any overhead to the process.</p> 
+<p>Step Functions provides some additional benefits including visualization of the overall state machine, passing input/output parameters between Lambda functions, and simplified debugging for each step in the process.</p> 
+<p>The image below is a visual preview of the patching process generated by the Step Functions user interface in the AWS Management Console. Notice how the resulting state machine mimics the initial workflow.</p> 
+<p><img class="alignleft wp-image-989" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/Step-functions-diagram.png" alt="" width="521" height="320" /></p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-json">{
+&quot;Comment&quot;: &quot;Cloudticity-Oxygen-OS-Patch-SF.&quot;,
+&quot;StartAt&quot;: &quot;GetInstancePlatform&quot;,
+&quot;States&quot;: {
+&quot;GetInstancePlatform&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-GetInstancePlatform&quot;,
+&quot;Next&quot;: &quot;ChoiceState&quot;
+},
+&quot;ChoiceState&quot;: {
+&quot;Type&quot;: &quot;Choice&quot;,
+&quot;Choices&quot;: [
+{
+&quot;Variable&quot;: &quot;$.PlatformType&quot;,
+&quot;StringEquals&quot;: &quot;Windows&quot;,
+&quot;Next&quot;: &quot;WindowsMatchState&quot;
+},
+{
+&quot;Variable&quot;: &quot;$.PlatformType&quot;,
+&quot;StringEquals&quot;: &quot;Linux&quot;,
+&quot;Next&quot;: &quot;LinuxMatchState&quot;
+}
+],
+&quot;Default&quot;: &quot;NoMatchFound&quot;
+},
+&quot;WindowsMatchState&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-Windows-OS-Patching&quot;,
+&quot;Retry&quot;: [
+{
+&quot;ErrorEquals&quot;: [
+&quot;States.ALL&quot;
+],
+&quot;IntervalSeconds&quot;: 6,
+&quot;MaxAttempts&quot;: 2,
+&quot;BackoffRate&quot;: 3
+}
+],
+&quot;End&quot;: true
+},
+&quot;LinuxMatchState&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-Linux-OS-Patching&quot;,
+&quot;End&quot;: true
+},
+&quot;NoMatchFound&quot;: {
+&quot;Type&quot;: &quot;Fail&quot;,
+&quot;Cause&quot;: &quot;No Matches!&quot;
+}
+}
+}
+</code></pre> 
+<p>The first state (GetInstancePlatform) executes the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/utility/GetInstancePlatform.js">Cloudticity-Oxygen-GetInstancePlatform</a> Lambda function. As you can see in the code snippet below, the Lambda function then invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#describeInstanceInformation-property">ssm.describeInstanceInformation</a> method to retrieve the platform type of the instance (Linux or Windows).</p> 
+<pre><code class="lang-clike">var aws = require('aws-sdk');	
+var getInstancePlatform = function(instanceID, event, IncludeKbs, isReboot, bucket, OutputFolder, callback) {
+var ssm = new aws.SSM();
+//Prepare the parameters for the Systems Manager run. Instance ID is an input parameter in the //manifest file.
+var params = {
+InstanceInformationFilterList: [{
+key: &quot;InstanceIds&quot;,
+valueSet: [
+instanceID
+]
+}]
+};
+ssm.describeInstanceInformation(params, function(err, instanceData) {
+if (err) {
+callback(err);
+} else {
+let instanceInformation = instanceData.InstanceInformationList[0];
+if (instanceInformation) {
+console.log('Running GetInstancePlatform. PlatformType = ' + instanceInformation.PlatformType);
+//return instance information to the next step in the Step Function.
+callback(null, {
+PlatformType: instanceInformation.PlatformType,
+kB: IncludeKbs,
+instanceID: instanceID,
+isReboot: isReboot,
+bucket: bucket,
+OutputFolder: OutputFolder
+}, event);
+} else {
+callback('Unknown instance platform');
+}
+}
+});
+};</code></pre> 
+<p>The platform information is passed on to the built-in <a href="https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html">Choice</a> state (InstancePlatform) that adds branching logic to a state machine. The InstancePlatform state uses the platform information to route traffic via one of three options:</p> 
+<ul> 
+<li>PatchWindows</li> 
+<li>PatchLinux</li> 
+<li>NoMatchFound.</li> 
+</ul> 
+<p>When patching Windows instances, the state is transferred to the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/lib/Windows_updates-patcher.js">Cloudticity-Oxygen-Windows-OS-Patching</a> Lambda function that invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#sendCommand-property">ssm.sendCommand</a> method with “AWS-InstallWindowsUpdates” as the document name. An input to this document is a <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>, which contains the Windows Knowledge Base (KBs) numbers to be applied to instances.</p> 
+<p>Below is a snippet from the Lambda function that patches Windows instances.</p> 
+<pre><code class="lang-clike">//prepare parameters for the ssm command. Instance ID and included KBs are input from the manifest file.
+var params = {	
+DocumentName: 'AWS-InstallWindowsUpdates',
+Comment: 'OS Patch command',
+InstanceIds: [instanceId],
+OutputS3BucketName: bucket,
+OutputS3KeyPrefix: OutputFolder,
+Parameters: {
+&quot;Action&quot;: [&quot;Install&quot;],
+&quot;IncludeKbs&quot;: [IncludeKbs]
+},
+TimeoutSeconds: 60
+};
+console.log(&quot;Sending InstallWindowsUpdates ssm command with the following InstanceId: &quot; + instanceId + &quot;\n&quot;);
+//Send the ssm command.
+ssm.sendCommand(params, function(err, data) {
+if (err) callback(command + ', Error, ' + err.code + &quot;\n&quot;);
+else {
+callback(null);
+console.log(&quot;Sending InstallWindowsUpdates &quot; + command + ', ' + data.Command.CommandId + ', ' + data.Command.Status + &quot;\n&quot;);
+}
+});</code></pre> 
+<p>When patching a Linux instance, the state is transferred to the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/lib/linux_updates-patcher.js">Cloudticity-Oxygen-Linux-OS-Patching</a> Lambda function that invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#sendCommand-property">ssm.sendCommand</a> method with “AWS-RunShellScript” as the document name. Our Linux patching implementation provides two options:</p> 
+<ol> 
+<li>Security packages that need to be applied are entered into a <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>. This file is referenced as an input parameter to the “AWS-RunShellScript” document.</li> 
+<li>In the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>, instead of listing packages, “security” is specified in the packages place.</li> 
+</ol> 
+<p>In the latter case, all security-related packages are applied to the specified instance according to the manifest file.</p> 
+<h3>Looking Ahead</h3> 
+<p>Based on our customer feedback and internal reviews, we are planning to add the following features to the above implementation:</p> 
+<ul> 
+<li>Add AMI patching as part of the overall process: Replace an AMI in an Auto Scaling Launch Configuration with the patched AMI.</li> 
+<li>Add additional exception handling for process failures and the patching product: If an SSM command successfully sent, but the patch process fails on the instance. A notification or support ticket is created. In some cases, a single patch process can take longer than five minutes to run. Since five minutes is the maximum runtime for Lambda functions, we introduce a polling mechanism to query the patch progress following the guidelines outlined in this <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">post</a>.</li> 
+</ul> 
+<h3>Summary</h3> 
+<p>Using <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">Systems Manager predefined documents</a> and <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> together allowed this <a href="https://github.com/Cloudticity/o2-instance-patching">solution</a> to be implemented within a short time frame. It also enabled the release of a scalable patching service to multiple customers. Beyond the automation and scalability, our customers see additional benefits like the ability to decrease the length of maintenance windows.</p> 
+<h3>About the Authors</h3> 
+<p><img class="size-full wp-image-1004 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/uri-2.jpg" alt="" width="150" height="114" />Uri Katsir is an AWS Architect at Cloudticity, where he spends his days building really cool HIPAA-compliant services for the healthcare industry.</p> 
+<p>&nbsp;</p> 
+<p><img class="size-full wp-image-1003 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/thomas.png" alt="" width="151" height="151" />Thomas Zinn is a Project Manager at Cloudticity, where he provides HIPAA-compliant infrastructure solutions using AWS.</p> 
+<h3>About Cloudticity</h3> 
+<p><a href="http://cloudticity.com/">Cloudticity</a> helps healthcare organizations design, build, migrate, and manage HIPAA-compliant systems using AWS. We are an <a href="https://aws.amazon.com/partners/managed-service/">audited AWS Managed Service Provider (MSP)</a>, <a href="https://aws.amazon.com/health/healthcare-partners/">AWS Healthcare Competency Partner</a> and <a href="https://aws.amazon.com/devops/partner-solutions/">AWS DevOps Competency Partner</a>. In addition, as an AWS Service Catalog Partner and Public Sector Partner, Cloudticity is well positioned to help providers, payers, and healthcare services organizations use AWS securely and effectively. For further reading, check out <a href="https://aws.amazon.com/blogs/apn/how-cloudticity-uses-automation-to-scale-healthcare-solutions/">How Cloudticity Uses Automation to Scale Healthcare Solutions</a> and <a href="https://aws.amazon.com/partners/success/cloudticity/">AWS Partner Story: Cloudticity</a>.</p> 
+<hr /> 
+<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author. It is each customer’s responsibility to determine whether they are subject to HIPAA, and if so, how best to comply with HIPAA and its implementing regulations. Before using AWS in connection with protected health information, customers must enter an AWS Business Associate Addendum (BAA) and follow its configuration requirements.</em></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a></span> 
+</footer> 
+</article> 
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/DSC2_statemanager-888x630.png" /> 
@@ -1101,496 +1945,6 @@ by
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudtrail/" rel="tag">AWS CloudTrail</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/secdevops/" rel="tag">SecDevOps</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Keeping CloudWatch Dashboards up to date using AWS Lambda</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Mike Meaney</span></span> | on 
-<time property="datePublished" datetime="2017-07-05T16:12:07+00:00">05 JUL 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch"><span property="articleSection">Amazon CloudWatch</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/keeping-cloudwatch-dashboards-up-to-date-using-aws-lambda/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>With the launch of the new <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/Welcome.html">CloudWatch Dashboards API</a> and CloudFormation support it is now easy to <a href="https://aws.amazon.com/blogs/aws/new-api-cloudformation-support-for-amazon-cloudwatch-dashboards/">automate your CloudWatch Dashboards</a> and make sure they monitor all the resources that you launched when creating your <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html">CloudFormation stacks</a>.</p> 
-<p>Let’s now see how you can use the new CloudWatch Dashboards API to dynamically update your dashboard as EC2 instances are added or removed. When you use auto-scaled EC2 instances for example, EC2 instances may be launched or terminated at any time and if you have a CloudWatch Dashboard monitoring your EC2 resources it can suddenly be monitoring instances that do not exist anymore, and may be missing ones that do exist.</p> 
-<b>Use AWS Lambda to keep EC2 instances up to date</b> 
-<p>A simple solution is to run the script below periodically in AWS Lambda. The script loads your CloudWatch Dashboards that monitors your instances and updates the EC2 graph widgets if needed.</p> 
-<p><span id="more-700"></span></p> 
-<p>The script:</p> 
-<ul> 
-<li>Loads the specified CloudWatch Dashboard(s)</li> 
-<li>Looks for all graph widgets displaying EC2 instance metrics</li> 
-<li>Calls <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> with configured parameters to discover the current EC2 instances for that graph in that region</li> 
-<li>Updates the widget if needed</li> 
-<li>Saves the CloudWatch Dashboards if any widget definition has changed</li> 
-</ul> 
-<p>The script is configured via an environment variable <strong>AWS_DASHBOARDS</strong> whose value is a JSON array of the dashboard names that you want to update along with (optional) parameters for <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> which sets which EC2 Instances should be displayed on each dashboard.</p> 
-<p>Here’s an example that will update a CloudWatch Dashboard called <code>MyAutoScalingDashboard</code> with all running instances in the AutoScaling group called <code>MyAutoScalingGroup</code>:</p> 
-<pre><code class="lang-json">[
-{
-&quot;dashboardName&quot;: &quot; MyAutoScalingDashboard &quot;,
-&quot;ec2DescribeInstanceParams&quot;: {
-&quot;Filters&quot;: [
-{
-&quot;Name&quot;: &quot;instance-state-name&quot;,
-&quot;Values&quot;: [ &quot;running&quot; ]
-},
-{
-&quot;Name&quot;: &quot;tag:aws:autoscaling:groupName&quot;,
-&quot;Values&quot;: [ &quot;MyAutoScalingGroup&quot; ]
-}
-]
-}
-}
-]
-</code></pre> 
-<h3>To create the Lambda function:</h3> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/lambda">Lambda console</a>, choose <strong>Create a Lambda function</strong></li> 
-<li>Select <strong>Blank Function</strong> and choose <strong>Next</strong> when asked to configure a trigger.</li> 
-<li>For <strong>Name</strong>, enter <code>ec2DashboardUpdater</code></li> 
-<li>For <strong>Code entry type</strong> choose <strong>Upload a file from Amazon S3</strong>.</li> 
-<li>For <strong>S3 link URL</strong> enter <code>https://s3.amazonaws.com/ec2-dashboard-updater/ec2DashboardUpdater.zip</code></li> 
-<li>You’ll need to specify the <code>AWS_DASHBOARDS</code> environment variable with a JSON array for the dashboards you want to update, e.g. with the JSON in the example earlier (no newlines: <pre><code class="lang-json">[{&quot;dashboardName&quot;:&quot;AutoUpdateEC2Dashboard&quot;,&quot;ec2DescribeInstanceParams&quot;:{&quot;Filters&quot;:[{&quot;Name&quot;:&quot;instance-state-name&quot;,&quot;Values&quot;:[&quot;running&quot;]},{&quot;Name&quot;:&quot;tag:aws:autoscaling:groupName&quot;,&quot;Values&quot;:[&quot;test-asg-01&quot;]}]}}]</code></pre> </li> 
-<li>Set the <strong>Handler</strong> as <code>ec2DashboardUpdater.handler</code></li> 
-<li>For <strong>Role</strong> select <strong>Create a custom role</strong></li> 
-<li>In the IAM Console window that opens choose <strong>IAM Role</strong> of <strong>Create a new IAM Role</strong></li> 
-<li>Set <strong>Role Name</strong> of <code>ec2DashboardUpdaterRole</code></li> 
-<li>Choose <strong>View Policy Document, Edit, Ok</strong>.</li> 
-<li>Set the role to: <pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;cloudwatch:GetDashboard&quot;,
-&quot;cloudwatch:PutDashboard&quot;,
-&quot;ec2:DescribeInstances&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;
-}
-]
-}</code></pre> </li> 
-<li>Choose <strong>Allow</strong></li> 
-<li>In <strong>Advanced settings</strong> set <strong>Timeout</strong> to a value that is enough to describe all instances for all EC2 graph widgets and load and save all dashboards – set it to <strong>5 min</strong> if unsure</li> 
-<li>Select <strong>Next</strong> then <strong>Create function</strong></li> 
-</ol> 
-<h3>To call the Lambda function periodically:</h3> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/cloudwatch">CloudWatch console,</a> choose <strong>Rules</strong> in the left navigation pane</li> 
-<li>Select <strong>Create rule</strong></li> 
-<li>Choose the <strong>Schedule</strong> radio button and set <strong>Fixed rate</strong> of <code>15</code> Minutes</li> 
-<li>Select <strong>Add target</strong>, make sure <strong>Lambda function</strong> is active and for <strong>Function</strong> select the previously created <code>ec2DashboardUpdater</code> function</li> 
-<li>Choose <strong>Configure details</strong></li> 
-<li>Enter <strong>Name</strong> as <code>ec2DashboardUpdaterCron</code></li> 
-<li>Select <strong>Create rule</strong></li> 
-</ol> 
-<p>And that’s it, you’re done. Your selected dashboards will now be kept up to date with your changing EC2 instances hourly. If your EC2 instances do not change from hour to hour then your dashboards will not be updated.</p> 
-<p>Please note some limitations of the script:</p> 
-<ul> 
-<li>It will only update graphs where the first metric is an EC2 instance id metric, such as CPUUtilization, NetworkIn or DiskReadBytes, in the AWS/EC2 namespace.</li> 
-<li>It assumes EC2 metrics on a graph all use the same MetricName field.</li> 
-<li>All EC2 graphs on a particular dashboard are for the same list of EC2 instances (as specified in the ec2DescribeInstanceParams configuration parameter.</li> 
-</ul> 
-<p>The (Javascript) code for the script is given below. Feel free to use it as the basis for keeping your CloudWatch Dashboards up to date with other resources.</p> 
-<pre><code class="lang-javascript">//
-// EC2 Dashboard Updater
-// This script will keep EC2 graphs on a chosen list of CloudWatch Dashboards up to date. In the CloudWatch Events
-// console create a rule to call this Lambda whenever and EC2 instance changes state.
-//
-// Configure this script with the AWS_DASHBOARDS environment variable. The content of AWS_DASHBOARDS indicates
-// which dashboards to update with which EC2 instances.  The value is an array in JSON format. Each array element
-// is an object with two properties, dashboardName and ec2DescribeInstanceParams. dashboardName is the dashboard to
-// update and ec2DescribeInstanceParams are parameters to pass to EC2 DescribeInstances API, to determine which
-// instances to update the graphs with.
-//
-// For example, set AWS_DASHBOARDS to the following to keep 'MyDashboard' up to date with the instances in the
-// AutoScalingGroup 'MyAutoScalingGroup':
-//
-// [
-//     {
-//         dashboardName: 'MyDashboard',
-//         ec2DescribeInstanceParams: {
-//             Filters: [
-//                 {
-//                     Name: 'tag:aws:autoscaling:groupName',
-//                     Values: [ 'MyAutoScalingGroup' ]
-//                 }
-//             ]
-//         }
-//     }
-// ]
-//
-// Limitations:
-// - it will only update graphs whose first metric is an EC2 instance metric, all other metrics on the graph
-//   will be replaced with these metrics
-// - metrics can not have custom periods or statistics, the graph defaults will be used
-//
-'use strict'
-var _ = require('lodash'),
-co = require('co'),
-AWS = require('aws-sdk'),
-EC2_NAMESPACE = 'AWS/EC2',
-INSTANCE_ID_DIM = 'InstanceId',
-REPEAT_PREVIOUS = '...',
-NAME_TAG = 'Name',
-METRIC_WIDGET_TYPE = 'metric';
-function getDashboards() {
-let dashboardDef = process.env.AWS_DASHBOARDS,
-dashboards;
-if (! dashboardDef) {
-throw 'Environment variable AWS_DASHBOARDS is not set. It should be set with JSON array, e.g [{&quot;dashboardName&quot;: &quot;myDashboard&quot;}]';
-}
-try {
-dashboards = JSON.parse(dashboardDef);
-} catch (err) {
-throw 'Error, AWS_DASHBOARDS is not valid JSON';
-}
-if (! Array.isArray(dashboards)) {
-throw 'Expecting AWS_DASHBOARDS to be an array';
-}
-return dashboards;
-}
-function ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName) {
-return _.chain(ec2DescribeInstances.Reservations).
-map('Instances').
-flatten().
-map(function(instance) {
-let idAndLabel = {
-id: instance.InstanceId,
-label: instance.InstanceId
-};
-_.each(instance.Tags, (tag) =&gt; {        // Use Name tag instead of InstanceId as label, if it exists
-if (tag.Key === NAME_TAG) {
-idAndLabel.label = tag.Value;
-return false;
-}
-});
-return idAndLabel;
-}).
-sortBy(['label']).
-map((idAndLabel, i) =&gt; {
-var metric = i == 0 ?
-[ EC2_NAMESPACE, metricName, INSTANCE_ID_DIM, idAndLabel.id ] :
-[ REPEAT_PREVIOUS, idAndLabel.id ];
-if (idAndLabel.id != idAndLabel.label) {
-metric.push({label: idAndLabel.label});
-}
-return metric;
-}).
-value();
-}
-function* getEC2Metrics(dashboardContext, region, metricName) {
-var params = dashboardContext.dashboard.ec2DescribeInstanceParams || {},
-ec2Cache = dashboardContext.ec2Cache,
-ec2DescribeInstances;
-// ec2Cache is a cache of instance responses per region for the current dashboard, to limit calls to EC2
-if (!ec2Cache) {
-dashboardContext.ec2Cache = {};
-} else if (ec2Cache[region]) {
-ec2DescribeInstances = ec2Cache[region];
-}
-if (!ec2DescribeInstances) {
-// Not in cache, call EC2 to get list of regions
-let ec2Client = new AWS.EC2({region: region});
-ec2DescribeInstances = yield ec2Client.describeInstances(params).promise(),
-dashboardContext.ec2Cache[region] = ec2DescribeInstances;
-}
-return ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName);
-}
-function* updateDashboard(cloudwatchClient, dashboardContext, dashboardBody) {
-var newDashboard = _.cloneDeep(dashboardBody),
-widgets = newDashboard.widgets,
-dashboardName = dashboardContext.dashboard.dashboardName;
-for (let i = 0; i &lt; widgets.length; i++) {
-let widget = widgets[i],
-metrics = widget.properties.metrics,
-region = widget.region;
-// Check to see if it's a metric widget and first metric is an EC2 Instance metric
-if (widget.type === METRIC_WIDGET_TYPE &amp;&amp; metrics &amp;&amp; (metrics[0].length === 4 || metrics[0].length === 5) &amp;&amp;
-metrics[0][0] === EC2_NAMESPACE &amp;&amp; metrics[0][2] === INSTANCE_ID_DIM) {
-let ec2Metrics = yield getEC2Metrics(dashboardContext, region, metrics[0][1]);
-widget.properties.metrics = ec2Metrics;
-}
-}
-if (JSON.stringify(dashboardBody) !== JSON.stringify(newDashboard)) {
-console.log(`Updating dashboard ${dashboardName} to:`, JSON.stringify(newDashboard));
-// Save updated dashboard
-yield cloudwatchClient.putDashboard({
-DashboardName: dashboardName,
-DashboardBody: JSON.stringify(newDashboard)
-}).promise();
-} else {
-console.log(`Dashboard ${dashboardName} is unchanged, update skipped`);
-}
-}
-exports.handler = (event, context, callback) =&gt; {
-var dashboards = getDashboards(),
-cloudwatchClient = new AWS.CloudWatch(),
-dashboard,
-dashboardContext;
-try {
-co(function* () {
-for (let i = 0; i &lt; dashboards.length; i++) {
-dashboard = dashboards[i];
-dashboardContext = { dashboard: dashboard };
-if (dashboard.dashboardName) {
-let dashboardResponse = yield cloudwatchClient.getDashboard({
-DashboardName: dashboard.dashboardName }).promise(),
-dashboardBody = JSON.parse(dashboardResponse.DashboardBody);
-yield updateDashboard(cloudwatchClient, dashboardContext, dashboardBody);
-}
-}
-callback(null, 'Update complete');
-});
-} catch (err) {
-callback(err);
-}
-};
-</code></pre> 
-<p>&nbsp;</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Join a Microsoft Active Directory Domain with Parameter Store and Amazon EC2 Systems Manager Documents</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Matteo Rinaudo</span></span> | on 
-<time property="datePublished" datetime="2017-06-19T10:04:06+00:00">19 JUN 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/join-a-microsoft-active-directory-domain-with-parameter-store-and-amazon-ec2-systems-manager-documents/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>The process of configuration management can be difficult, in particular when performed at scale. An example could be an application, running on your fleet, which uses configuration values like database connection strings or passwords.</p> 
-<p>For deployment best practices, isolate application configuration portions so that you can separately deploy configuration values specific to each environment, for example development and production environments. To ameliorate the security posture of your application, encrypt sensitive configuration values like passwords. From a management standpoint, store configuration values in a central and secure location, instead of storing and maintaining such information on your fleet. Central storage has the advantage of easily maintaining and rotating configuration values in one single place, and it also facilitates auditing changes and access to such configuration values.</p> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer">Amazon EC2 Systems Manager</a> is a management service that helps you configure and manage Amazon EC2 instances and on-premises servers. <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/" target="_blank" rel="noopener noreferrer">Parameter Store</a> is a Systems Manager feature that makes it easier to reference your configuration data, securely stored in a central location. Parameter Store integrates with other AWS services like <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) and <a href="https://aws.amazon.com/kms/" target="_blank" rel="noopener noreferrer">AWS Key Management Service</a> (AWS KMS). With IAM, you define access control to Systems Manager parameters. With KMS, you can encrypt sensitive information, such as SecureString parameters. API calls made to Systems Manager parameters can be recorded with <a href="https://aws.amazon.com/cloudtrail/" target="_blank" rel="noopener noreferrer">AWS CloudTrail</a>, so you can audit access or changes to your parameters, for example.</p> 
-<p>In this post, I show you a scenario for centralized configuration management, with an example of joining EC2 instances to a Microsoft Active Directory. You launch an EC2 instance that consumes and uses configuration values stored as Systems Manager parameters to join your Active Directory domain. For more information about creating an Active Directory with <a href="https://aws.amazon.com/directoryservice/" target="_blank" rel="noopener noreferrer">AWS Directory Service</a> instead, see the <a href="https://aws.amazon.com/blogs/aws/seamlessly-join-ec2-instances-to-a-domain/" target="_blank" rel="noopener noreferrer">Seamlessly Join EC2 Instances to a Domain</a> blog post.</p> 
-<p><span id="more-635"></span></p> 
-<p>This is the diagram of the example infrastructure you create:</p> 
-<p><img class="aligncenter wp-image-638 size-large" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-parameter-store-demo-diagram-1024x576.png" alt="" width="640" height="360" /></p> 
-<p><strong>Walkthrough</strong><br /> In this walkthrough, you create an example Active Directory domain to run on a single EC2 instance. Next, you create Systems Manager parameters where you put the following information:</p> 
-<ul> 
-<li>The Active Directory instance’s private IP address (used as a DNS server for domain members)</li> 
-<li>The domain name</li> 
-<li>The Active Directory administrator’s user name</li> 
-<li>The Active Directory administrator’s password</li> 
-</ul> 
-<p>Then, you create a KMS customer master key (CMK) that you use to store the Active Directory admin password as an encrypted object in the relevant SecureString parameter.</p> 
-<p>Finally, you create an association between a <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html" target="_blank" rel="noopener noreferrer">Systems Manager document</a>, where an example domain join script is defined, and an EC2 instance that joins the domain. Associations define the state to apply to a set of targets. In your example, the EC2 instance (a target) joins your domain (a state). <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/" target="_blank" rel="noopener noreferrer">State Manager</a>, another Systems Manager feature, uses the association to keep your managed instance in the intended state.</p> 
-<p>For this walkthrough, you use the <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS Command Line Interface</a> (AWS CLI) to create AWS resources. The examples show the us-east-1 region. I’ve also prepared example <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> templates that you can use to create AWS resources.</p> 
-<p><strong>Step 1: &nbsp;Select the AMI</strong><br /> Use an Amazon Machine Image (AMI) for Microsoft Windows 2012 R2 to launch both your example Active Directory instance and the instance you join to the Active Directory domain.</p> 
-<p>First, you need the ID of the AMI to use. Generate and choose from a list of AMIs, matching your search pattern. For readability, I’ve broken down the following command (and all the other commands in this post) in multiple lines instead of a single line:</p> 
-<pre><code class="lang-bash">aws ec2 describe-images
---owners amazon
---filters
-'Name=name,Values=Windows_Server-2012-R2_RTM-English-64Bit-Base-*'
-'Name=state,Values=available'
---query 'Images[].[Name, ImageId]'
---output text
---region us-east-1
-</code></pre> 
-<p>After running the command above, you should get a list with AMI names in the left column, and AMI IDs on the right column. Note the ID of the AMI to use, for example <em>ami-1234abcd</em>.</p> 
-<p><strong>Step 2: &nbsp;Create the EC2 key pair</strong><br /> Now, create an Amazon EC2 key pair to use to retrieve Windows passwords for the EC2 instances that you create. Call the key pair <em>your-domain-join-demo</em> and store the private key material on your computer in the <em>your-domain-join-demo.pem</em> file:</p> 
-<pre><code class="lang-bash">aws ec2 create-key-pair
---key-name your-domain-join-demo
---query &quot;KeyMaterial&quot;
---output text
---region us-east-1 &gt; your-domain-join-demo.pem
-</code></pre> 
-<p><strong>Step 3: &nbsp;Create the Active Directory</strong><br /> For this post, you create your example Active Directory on a single EC2 instance, and launch it on a default VPC subnet. The directory’s admin user name is <em>Administrator</em>, and the directory’s admin password is the one retrieved from the instance.</p> 
-<p>As part of your example Active Directory creation, specify a value to set up for the restore mode password (SafeModeAdminPassword). The password can have a minimum of 8 characters and contain alphanumeric and special characters.</p> 
-<p>You are now ready to create your example Active Directory with CloudFormation. Sign in to the CloudFormation console. Choose <strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ad-single-instance</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ad-single-instance.yaml">ad-single-instance.yaml</a> example template. You can also download the template and use it as a starting point for your own implementation. This template is a modified version of the Microsoft Windows Server Active Directory template found at <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/sample-templates-applications-us-east-1.html" target="_blank" rel="noopener noreferrer">Sample Solutions</a>. I changed it to work with this walkthrough and converted it to YAML.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ad-single-instance&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ad-single-instance.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
-<p>In the CloudFormation console, choose <strong>Next</strong> and specify the following values&nbsp;for parameters defined in the template:</p> 
-<ul> 
-<li>The name of the domain to create (example: <em>corp.example.com</em>)</li> 
-<li>The NetBIOS name (example: <em>CORP</em>)</li> 
-<li>The AMI ID from step 1</li> 
-<li>The instance size&nbsp;(example: <em>t2.micro</em>)</li> 
-<li>The key pair name from step 2</li> 
-<li>The value for your restore mode password</li> 
-<li>The IPv4 CIDR block from which you are likely to connect, via RDP (if needed) into your instances</li> 
-</ul> 
-<p>For more information, see&nbsp;<a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-using-console-create-stack-parameters.html" target="_blank" rel="noopener noreferrer">Specifying Stack Name and Parameters</a>.</p> 
-<p>In the CloudFormation console, look at the stack you are creating. In the example below, you have just launched your stack and it is in the CREATE_IN_PROGRESS status:</p> 
-<p>&nbsp;</p> 
-<p><img class="aligncenter wp-image-647 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-domain-join-cfn-stack.png" alt="" width="953" height="188" /></p> 
-<p>&nbsp;</p> 
-<p>Wait for the stack creation to be in the CREATE_COMPLETE Status. This stack also creates a security group, called DomainMemberSecurityGroup, to be used later by your EC2 instance joining the domain.</p> 
-<p><strong>Step 4: &nbsp;Create the KMS CMK</strong><br /> Create the KMS customer master key to encrypt the SecureString parameter that you later create for your directory’s admin password.</p> 
-<p>Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-kms-cmk</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/kms-custom-cmk.yaml">kms-custom-cmk.yaml</a> example template.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-kms-cmk&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/kms-custom-cmk.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
-<p>In the CloudFormation console,&nbsp;specify the following values for parameters defined in the template:</p> 
-<ul> 
-<li>The KMS key alias (example: <em>your-domain-join-demo</em>)</li> 
-<li>The key description (example: “<em>Example key</em>“)</li> 
-</ul> 
-<p>When I prepared the example template that describes the KMS key, I added an output, in the template’s <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html" target="_blank" rel="noopener noreferrer">Outputs</a> section, called CMKID. Its value should show the ID of the KMS key created by the stack launched off of the previously mentioned template. When the stack creation is complete, you then describe the Outputs section of the stack to get the ID of the KMS key that you just created:</p> 
-<pre><code class="lang-bash">aws cloudformation describe-stacks
---stack-name your-domain-join-demo-kms-cmk
---query &quot;Stacks[0].Outputs[?OutputKey == 'CMKID'].OutputValue&quot;
---output text
---region us-east-1
-</code></pre> 
-<p>You need the KMS key ID value later on this walkthrough. Refer to it as YOUR_KMS_KEY_ID.</p> 
-<p><strong>Step 5: &nbsp;Create Systems Manager parameters</strong><br /> Start by creating a parameter for the private IP address of the Active Directory instance. You set up this value later on as the DNS server in the DNS client configuration of your instance to join the domain.</p> 
-<p>When you created your Active Directory in step 3, in the CloudFormation template that created the instance, you set up output values relevant to the instance configuration, including instance ID and the private IP address of the instance. Retrieve this IP address by describing the Outputs section of the stack that you created on step 3, and by getting the value for the DNSIPAddress output key:</p> 
-<pre><code class="lang-bash">aws cloudformation describe-stacks
---stack-name your-domain-join-demo-ad-single-instance
---query &quot;Stacks[0].Outputs[?OutputKey == 'DNSIPAddress'].OutputValue&quot;
---output text
---region us-east-1
-</code></pre> 
-<p>The command above should return the IP address that you need, for example <em>172.31.11.22</em>. You could have set up a static private IP address for your Active Directory instance, but for this walkthrough, you just used an IP address that was automatically assigned.</p> 
-<p>Now store the value for the IP address in a parameter called <em>your-domain-join-demo-dns-ip-address</em>, as a String value:</p> 
-<pre><code class="lang-bash">aws ssm put-parameter
---name your-domain-join-demo-dns-ip-address
---description &quot;Example parameter for your DNS server's IP address&quot;
---value '172.31.11.22'
---type String
---region us-east-1
-</code></pre> 
-<p>Create another parameter where you put the name of the domain you are creating (<em>corp.example.com</em>). Call the parameter <em>your-domain-join-demo-domain-name</em>, as a String value:</p> 
-<pre><code class="lang-bash">aws ssm put-parameter
---name your-domain-join-demo-domain-name
---description &quot;Example parameter for your domain name&quot;
---value 'corp.example.com'
---type String
---region us-east-1
-</code></pre> 
-<p>The user name of your directory’s admin, in your example, is <em>Administrator</em>. Create another parameter called <em>your-domain-join-demo-ad-admin-username</em>, where you put this information as a String value:</p> 
-<pre><code class="lang-bash">aws ssm put-parameter
---name your-domain-join-demo-ad-admin-username
---description &quot;Example parameter for the username of your AD admin account&quot;
---value 'Administrator'
---type String
---region us-east-1
-</code></pre> 
-<p>Next, store your directory’s admin password as an encrypted object in another parameter. First, retrieve the Windows password from the Active Directory instance. For this task, you need the instance ID from the Outputs section of the stack created in step 3:</p> 
-<pre><code class="lang-bash">aws cloudformation describe-stacks
---stack-name your-domain-join-demo-ad-single-instance
---query &quot;Stacks[0].Outputs[?OutputKey == 'InstanceID'].OutputValue&quot;
---output text
---region us-east-1
-</code></pre> 
-<p>The command above should return the ID of the Active Directory instance, for example <em>i-1234567890abcdef0</em>. Next, retrieve the Windows password for your instance, and decrypt the password with the private key material of the EC2 key pair that you created earlier:</p> 
-<pre><code class="lang-bash">aws ec2 get-password-data
---instance-id i-1234567890abcdef0
---priv-launch-key your-domain-join-demo.pem
---query &quot;PasswordData&quot;
---output text
---region us-east-1
-</code></pre> 
-<p>The command above should return the Windows password for your instance. Refer to this password as YOUR_WINDOWS_PASSWORD_FOR_AD on this step. Next, store YOUR_WINDOWS_PASSWORD_FOR_AD as a SecureString parameter. Create a parameter called <em>your-domain-join-demo-ad-admin-password</em>. Use the KMS CMK, created in step 4, for encryption:</p> 
-<pre><code class="lang-bash">aws ssm put-parameter
---name your-domain-join-demo-ad-admin-password
---description &quot;Example parameter for the password of your AD admin account&quot;
---value 'YOUR_WINDOWS_PASSWORD_FOR_AD'
---type SecureString
---key-id YOUR_KMS_KEY_ID
---region us-east-1
-</code></pre> 
-<p>At the end of this step, you should have four parameters. In the EC2 console, view your parameters:</p> 
-<p><img class="aligncenter wp-image-649 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-parameter-store-resources.png" alt="" width="617" height="570" /></p> 
-<p>&nbsp;</p> 
-<p><strong>Step 6: &nbsp;Create the IAM role for the EC2 instance</strong><br /> On this step, you create an IAM role to be used by your instance joining the domain, via an IAM instance profile, to get read-only access to Systems Manager parameters. The example template describes a role to which the AmazonEC2RoleforSSM managed policy is attached. An example policy is also attached to the role, and a snippet of this policy is shown below:</p> 
-<pre><code class="lang-json">[…]
-{
-&quot;Action&quot;: [
-&quot;kms:Decrypt&quot;
-],
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Resource&quot;: &quot;THE_ARN_OF_YOUR_KMS_KEY&quot;
-}
-[…]
-</code></pre> 
-<p>The example policy above allows kms:Decrypt API calls for the KMS key resource that you created earlier. In the policy snippet, you reference the <a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Name</a> (ARN) of the KMS CMK, that you see in the relevant placeholder in capital letters above.</p> 
-<p>When editing templates for this walkthrough, I used the CloudFormation feature to <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html" target="_blank" rel="noopener noreferrer">export stack output values</a>, to facilitate passing values between stacks. The stack that you are creating now needs the ARN of the KMS CMK created earlier, so that it can be referenced in the IAM policy for the role.</p> 
-<p>You have already exported the KMS CMK ARN from the stack that created the CMK. You can now import and reference the ARN by specifying the name of the CMK stack (in your example: <em>your-domain-join-demo-kms-cmk</em>) as a parameter to the stack you are creating for the role. Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ec2-instance-role</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance-role.yaml">ec2-instance-role.yaml</a> example template.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ec2-instance-role&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance-role.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
-<p>In the CloudFormation console, specify the <em>your-domain-join-demo-kms-cmk</em> parameter value.</p> 
-<p>Then, wait for the stack creation to complete and continue with the next step.</p> 
-<p><strong>Step 7: &nbsp;Create the Systems Manager document</strong><br /> Create, with an example CloudFormation template, the Systems Manager document that contains commands to execute on the EC2 instance for it to join your domain. In the document, specify the parameter names that you created earlier. Pass these names to the CloudFormation stack that creates the document.</p> 
-<p>The example code below depicts a portion of an example Systems Manager document. You can see how this document uses the !Sub short form of the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-sub.html" target="_blank" rel="noopener noreferrer">Fn::Sub</a> intrinsic function in CloudFormation to reference stack parameters (for example, the DNSParameterStore parameter):</p> 
-<pre><code class="lang-yaml">[…]
-Document:
-Type: AWS::SSM::Document
-Properties:
-Content:
-description: Run a PowerShell script to domain join a Windows instance securely
-mainSteps:
-- action: aws:runPowerShellScript
-inputs:
-runCommand:
-- '# Example PowerShell script to domain join a Windows instance securely'
-- ''
-- $ErrorActionPreference = 'Stop'
-- ''
-- try{
-- '    # Parameter names'
-- !Sub '    $dnsParameterStore = ''${DNSParameterStore}'''
-- !Sub '    $domainNameParameterStore = ''${DomainNameParameterStore}'''
-- !Sub '    $domainJoinUserNameParameterStore = ''${DomainJoinUserNameParameterStore}'''
-- !Sub '    $domainJoinPasswordParameterStore = ''${DomainJoinPasswordParameterStore}'''
-- ''
-- '    # Retrieve configuration values from parameters'
-- '    $ipdns = (Get-SSMParameterValue -Name $dnsParameterStore).Parameters[0].Value'
-- '    $domain = (Get-SSMParameterValue -Name $domainNameParameterStore).Parameters[0].Value'
-- '    $username = $domain + ''\'' + (Get-SSMParameterValue -Name $domainJoinUserNameParameterStore).Parameters[0].Value'
-- '    $password = (Get-SSMParameterValue -Name $domainJoinPasswordParameterStore
--WithDecryption $True).Parameters[0].Value | ConvertTo-SecureString
--asPlainText -Force'
-[…]
-</code></pre> 
-<p>Create the document with a stack. Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ssm-document-domain-join&nbsp;</em>with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ssm-document-domain-join.yaml">ssm-document-domain-join.yaml</a> example template.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ssm-document-domain-join&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ssm-document-domain-join.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
-<p>In the CloudFormation console, specify the following values for parameters defined in the template:</p> 
-<ul> 
-<li><em>your-domain-join-demo-dns-ip-address</em></li> 
-<li><em>your-domain-join-demo-ad-admin-password</em></li> 
-<li><em>your-domain-join-demo-ad-admin-username</em></li> 
-<li><em>your-domain-join-demo-domain-name</em></li> 
-</ul> 
-<p>After the stack creation is complete, you should find your new document listed in the Documents page in the console:</p> 
-<p><img class="aligncenter wp-image-650 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-ssm-document.png" alt="" width="547" height="169" /></p> 
-<p>&nbsp;</p> 
-<p><strong>Step 8: &nbsp;Launch the instance and join the domain</strong><br /> On this last step, use CloudFormation to create an EC2 instance based on the Microsoft Windows 2012 R2 AMI you chose in step 1.</p> 
-<p>After the instance starts up, it is associated to the document you created in the previous step, and should then join the domain after running the script in the document. When you create the stack for the instance, you import values that you have exported in other stacks, so you can easily reference the values you need. Specify the names of the stacks that created the Active Directory domain and the Systems Manager document, so you can reference the following:</p> 
-<ul> 
-<li>The ID of the domain member security group for your EC2 instance</li> 
-<li>The name of the document for the association between the document and instance</li> 
-</ul> 
-<p>Now, create the instance. Choose <strong>Launch Stack</strong> below to create the stack called&nbsp;<em>your-domain-join-demo-ec2-instance</em>&nbsp;with the&nbsp;<a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance.yaml">ec2-instance.yaml</a> example template.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ec2-instance&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
-<p>In the CloudFormation console, specify the following values for parameters defined in the template:</p> 
-<ul> 
-<li><em>your-domain-join-demo-ad-single-instance</em></li> 
-<li><em>your-domain-join-demo-ssm-document-domain-join</em></li> 
-<li>The AMI ID from step 1</li> 
-<li><em>your-domain-join-demo-ec2-instance-role</em></li> 
-<li>The instance size (in your example: <em>t2.micro</em>)</li> 
-<li>The key pair name from step 2</li> 
-</ul> 
-<p>Wait for the stack creation to complete. At the end of the process, your instance should have joined your <em>corp.example.com</em> domain. In the EC2 console, State Manager should show that the association between the Systems Manager document and the instance is successful:</p> 
-<p><img class="aligncenter wp-image-651 size-large" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-state-manager-1024x446.png" alt="" width="640" height="279" /></p> 
-<p>&nbsp;</p> 
-<p>Verify that the machine joined the domain by connecting via RDP to the instance with your Active Directory admin credentials.</p> 
-<p><strong>Conclusion</strong><br /> In this post, I showed you how to use Parameter Store to set up configuration values in a central and secure location. Using Parameter Store, you securely stored the configuration values needed for your EC2 instance to join the domain. You also stored the admin password for the example Active Directory as a SecureString parameter, and used a KMS key for encryption. Then, you launched an EC2 instance associated with a Systems Manager document, ran a custom script on the instance, and joined your example domain.</p> 
-<p><strong>About the Author</strong><br /> <img class="alignleft wp-image-661 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/matteo-rinaudo-150x150.png" alt="" width="150" height="150" />Matteo Rinaudo is a Sr. Consultant at AWS Professional Services. Matteo enjoys working with our customers to deliver solutions and best practices around DevOps automation, infrastructure-as-code and configuration management. In his spare time, Matteo enjoys spending time with his wife, playing the trumpet, the piano, and listening to classical music.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/parameter-store/" rel="tag">Parameter Store</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
 </footer> 
 </article> 
 <p>

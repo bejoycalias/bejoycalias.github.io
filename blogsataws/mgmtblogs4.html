@@ -19,13 +19,13 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 
     <meta property="og:url" content="https://bejoycalias.github.io/blogsataws/mgmtblogs1.html" />
     <meta property="og:site_name" content="Bejoy's TechNotes"/>
-    <meta property="og:title" content="Bejoy's TechNotes - Management Tools Blogs Blogs @ AWS" />
+    <meta property="og:title" content="Bejoy's TechNotes - Management Tools Blogs @ AWS" />
     <meta property="og:image" content="https://bejoycalias.github.io/assets/images/og-image.png"/>
     <meta property="og:image:width" content="1200"/>
     <meta property="og:image:height" content="1200"/>
     <meta property="og:description" content="" />
 
-    <title>Bejoy's TechNotes - Management Tools Blogs Blogs @ AWS</title>
+    <title>Bejoy's TechNotes - Management Tools Blogs @ AWS</title>
     <link href="../assets/stylesheets/application-832aa42c.css" rel="stylesheet" />
 
     <!--[if lt IE 9]>
@@ -189,6 +189,496 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a</p>
 <br>
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Keeping CloudWatch Dashboards up to date using AWS Lambda</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Mike Meaney</span></span> | on 
+<time property="datePublished" datetime="2017-07-05T16:12:07+00:00">05 JUL 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch"><span property="articleSection">Amazon CloudWatch</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/keeping-cloudwatch-dashboards-up-to-date-using-aws-lambda/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>With the launch of the new <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/Welcome.html">CloudWatch Dashboards API</a> and CloudFormation support it is now easy to <a href="https://aws.amazon.com/blogs/aws/new-api-cloudformation-support-for-amazon-cloudwatch-dashboards/">automate your CloudWatch Dashboards</a> and make sure they monitor all the resources that you launched when creating your <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html">CloudFormation stacks</a>.</p> 
+<p>Let’s now see how you can use the new CloudWatch Dashboards API to dynamically update your dashboard as EC2 instances are added or removed. When you use auto-scaled EC2 instances for example, EC2 instances may be launched or terminated at any time and if you have a CloudWatch Dashboard monitoring your EC2 resources it can suddenly be monitoring instances that do not exist anymore, and may be missing ones that do exist.</p> 
+<b>Use AWS Lambda to keep EC2 instances up to date</b> 
+<p>A simple solution is to run the script below periodically in AWS Lambda. The script loads your CloudWatch Dashboards that monitors your instances and updates the EC2 graph widgets if needed.</p> 
+<p><span id="more-700"></span></p> 
+<p>The script:</p> 
+<ul> 
+<li>Loads the specified CloudWatch Dashboard(s)</li> 
+<li>Looks for all graph widgets displaying EC2 instance metrics</li> 
+<li>Calls <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> with configured parameters to discover the current EC2 instances for that graph in that region</li> 
+<li>Updates the widget if needed</li> 
+<li>Saves the CloudWatch Dashboards if any widget definition has changed</li> 
+</ul> 
+<p>The script is configured via an environment variable <strong>AWS_DASHBOARDS</strong> whose value is a JSON array of the dashboard names that you want to update along with (optional) parameters for <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> which sets which EC2 Instances should be displayed on each dashboard.</p> 
+<p>Here’s an example that will update a CloudWatch Dashboard called <code>MyAutoScalingDashboard</code> with all running instances in the AutoScaling group called <code>MyAutoScalingGroup</code>:</p> 
+<pre><code class="lang-json">[
+{
+&quot;dashboardName&quot;: &quot; MyAutoScalingDashboard &quot;,
+&quot;ec2DescribeInstanceParams&quot;: {
+&quot;Filters&quot;: [
+{
+&quot;Name&quot;: &quot;instance-state-name&quot;,
+&quot;Values&quot;: [ &quot;running&quot; ]
+},
+{
+&quot;Name&quot;: &quot;tag:aws:autoscaling:groupName&quot;,
+&quot;Values&quot;: [ &quot;MyAutoScalingGroup&quot; ]
+}
+]
+}
+}
+]
+</code></pre> 
+<h3>To create the Lambda function:</h3> 
+<ol> 
+<li>In the <a href="https://console.aws.amazon.com/lambda">Lambda console</a>, choose <strong>Create a Lambda function</strong></li> 
+<li>Select <strong>Blank Function</strong> and choose <strong>Next</strong> when asked to configure a trigger.</li> 
+<li>For <strong>Name</strong>, enter <code>ec2DashboardUpdater</code></li> 
+<li>For <strong>Code entry type</strong> choose <strong>Upload a file from Amazon S3</strong>.</li> 
+<li>For <strong>S3 link URL</strong> enter <code>https://s3.amazonaws.com/ec2-dashboard-updater/ec2DashboardUpdater.zip</code></li> 
+<li>You’ll need to specify the <code>AWS_DASHBOARDS</code> environment variable with a JSON array for the dashboards you want to update, e.g. with the JSON in the example earlier (no newlines: <pre><code class="lang-json">[{&quot;dashboardName&quot;:&quot;AutoUpdateEC2Dashboard&quot;,&quot;ec2DescribeInstanceParams&quot;:{&quot;Filters&quot;:[{&quot;Name&quot;:&quot;instance-state-name&quot;,&quot;Values&quot;:[&quot;running&quot;]},{&quot;Name&quot;:&quot;tag:aws:autoscaling:groupName&quot;,&quot;Values&quot;:[&quot;test-asg-01&quot;]}]}}]</code></pre> </li> 
+<li>Set the <strong>Handler</strong> as <code>ec2DashboardUpdater.handler</code></li> 
+<li>For <strong>Role</strong> select <strong>Create a custom role</strong></li> 
+<li>In the IAM Console window that opens choose <strong>IAM Role</strong> of <strong>Create a new IAM Role</strong></li> 
+<li>Set <strong>Role Name</strong> of <code>ec2DashboardUpdaterRole</code></li> 
+<li>Choose <strong>View Policy Document, Edit, Ok</strong>.</li> 
+<li>Set the role to: <pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;cloudwatch:GetDashboard&quot;,
+&quot;cloudwatch:PutDashboard&quot;,
+&quot;ec2:DescribeInstances&quot;
+],
+&quot;Resource&quot;: &quot;*&quot;
+}
+]
+}</code></pre> </li> 
+<li>Choose <strong>Allow</strong></li> 
+<li>In <strong>Advanced settings</strong> set <strong>Timeout</strong> to a value that is enough to describe all instances for all EC2 graph widgets and load and save all dashboards – set it to <strong>5 min</strong> if unsure</li> 
+<li>Select <strong>Next</strong> then <strong>Create function</strong></li> 
+</ol> 
+<h3>To call the Lambda function periodically:</h3> 
+<ol> 
+<li>In the <a href="https://console.aws.amazon.com/cloudwatch">CloudWatch console,</a> choose <strong>Rules</strong> in the left navigation pane</li> 
+<li>Select <strong>Create rule</strong></li> 
+<li>Choose the <strong>Schedule</strong> radio button and set <strong>Fixed rate</strong> of <code>15</code> Minutes</li> 
+<li>Select <strong>Add target</strong>, make sure <strong>Lambda function</strong> is active and for <strong>Function</strong> select the previously created <code>ec2DashboardUpdater</code> function</li> 
+<li>Choose <strong>Configure details</strong></li> 
+<li>Enter <strong>Name</strong> as <code>ec2DashboardUpdaterCron</code></li> 
+<li>Select <strong>Create rule</strong></li> 
+</ol> 
+<p>And that’s it, you’re done. Your selected dashboards will now be kept up to date with your changing EC2 instances hourly. If your EC2 instances do not change from hour to hour then your dashboards will not be updated.</p> 
+<p>Please note some limitations of the script:</p> 
+<ul> 
+<li>It will only update graphs where the first metric is an EC2 instance id metric, such as CPUUtilization, NetworkIn or DiskReadBytes, in the AWS/EC2 namespace.</li> 
+<li>It assumes EC2 metrics on a graph all use the same MetricName field.</li> 
+<li>All EC2 graphs on a particular dashboard are for the same list of EC2 instances (as specified in the ec2DescribeInstanceParams configuration parameter.</li> 
+</ul> 
+<p>The (Javascript) code for the script is given below. Feel free to use it as the basis for keeping your CloudWatch Dashboards up to date with other resources.</p> 
+<pre><code class="lang-javascript">//
+// EC2 Dashboard Updater
+// This script will keep EC2 graphs on a chosen list of CloudWatch Dashboards up to date. In the CloudWatch Events
+// console create a rule to call this Lambda whenever and EC2 instance changes state.
+//
+// Configure this script with the AWS_DASHBOARDS environment variable. The content of AWS_DASHBOARDS indicates
+// which dashboards to update with which EC2 instances.  The value is an array in JSON format. Each array element
+// is an object with two properties, dashboardName and ec2DescribeInstanceParams. dashboardName is the dashboard to
+// update and ec2DescribeInstanceParams are parameters to pass to EC2 DescribeInstances API, to determine which
+// instances to update the graphs with.
+//
+// For example, set AWS_DASHBOARDS to the following to keep 'MyDashboard' up to date with the instances in the
+// AutoScalingGroup 'MyAutoScalingGroup':
+//
+// [
+//     {
+//         dashboardName: 'MyDashboard',
+//         ec2DescribeInstanceParams: {
+//             Filters: [
+//                 {
+//                     Name: 'tag:aws:autoscaling:groupName',
+//                     Values: [ 'MyAutoScalingGroup' ]
+//                 }
+//             ]
+//         }
+//     }
+// ]
+//
+// Limitations:
+// - it will only update graphs whose first metric is an EC2 instance metric, all other metrics on the graph
+//   will be replaced with these metrics
+// - metrics can not have custom periods or statistics, the graph defaults will be used
+//
+'use strict'
+var _ = require('lodash'),
+co = require('co'),
+AWS = require('aws-sdk'),
+EC2_NAMESPACE = 'AWS/EC2',
+INSTANCE_ID_DIM = 'InstanceId',
+REPEAT_PREVIOUS = '...',
+NAME_TAG = 'Name',
+METRIC_WIDGET_TYPE = 'metric';
+function getDashboards() {
+let dashboardDef = process.env.AWS_DASHBOARDS,
+dashboards;
+if (! dashboardDef) {
+throw 'Environment variable AWS_DASHBOARDS is not set. It should be set with JSON array, e.g [{&quot;dashboardName&quot;: &quot;myDashboard&quot;}]';
+}
+try {
+dashboards = JSON.parse(dashboardDef);
+} catch (err) {
+throw 'Error, AWS_DASHBOARDS is not valid JSON';
+}
+if (! Array.isArray(dashboards)) {
+throw 'Expecting AWS_DASHBOARDS to be an array';
+}
+return dashboards;
+}
+function ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName) {
+return _.chain(ec2DescribeInstances.Reservations).
+map('Instances').
+flatten().
+map(function(instance) {
+let idAndLabel = {
+id: instance.InstanceId,
+label: instance.InstanceId
+};
+_.each(instance.Tags, (tag) =&gt; {        // Use Name tag instead of InstanceId as label, if it exists
+if (tag.Key === NAME_TAG) {
+idAndLabel.label = tag.Value;
+return false;
+}
+});
+return idAndLabel;
+}).
+sortBy(['label']).
+map((idAndLabel, i) =&gt; {
+var metric = i == 0 ?
+[ EC2_NAMESPACE, metricName, INSTANCE_ID_DIM, idAndLabel.id ] :
+[ REPEAT_PREVIOUS, idAndLabel.id ];
+if (idAndLabel.id != idAndLabel.label) {
+metric.push({label: idAndLabel.label});
+}
+return metric;
+}).
+value();
+}
+function* getEC2Metrics(dashboardContext, region, metricName) {
+var params = dashboardContext.dashboard.ec2DescribeInstanceParams || {},
+ec2Cache = dashboardContext.ec2Cache,
+ec2DescribeInstances;
+// ec2Cache is a cache of instance responses per region for the current dashboard, to limit calls to EC2
+if (!ec2Cache) {
+dashboardContext.ec2Cache = {};
+} else if (ec2Cache[region]) {
+ec2DescribeInstances = ec2Cache[region];
+}
+if (!ec2DescribeInstances) {
+// Not in cache, call EC2 to get list of regions
+let ec2Client = new AWS.EC2({region: region});
+ec2DescribeInstances = yield ec2Client.describeInstances(params).promise(),
+dashboardContext.ec2Cache[region] = ec2DescribeInstances;
+}
+return ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName);
+}
+function* updateDashboard(cloudwatchClient, dashboardContext, dashboardBody) {
+var newDashboard = _.cloneDeep(dashboardBody),
+widgets = newDashboard.widgets,
+dashboardName = dashboardContext.dashboard.dashboardName;
+for (let i = 0; i &lt; widgets.length; i++) {
+let widget = widgets[i],
+metrics = widget.properties.metrics,
+region = widget.region;
+// Check to see if it's a metric widget and first metric is an EC2 Instance metric
+if (widget.type === METRIC_WIDGET_TYPE &amp;&amp; metrics &amp;&amp; (metrics[0].length === 4 || metrics[0].length === 5) &amp;&amp;
+metrics[0][0] === EC2_NAMESPACE &amp;&amp; metrics[0][2] === INSTANCE_ID_DIM) {
+let ec2Metrics = yield getEC2Metrics(dashboardContext, region, metrics[0][1]);
+widget.properties.metrics = ec2Metrics;
+}
+}
+if (JSON.stringify(dashboardBody) !== JSON.stringify(newDashboard)) {
+console.log(`Updating dashboard ${dashboardName} to:`, JSON.stringify(newDashboard));
+// Save updated dashboard
+yield cloudwatchClient.putDashboard({
+DashboardName: dashboardName,
+DashboardBody: JSON.stringify(newDashboard)
+}).promise();
+} else {
+console.log(`Dashboard ${dashboardName} is unchanged, update skipped`);
+}
+}
+exports.handler = (event, context, callback) =&gt; {
+var dashboards = getDashboards(),
+cloudwatchClient = new AWS.CloudWatch(),
+dashboard,
+dashboardContext;
+try {
+co(function* () {
+for (let i = 0; i &lt; dashboards.length; i++) {
+dashboard = dashboards[i];
+dashboardContext = { dashboard: dashboard };
+if (dashboard.dashboardName) {
+let dashboardResponse = yield cloudwatchClient.getDashboard({
+DashboardName: dashboard.dashboardName }).promise(),
+dashboardBody = JSON.parse(dashboardResponse.DashboardBody);
+yield updateDashboard(cloudwatchClient, dashboardContext, dashboardBody);
+}
+}
+callback(null, 'Update complete');
+});
+} catch (err) {
+callback(err);
+}
+};
+</code></pre> 
+<p>&nbsp;</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Join a Microsoft Active Directory Domain with Parameter Store and Amazon EC2 Systems Manager Documents</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Matteo Rinaudo</span></span> | on 
+<time property="datePublished" datetime="2017-06-19T10:04:06+00:00">19 JUN 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/join-a-microsoft-active-directory-domain-with-parameter-store-and-amazon-ec2-systems-manager-documents/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>The process of configuration management can be difficult, in particular when performed at scale. An example could be an application, running on your fleet, which uses configuration values like database connection strings or passwords.</p> 
+<p>For deployment best practices, isolate application configuration portions so that you can separately deploy configuration values specific to each environment, for example development and production environments. To ameliorate the security posture of your application, encrypt sensitive configuration values like passwords. From a management standpoint, store configuration values in a central and secure location, instead of storing and maintaining such information on your fleet. Central storage has the advantage of easily maintaining and rotating configuration values in one single place, and it also facilitates auditing changes and access to such configuration values.</p> 
+<p><a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer">Amazon EC2 Systems Manager</a> is a management service that helps you configure and manage Amazon EC2 instances and on-premises servers. <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/" target="_blank" rel="noopener noreferrer">Parameter Store</a> is a Systems Manager feature that makes it easier to reference your configuration data, securely stored in a central location. Parameter Store integrates with other AWS services like <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) and <a href="https://aws.amazon.com/kms/" target="_blank" rel="noopener noreferrer">AWS Key Management Service</a> (AWS KMS). With IAM, you define access control to Systems Manager parameters. With KMS, you can encrypt sensitive information, such as SecureString parameters. API calls made to Systems Manager parameters can be recorded with <a href="https://aws.amazon.com/cloudtrail/" target="_blank" rel="noopener noreferrer">AWS CloudTrail</a>, so you can audit access or changes to your parameters, for example.</p> 
+<p>In this post, I show you a scenario for centralized configuration management, with an example of joining EC2 instances to a Microsoft Active Directory. You launch an EC2 instance that consumes and uses configuration values stored as Systems Manager parameters to join your Active Directory domain. For more information about creating an Active Directory with <a href="https://aws.amazon.com/directoryservice/" target="_blank" rel="noopener noreferrer">AWS Directory Service</a> instead, see the <a href="https://aws.amazon.com/blogs/aws/seamlessly-join-ec2-instances-to-a-domain/" target="_blank" rel="noopener noreferrer">Seamlessly Join EC2 Instances to a Domain</a> blog post.</p> 
+<p><span id="more-635"></span></p> 
+<p>This is the diagram of the example infrastructure you create:</p> 
+<p><img class="aligncenter wp-image-638 size-large" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-parameter-store-demo-diagram-1024x576.png" alt="" width="640" height="360" /></p> 
+<p><strong>Walkthrough</strong><br /> In this walkthrough, you create an example Active Directory domain to run on a single EC2 instance. Next, you create Systems Manager parameters where you put the following information:</p> 
+<ul> 
+<li>The Active Directory instance’s private IP address (used as a DNS server for domain members)</li> 
+<li>The domain name</li> 
+<li>The Active Directory administrator’s user name</li> 
+<li>The Active Directory administrator’s password</li> 
+</ul> 
+<p>Then, you create a KMS customer master key (CMK) that you use to store the Active Directory admin password as an encrypted object in the relevant SecureString parameter.</p> 
+<p>Finally, you create an association between a <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html" target="_blank" rel="noopener noreferrer">Systems Manager document</a>, where an example domain join script is defined, and an EC2 instance that joins the domain. Associations define the state to apply to a set of targets. In your example, the EC2 instance (a target) joins your domain (a state). <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/" target="_blank" rel="noopener noreferrer">State Manager</a>, another Systems Manager feature, uses the association to keep your managed instance in the intended state.</p> 
+<p>For this walkthrough, you use the <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS Command Line Interface</a> (AWS CLI) to create AWS resources. The examples show the us-east-1 region. I’ve also prepared example <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> templates that you can use to create AWS resources.</p> 
+<p><strong>Step 1: &nbsp;Select the AMI</strong><br /> Use an Amazon Machine Image (AMI) for Microsoft Windows 2012 R2 to launch both your example Active Directory instance and the instance you join to the Active Directory domain.</p> 
+<p>First, you need the ID of the AMI to use. Generate and choose from a list of AMIs, matching your search pattern. For readability, I’ve broken down the following command (and all the other commands in this post) in multiple lines instead of a single line:</p> 
+<pre><code class="lang-bash">aws ec2 describe-images
+--owners amazon
+--filters
+'Name=name,Values=Windows_Server-2012-R2_RTM-English-64Bit-Base-*'
+'Name=state,Values=available'
+--query 'Images[].[Name, ImageId]'
+--output text
+--region us-east-1
+</code></pre> 
+<p>After running the command above, you should get a list with AMI names in the left column, and AMI IDs on the right column. Note the ID of the AMI to use, for example <em>ami-1234abcd</em>.</p> 
+<p><strong>Step 2: &nbsp;Create the EC2 key pair</strong><br /> Now, create an Amazon EC2 key pair to use to retrieve Windows passwords for the EC2 instances that you create. Call the key pair <em>your-domain-join-demo</em> and store the private key material on your computer in the <em>your-domain-join-demo.pem</em> file:</p> 
+<pre><code class="lang-bash">aws ec2 create-key-pair
+--key-name your-domain-join-demo
+--query &quot;KeyMaterial&quot;
+--output text
+--region us-east-1 &gt; your-domain-join-demo.pem
+</code></pre> 
+<p><strong>Step 3: &nbsp;Create the Active Directory</strong><br /> For this post, you create your example Active Directory on a single EC2 instance, and launch it on a default VPC subnet. The directory’s admin user name is <em>Administrator</em>, and the directory’s admin password is the one retrieved from the instance.</p> 
+<p>As part of your example Active Directory creation, specify a value to set up for the restore mode password (SafeModeAdminPassword). The password can have a minimum of 8 characters and contain alphanumeric and special characters.</p> 
+<p>You are now ready to create your example Active Directory with CloudFormation. Sign in to the CloudFormation console. Choose <strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ad-single-instance</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ad-single-instance.yaml">ad-single-instance.yaml</a> example template. You can also download the template and use it as a starting point for your own implementation. This template is a modified version of the Microsoft Windows Server Active Directory template found at <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/sample-templates-applications-us-east-1.html" target="_blank" rel="noopener noreferrer">Sample Solutions</a>. I changed it to work with this walkthrough and converted it to YAML.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ad-single-instance&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ad-single-instance.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
+<p>In the CloudFormation console, choose <strong>Next</strong> and specify the following values&nbsp;for parameters defined in the template:</p> 
+<ul> 
+<li>The name of the domain to create (example: <em>corp.example.com</em>)</li> 
+<li>The NetBIOS name (example: <em>CORP</em>)</li> 
+<li>The AMI ID from step 1</li> 
+<li>The instance size&nbsp;(example: <em>t2.micro</em>)</li> 
+<li>The key pair name from step 2</li> 
+<li>The value for your restore mode password</li> 
+<li>The IPv4 CIDR block from which you are likely to connect, via RDP (if needed) into your instances</li> 
+</ul> 
+<p>For more information, see&nbsp;<a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-using-console-create-stack-parameters.html" target="_blank" rel="noopener noreferrer">Specifying Stack Name and Parameters</a>.</p> 
+<p>In the CloudFormation console, look at the stack you are creating. In the example below, you have just launched your stack and it is in the CREATE_IN_PROGRESS status:</p> 
+<p>&nbsp;</p> 
+<p><img class="aligncenter wp-image-647 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-domain-join-cfn-stack.png" alt="" width="953" height="188" /></p> 
+<p>&nbsp;</p> 
+<p>Wait for the stack creation to be in the CREATE_COMPLETE Status. This stack also creates a security group, called DomainMemberSecurityGroup, to be used later by your EC2 instance joining the domain.</p> 
+<p><strong>Step 4: &nbsp;Create the KMS CMK</strong><br /> Create the KMS customer master key to encrypt the SecureString parameter that you later create for your directory’s admin password.</p> 
+<p>Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-kms-cmk</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/kms-custom-cmk.yaml">kms-custom-cmk.yaml</a> example template.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-kms-cmk&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/kms-custom-cmk.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
+<p>In the CloudFormation console,&nbsp;specify the following values for parameters defined in the template:</p> 
+<ul> 
+<li>The KMS key alias (example: <em>your-domain-join-demo</em>)</li> 
+<li>The key description (example: “<em>Example key</em>“)</li> 
+</ul> 
+<p>When I prepared the example template that describes the KMS key, I added an output, in the template’s <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html" target="_blank" rel="noopener noreferrer">Outputs</a> section, called CMKID. Its value should show the ID of the KMS key created by the stack launched off of the previously mentioned template. When the stack creation is complete, you then describe the Outputs section of the stack to get the ID of the KMS key that you just created:</p> 
+<pre><code class="lang-bash">aws cloudformation describe-stacks
+--stack-name your-domain-join-demo-kms-cmk
+--query &quot;Stacks[0].Outputs[?OutputKey == 'CMKID'].OutputValue&quot;
+--output text
+--region us-east-1
+</code></pre> 
+<p>You need the KMS key ID value later on this walkthrough. Refer to it as YOUR_KMS_KEY_ID.</p> 
+<p><strong>Step 5: &nbsp;Create Systems Manager parameters</strong><br /> Start by creating a parameter for the private IP address of the Active Directory instance. You set up this value later on as the DNS server in the DNS client configuration of your instance to join the domain.</p> 
+<p>When you created your Active Directory in step 3, in the CloudFormation template that created the instance, you set up output values relevant to the instance configuration, including instance ID and the private IP address of the instance. Retrieve this IP address by describing the Outputs section of the stack that you created on step 3, and by getting the value for the DNSIPAddress output key:</p> 
+<pre><code class="lang-bash">aws cloudformation describe-stacks
+--stack-name your-domain-join-demo-ad-single-instance
+--query &quot;Stacks[0].Outputs[?OutputKey == 'DNSIPAddress'].OutputValue&quot;
+--output text
+--region us-east-1
+</code></pre> 
+<p>The command above should return the IP address that you need, for example <em>172.31.11.22</em>. You could have set up a static private IP address for your Active Directory instance, but for this walkthrough, you just used an IP address that was automatically assigned.</p> 
+<p>Now store the value for the IP address in a parameter called <em>your-domain-join-demo-dns-ip-address</em>, as a String value:</p> 
+<pre><code class="lang-bash">aws ssm put-parameter
+--name your-domain-join-demo-dns-ip-address
+--description &quot;Example parameter for your DNS server's IP address&quot;
+--value '172.31.11.22'
+--type String
+--region us-east-1
+</code></pre> 
+<p>Create another parameter where you put the name of the domain you are creating (<em>corp.example.com</em>). Call the parameter <em>your-domain-join-demo-domain-name</em>, as a String value:</p> 
+<pre><code class="lang-bash">aws ssm put-parameter
+--name your-domain-join-demo-domain-name
+--description &quot;Example parameter for your domain name&quot;
+--value 'corp.example.com'
+--type String
+--region us-east-1
+</code></pre> 
+<p>The user name of your directory’s admin, in your example, is <em>Administrator</em>. Create another parameter called <em>your-domain-join-demo-ad-admin-username</em>, where you put this information as a String value:</p> 
+<pre><code class="lang-bash">aws ssm put-parameter
+--name your-domain-join-demo-ad-admin-username
+--description &quot;Example parameter for the username of your AD admin account&quot;
+--value 'Administrator'
+--type String
+--region us-east-1
+</code></pre> 
+<p>Next, store your directory’s admin password as an encrypted object in another parameter. First, retrieve the Windows password from the Active Directory instance. For this task, you need the instance ID from the Outputs section of the stack created in step 3:</p> 
+<pre><code class="lang-bash">aws cloudformation describe-stacks
+--stack-name your-domain-join-demo-ad-single-instance
+--query &quot;Stacks[0].Outputs[?OutputKey == 'InstanceID'].OutputValue&quot;
+--output text
+--region us-east-1
+</code></pre> 
+<p>The command above should return the ID of the Active Directory instance, for example <em>i-1234567890abcdef0</em>. Next, retrieve the Windows password for your instance, and decrypt the password with the private key material of the EC2 key pair that you created earlier:</p> 
+<pre><code class="lang-bash">aws ec2 get-password-data
+--instance-id i-1234567890abcdef0
+--priv-launch-key your-domain-join-demo.pem
+--query &quot;PasswordData&quot;
+--output text
+--region us-east-1
+</code></pre> 
+<p>The command above should return the Windows password for your instance. Refer to this password as YOUR_WINDOWS_PASSWORD_FOR_AD on this step. Next, store YOUR_WINDOWS_PASSWORD_FOR_AD as a SecureString parameter. Create a parameter called <em>your-domain-join-demo-ad-admin-password</em>. Use the KMS CMK, created in step 4, for encryption:</p> 
+<pre><code class="lang-bash">aws ssm put-parameter
+--name your-domain-join-demo-ad-admin-password
+--description &quot;Example parameter for the password of your AD admin account&quot;
+--value 'YOUR_WINDOWS_PASSWORD_FOR_AD'
+--type SecureString
+--key-id YOUR_KMS_KEY_ID
+--region us-east-1
+</code></pre> 
+<p>At the end of this step, you should have four parameters. In the EC2 console, view your parameters:</p> 
+<p><img class="aligncenter wp-image-649 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-parameter-store-resources.png" alt="" width="617" height="570" /></p> 
+<p>&nbsp;</p> 
+<p><strong>Step 6: &nbsp;Create the IAM role for the EC2 instance</strong><br /> On this step, you create an IAM role to be used by your instance joining the domain, via an IAM instance profile, to get read-only access to Systems Manager parameters. The example template describes a role to which the AmazonEC2RoleforSSM managed policy is attached. An example policy is also attached to the role, and a snippet of this policy is shown below:</p> 
+<pre><code class="lang-json">[…]
+{
+&quot;Action&quot;: [
+&quot;kms:Decrypt&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: &quot;THE_ARN_OF_YOUR_KMS_KEY&quot;
+}
+[…]
+</code></pre> 
+<p>The example policy above allows kms:Decrypt API calls for the KMS key resource that you created earlier. In the policy snippet, you reference the <a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Name</a> (ARN) of the KMS CMK, that you see in the relevant placeholder in capital letters above.</p> 
+<p>When editing templates for this walkthrough, I used the CloudFormation feature to <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html" target="_blank" rel="noopener noreferrer">export stack output values</a>, to facilitate passing values between stacks. The stack that you are creating now needs the ARN of the KMS CMK created earlier, so that it can be referenced in the IAM policy for the role.</p> 
+<p>You have already exported the KMS CMK ARN from the stack that created the CMK. You can now import and reference the ARN by specifying the name of the CMK stack (in your example: <em>your-domain-join-demo-kms-cmk</em>) as a parameter to the stack you are creating for the role. Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ec2-instance-role</em>&nbsp;with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance-role.yaml">ec2-instance-role.yaml</a> example template.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ec2-instance-role&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance-role.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
+<p>In the CloudFormation console, specify the <em>your-domain-join-demo-kms-cmk</em> parameter value.</p> 
+<p>Then, wait for the stack creation to complete and continue with the next step.</p> 
+<p><strong>Step 7: &nbsp;Create the Systems Manager document</strong><br /> Create, with an example CloudFormation template, the Systems Manager document that contains commands to execute on the EC2 instance for it to join your domain. In the document, specify the parameter names that you created earlier. Pass these names to the CloudFormation stack that creates the document.</p> 
+<p>The example code below depicts a portion of an example Systems Manager document. You can see how this document uses the !Sub short form of the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-sub.html" target="_blank" rel="noopener noreferrer">Fn::Sub</a> intrinsic function in CloudFormation to reference stack parameters (for example, the DNSParameterStore parameter):</p> 
+<pre><code class="lang-yaml">[…]
+Document:
+Type: AWS::SSM::Document
+Properties:
+Content:
+description: Run a PowerShell script to domain join a Windows instance securely
+mainSteps:
+- action: aws:runPowerShellScript
+inputs:
+runCommand:
+- '# Example PowerShell script to domain join a Windows instance securely'
+- ''
+- $ErrorActionPreference = 'Stop'
+- ''
+- try{
+- '    # Parameter names'
+- !Sub '    $dnsParameterStore = ''${DNSParameterStore}'''
+- !Sub '    $domainNameParameterStore = ''${DomainNameParameterStore}'''
+- !Sub '    $domainJoinUserNameParameterStore = ''${DomainJoinUserNameParameterStore}'''
+- !Sub '    $domainJoinPasswordParameterStore = ''${DomainJoinPasswordParameterStore}'''
+- ''
+- '    # Retrieve configuration values from parameters'
+- '    $ipdns = (Get-SSMParameterValue -Name $dnsParameterStore).Parameters[0].Value'
+- '    $domain = (Get-SSMParameterValue -Name $domainNameParameterStore).Parameters[0].Value'
+- '    $username = $domain + ''\'' + (Get-SSMParameterValue -Name $domainJoinUserNameParameterStore).Parameters[0].Value'
+- '    $password = (Get-SSMParameterValue -Name $domainJoinPasswordParameterStore
+-WithDecryption $True).Parameters[0].Value | ConvertTo-SecureString
+-asPlainText -Force'
+[…]
+</code></pre> 
+<p>Create the document with a stack. Choose&nbsp;<strong>Launch Stack</strong>&nbsp;below to create the stack called&nbsp;<em>your-domain-join-demo-ssm-document-domain-join&nbsp;</em>with the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ssm-document-domain-join.yaml">ssm-document-domain-join.yaml</a> example template.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ssm-document-domain-join&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ssm-document-domain-join.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
+<p>In the CloudFormation console, specify the following values for parameters defined in the template:</p> 
+<ul> 
+<li><em>your-domain-join-demo-dns-ip-address</em></li> 
+<li><em>your-domain-join-demo-ad-admin-password</em></li> 
+<li><em>your-domain-join-demo-ad-admin-username</em></li> 
+<li><em>your-domain-join-demo-domain-name</em></li> 
+</ul> 
+<p>After the stack creation is complete, you should find your new document listed in the Documents page in the console:</p> 
+<p><img class="aligncenter wp-image-650 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-ssm-document.png" alt="" width="547" height="169" /></p> 
+<p>&nbsp;</p> 
+<p><strong>Step 8: &nbsp;Launch the instance and join the domain</strong><br /> On this last step, use CloudFormation to create an EC2 instance based on the Microsoft Windows 2012 R2 AMI you chose in step 1.</p> 
+<p>After the instance starts up, it is associated to the document you created in the previous step, and should then join the domain after running the script in the document. When you create the stack for the instance, you import values that you have exported in other stacks, so you can easily reference the values you need. Specify the names of the stacks that created the Active Directory domain and the Systems Manager document, so you can reference the following:</p> 
+<ul> 
+<li>The ID of the domain member security group for your EC2 instance</li> 
+<li>The name of the document for the association between the document and instance</li> 
+</ul> 
+<p>Now, create the instance. Choose <strong>Launch Stack</strong> below to create the stack called&nbsp;<em>your-domain-join-demo-ec2-instance</em>&nbsp;with the&nbsp;<a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance.yaml">ec2-instance.yaml</a> example template.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=your-domain-join-demo-ec2-instance&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ec2-instance.yaml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-99" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/03/30/Launch-Stack.png" alt="" width="107" height="20" /></a></p> 
+<p>In the CloudFormation console, specify the following values for parameters defined in the template:</p> 
+<ul> 
+<li><em>your-domain-join-demo-ad-single-instance</em></li> 
+<li><em>your-domain-join-demo-ssm-document-domain-join</em></li> 
+<li>The AMI ID from step 1</li> 
+<li><em>your-domain-join-demo-ec2-instance-role</em></li> 
+<li>The instance size (in your example: <em>t2.micro</em>)</li> 
+<li>The key pair name from step 2</li> 
+</ul> 
+<p>Wait for the stack creation to complete. At the end of the process, your instance should have joined your <em>corp.example.com</em> domain. In the EC2 console, State Manager should show that the association between the Systems Manager document and the instance is successful:</p> 
+<p><img class="aligncenter wp-image-651 size-large" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/example-state-manager-1024x446.png" alt="" width="640" height="279" /></p> 
+<p>&nbsp;</p> 
+<p>Verify that the machine joined the domain by connecting via RDP to the instance with your Active Directory admin credentials.</p> 
+<p><strong>Conclusion</strong><br /> In this post, I showed you how to use Parameter Store to set up configuration values in a central and secure location. Using Parameter Store, you securely stored the configuration values needed for your EC2 instance to join the domain. You also stored the admin password for the example Active Directory as a SecureString parameter, and used a KMS key for encryption. Then, you launched an EC2 instance associated with a Systems Manager document, ran a custom script on the instance, and joined your example domain.</p> 
+<p><strong>About the Author</strong><br /> <img class="alignleft wp-image-661 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/14/matteo-rinaudo-150x150.png" alt="" width="150" height="150" />Matteo Rinaudo is a Sr. Consultant at AWS Professional Services. Matteo enjoys working with our customers to deliver solutions and best practices around DevOps automation, infrastructure-as-code and configuration management. In his spare time, Matteo enjoys spending time with his wife, playing the trumpet, the piano, and listening to classical music.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/parameter-store/" rel="tag">Parameter Store</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
+</footer> 
+</article> 
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Introducing Tagging Support for AWS OpsWorks Stacks</b> 
@@ -1257,368 +1747,6 @@ by
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Streamline AWS CloudTrail Logs Using Event Filters</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Bob O'Dell</span></span> | on 
-<time property="datePublished" datetime="2017-05-15T09:13:56+00:00">15 MAY 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudtrail/" title="View all posts in AWS CloudTrail"><span property="articleSection">AWS CloudTrail</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/streamline-aws-cloudtrail-logs-using-event-filters/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>In November 2016, <a href="https://aws.amazon.com/cloudtrail">AWS CloudTrail</a> announced a new feature that provides the ability to filter events that are collected within a CloudTrail trail. This simple feature helps AWS customers save time and money by creating trails that contain a subset of overall API operations and account activity.</p> 
-<p>In this post, I show you how to add event filters when creating a trail from the AWS Management Console or the AWS CLI.</p> 
-<p>A common and often recommended CloudTrail setup is to have two or more trails configured within your AWS account. One trail is for security and auditing purposes, leverages Amazon S3 file encryption and log file validation, and is stored in an S3 bucket with a policy allowing only security or audit team access.</p> 
-<p>Additional trails are often stored in a separate S3 bucket and used to send data to 3rd party tools, set up for the DevOps team to access and use, or leveraged by support teams to troubleshoot and better investigate account issues.</p> 
-<p><img class="alignnone size-full wp-image-230" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/12/muti-trail-setup.jpg" alt="" width="692" height="408" /></p> 
-<p><span id="more-229"></span></p> 
-<p>The security and audit trail (Trail 1) is often required to capture and log all activity. The operations trail (Trail 2) is often only concerned with events that change or have the potential to make changes within the account. In addition, the first copy of management events is delivered free of charge while additional copies are charged by number of events. For more information, see <a href="https://aws.amazon.com/cloudtrail/pricing/">CloudTrail pricing</a>.</p> 
-<b><span style="color: #3366ff">Event filters</span></b> 
-<p>When you configure your trail to log data events or management events, you can specify whether you want read-only or write-only events for each event type, or both. This can streamline your trails to show only the events that are most important to you and potentially help save on the cost of the trail as well as&nbsp;the downstream services that are consuming the events.</p> 
-<p>Event filter definitions:</p> 
-<ul> 
-<li><strong>Read-only</strong><br /> Includes API operations that read your resources, but don’t make changes. For example, read-only events include the Amazon EC2 DescribeSecurityGroups and DescribeSubnets API operations as well as all other List and Describe type calls. These operations return only information about your Amazon EC2 resources and don’t change your configurations or resources.</li> 
-</ul> 
-<ul> 
-<li><strong>Write-only</strong><br /> Includes API operations that modify (or might modify) your resources. For example, the Amazon EC2 RunInstances and TerminateInstances API operations modify your instances. Console sign-in events are also considered write-only.</li> 
-</ul> 
-<ul> 
-<li><strong>All</strong><br /> Includes both read-only and write-only API operations.</li> 
-</ul> 
-<b><span style="color: #3366ff">Example: Creating a multi-region trail with write-only management events</span></b> 
-<p>The following example could be used for a secondary operations trail (Trail 2) described above. This shows how you can create a multi-region trail with write-only management events from both the AWS Management Console and AWS CLI.</p> 
-<p><strong>To create a multi-region trail in the console</strong></p> 
-<p>1. Open the <a href="https://console.aws.amazon.com/cloudtrail/">CloudTrail console</a>.</p> 
-<p>2. Choose <strong>Trails, Add new trail</strong>.</p> 
-<p style="padding-left: 30px"><img class="alignnone wp-image-231" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/12/addtrail.jpg" alt="" width="760" height="124" /></p> 
-<p>3. On the <strong>Create Trail</strong> page, fill out the required fields. For more information, see <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-create-a-trail-using-the-console-first-time.html#creating-a-trail-in-the-console">Creating a Trail in the Console</a>. In the <strong>Management Event</strong> section, apply the Event Filter by selecting <strong>Write-only</strong>. Event filters apply separately to both management events and data events. For this example, leave the data event section blank, as shown below.</p> 
-<p style="padding-left: 30px"><img class="alignnone size-full wp-image-232" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/12/write-only-image-management.png" alt="" width="760" height="895" /></p> 
-<p style="padding-left: 30px">4. Choose Create.</p> 
-<p><strong>To create a multi-region trail using the CLI</strong></p> 
-<p>1. Create the trail and S3 bucket. For more information, see <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-create-and-update-a-trail-by-using-the-aws-cli.html">Creating a Trail with the AWS Command Line Interface</a>.</p> 
-<pre>aws cloudtrail create-subscription --name=writeonlytrail --s3-new-bucket=thirdpartybucket</pre> 
-<p>2. Update the trail to apply to all regions:</p> 
-<pre>aws cloudtrail update-trail --name writeonlytrail --is-multi-region-trail</pre> 
-<p>3. Apply an event selector to the trail. For more information, see <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudtrail/put-event-selectors.html">put-event-selectors</a>.</p> 
-<pre>aws cloudtrail put-event-selectors --trail-name writeonlytrail --event-selectors '[{ &quot;ReadWriteType&quot;: &quot;WriteOnly&quot;, &quot;IncludeManagementEvents&quot;:true}]'</pre> 
-<p>If you are running the AWS CLI from a Windows command prompt, modify the command to use double quotes to enclose the JSON data structure. For more information, see <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-using-param.html%23quoting-strings">Quoting Strings</a>.<br /> <code class="hide-language"></code></p> 
-<pre>aws cloudtrail put-event-selectors --trail-name writeonlytrail --event-selectors &quot;[{\&quot;ReadWriteType\&quot;:\&quot;WriteOnly\&quot;,\&quot;IncludeManagementEvents\&quot;:true}]&quot;</pre> 
-<b><span style="color: #3366ff">Summary</span></b> 
-<p>Whether you used the AWS Management Console or the AWS CLI, you’ve now created a multi-region trail that collects only write-only management events. For more information, see <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-and-data-events-with-cloudtrail.html">Logging Data and Management Events for Trails</a>.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<p>&nbsp;</p> 
-<p><img class="size-thumbnail wp-image-241 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/12/12901_10151283999781081_624181671_n-150x150.jpg" alt="" width="150" height="150" /></p> 
-<p>Bob O’Dell is a Sr. Product Manager for AWS CloudTrail. AWS CloudTrail is a service that enables governance, compliance, operational auditing, and risk auditing of AWS accounts. Bob enjoys working with customers to understand how CloudTrail can meet their needs and continue to be an integral part of their solutions going forward. In his spare time, he enjoys spending time running, hiking, and adventuring through the Pacific Northwest.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudtrail/" rel="tag">AWS CloudTrail</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Administering a Group of Instances using Run Command</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Amjad Hussain</span></span> | on 
-<time property="datePublished" datetime="2017-04-21T10:34:37+00:00">21 APR 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/administering-a-group-of-instances-using-run-command/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p><em>Emily Freebairn, Software Development Engineer with Amazon Web Services.</em></p> 
-<p>Frequently, engineers want to perform operational tasks across a group of instances. However, many of these tasks need to be performed at a controlled speed, and return feedback when there is a problem. Furthermore, administrators often want to ensure that engineers can perform only specific actions.</p> 
-<p><a href="https://aws.amazon.com/ec2/run-command/">Run Command</a>, which is part of <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> (SSM), is designed to let you remotely and securely manage instances. Run Command provides a simple way of automating common administrative tasks like running shell scripts, installing software or patches, and more. Run Command allows you to execute these commands across multiple instances and provides visibility into the results. Through integration with AWS Identity and Access Management (<a href="https://aws.amazon.com/iam">IAM</a>), you can apply granular permissions to control the actions users can perform on instances. All actions taken with Run Command are recorded by <a href="https://aws.amazon.com/cloudtrail">AWS CloudTrail</a>, allowing you to audit changes in your fleet.</p> 
-<p>In this post, I demonstrate how to send a command to collect diagnostic information on my instances. Because capacity is added to the fleet on demand, the fleet composition changes over time. To reduce the likelihood of unintentional issues on instances, commands can be run at a controlled rate across instances. You get notified if there are any failures for analysis later on. To make sure you can’t accidentally run other commands, you use a custom action with locked down permissions to perform only specific tasks.</p> 
-<p><span id="more-154"></span></p> 
-<h3>Walkthrough</h3> 
-<p>In this walkthrough, I show you how to setup instances using Auto Scaling, create a custom SSM document, and then run a command on all instances in the Auto Scaling Group. I also show how to set up <a href="https://aws.amazon.com/cloudwatch/">Amazon CloudWatch Events</a> so that you get notified in case there are any failures.</p> 
-<h4>Step 1: Launch instances using Auto Scaling Groups</h4> 
-<p>To use Run Command, instances need the following:</p> 
-<ul> 
-<li>The <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html">Amazon SSM agent</a> installed and running</li> 
-<li>Outbound internet connectivity</li> 
-<li>An appropriate&nbsp;<a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html">IAM role attached</a></li> 
-</ul> 
-<p>The SSM agent talks to the Run Command service to receive commands and send output, and uses the IAM role to grant permission to call the service.</p> 
-<p>For this post, use an Auto Scaling Group to create a group of instances that are configured appropriately. For step-by-step instructions, see&nbsp;<a href="http://docs.aws.amazon.com/autoscaling/latest/userguide/GettingStartedTutorial.html">Getting Started with Auto Scaling</a>.</p> 
-<p>Here’s an example of an Auto Scaling Group created with five instances.</p> 
-<p><img class="alignnone size-full wp-image-157" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/04/20/ASG.png" alt="" width="624" height="436" /></p> 
-<h4>Step 2: Create a custom document</h4> 
-<p>Run Command uses documents to specify what actions to perform on the instance. <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/create-ssm-doc.html">Documents </a>are AWS resources defined as JavaScript Object Notation (JSON), and they include steps and parameters that you specify.</p> 
-<p>AWS provides a set of documents that perform common tasks such as running a shell script, configuring CloudWatch, installing an application, and others. In addition, you can write your own documents for specific tasks. Because IAM policies allow you to control which documents a user is authorized to use, you can lock down the actions a specific user can take by restricting them to a subset of documents.</p> 
-<p>Here’s an example of a document that finds out the top processes consuming memory.</p> 
-<pre><code class="lang-json">{
-&nbsp; &nbsp; &quot;schemaVersion&quot;: &quot;2.0&quot;,
-&nbsp; &nbsp; &quot;description&quot;: &quot;Instance Diagnostics&quot;,
-&nbsp; &nbsp; &quot;parameters&quot;: { },
-&nbsp; &nbsp; &quot;mainSteps&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;action&quot;: &quot;aws:runShellScript&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;name&quot;: &quot;collectInformation&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;inputs&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;runCommand&quot;: [ &quot;ps aux --sort '%mem' | head -5&quot; ]
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; ]
-}</code></pre> 
-<p>To create a custom document, use the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-document.html">create document</a> SSM API.</p> 
-<pre>aws ssm create-document --name InstanceDiagnostics --content file://~/workspace/document.json --document-type Command</pre> 
-<pre><code class="lang-java">{
-&quot;DocumentDescription&quot;: {
-&quot;Status&quot;: &quot;Creating&quot;, 
-&quot;Hash&quot;: &quot;92182f1392807f23556ecc3f9e1d950a575dce8e2a4b96d284b1b2fb93369db2&quot;, 
-&quot;Name&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;Parameters&quot;: [], 
-&quot;DocumentType&quot;: &quot;Command&quot;, 
-&quot;PlatformTypes&quot;: [
-&quot;Linux&quot;
-], 
-&quot;DocumentVersion&quot;: &quot;1&quot;, 
-&quot;HashType&quot;: &quot;Sha256&quot;, 
-&quot;CreatedDate&quot;: 1492636792.396, 
-&quot;Owner&quot;: &quot;040557870006&quot;, 
-&quot;SchemaVersion&quot;: &quot;2.0&quot;, 
-&quot;DefaultVersion&quot;: &quot;1&quot;, 
-&quot;LatestVersion&quot;: &quot;1&quot;, 
-&quot;Description&quot;: &quot;Instance diagnostics example.&quot;
-}
-}
-</code></pre> 
-<h4>Step 3: Set up CloudWatch Events</h4> 
-<p>Last year, we added <a href="https://aws.amazon.com/blogs/aws/ec2-run-command-update-monitor-execution-using-notifications/">support in Run Command for notifications</a> on command state changes. When setting up <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">CloudWatch Event notifications</a>, you can decide to trigger events on a per instance or per command basis, and specify the statuses for notification. With this feature, you can choose to be notified when a command finishes, to take the necessary follow-up actions.</p> 
-<p>Set up a CloudWatch Events notification to get notified via Amazon SNS and receive an email when a command finishes. Start by creating an SNS topic configured to send email when triggered.</p> 
-<p><img class="alignnone size-full wp-image-159" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/04/20/SNS.png" alt="" width="624" height="376" /></p> 
-<p>Next, create the CloudWatch Event rule to trigger the SNS topic when a command completes execution.</p> 
-<p><img class="alignnone size-full wp-image-160" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/04/20/CWE.png" alt="" width="624" height="448" /></p> 
-<h4>Step 4: Test the command on an instance</h4> 
-<p>Before you send the command to the entire group of instances, make sure that it works as expected.</p> 
-<p>First, check that a test instance is setup properly and connected to the service by using the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/describe-instance-information.html">DescribeInstanceInformation </a>API. This returns information about the ping status of the agent, the platform the agent is running on, and other instance information.</p> 
-<pre><code class="lang-java">aws ssm describe-instance-information --filters &quot;Key=InstanceIds,Values=i-01222ecf7db201ca2&quot;
-{
-&quot;InstanceInformationList&quot;: [
-{
-&quot;IsLatestVersion&quot;: false, 
-&quot;ComputerName&quot;: &quot;ip-172-31-24-177.us-west-1.compute.internal&quot;, 
-&quot;PingStatus&quot;: &quot;Online&quot;, 
-&quot;InstanceId&quot;: &quot;i-01222ecf7db201ca2&quot;, 
-&quot;IPAddress&quot;: &quot;172.31.24.177&quot;, 
-&quot;ResourceType&quot;: &quot;EC2Instance&quot;, 
-&quot;AgentVersion&quot;: &quot;2.0.755.0&quot;, 
-&quot;PlatformVersion&quot;: &quot;2017.03&quot;, 
-&quot;PlatformName&quot;: &quot;Amazon Linux AMI&quot;, 
-&quot;PlatformType&quot;: &quot;Linux&quot;, 
-&quot;LastPingDateTime&quot;: 1492637593.888
-}
-]
-}
-</code></pre> 
-<p>Next, <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/send-command.html">send a command</a> to the instance above using the document created earlier.</p> 
-<pre><code class="lang-java">aws ssm send-command --document-name &quot;InstanceDiagnostics&quot; --instance-ids &quot;i-01222ecf7db201ca2&quot; 
-{
-&quot;Command&quot;: {
-&quot;Comment&quot;: &quot;&quot;, 
-&quot;Status&quot;: &quot;Pending&quot;, 
-&quot;MaxErrors&quot;: &quot;0&quot;, 
-&quot;Parameters&quot;: {}, 
-&quot;ExpiresAfter&quot;: 1492645288.475, 
-&quot;ServiceRole&quot;: &quot;&quot;, 
-&quot;DocumentName&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;TargetCount&quot;: 1, 
-&quot;OutputS3BucketName&quot;: &quot;&quot;, 
-&quot;NotificationConfig&quot;: {
-&quot;NotificationArn&quot;: &quot;&quot;, 
-&quot;NotificationEvents&quot;: [], 
-&quot;NotificationType&quot;: &quot;&quot;
-}, 
-&quot;CompletedCount&quot;: 0, 
-&quot;Targets&quot;: [], 
-&quot;StatusDetails&quot;: &quot;Pending&quot;, 
-&quot;ErrorCount&quot;: 0, 
-&quot;OutputS3KeyPrefix&quot;: &quot;&quot;, 
-&quot;RequestedDateTime&quot;: 1492638088.475, 
-&quot;CommandId&quot;: &quot;11cf0866-fdec-43a4-987b-b7a5f8ad60e9&quot;, 
-&quot;InstanceIds&quot;: [
-&quot;i-01222ecf7db201ca2&quot;
-], 
-&quot;MaxConcurrency&quot;: &quot;50&quot;
-}
-}
-</code></pre> 
-<p>Finally, check to make sure the command completed successfully.</p> 
-<pre><code class="lang-java">aws ssm list-commands --command-id 11cf0866-fdec-43a4-987b-b7a5f8ad60e9
-{
-&quot;Commands&quot;: [
-{
-&quot;Comment&quot;: &quot;&quot;, 
-&quot;Status&quot;: &quot;Success&quot;, 
-&quot;MaxErrors&quot;: &quot;0&quot;, 
-&quot;Parameters&quot;: {}, 
-&quot;ExpiresAfter&quot;: 1492645288.475, 
-&quot;ServiceRole&quot;: &quot;&quot;, 
-&quot;DocumentName&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;TargetCount&quot;: 1, 
-&quot;OutputS3BucketName&quot;: &quot;&quot;, 
-&quot;NotificationConfig&quot;: {
-&quot;NotificationArn&quot;: &quot;&quot;, 
-&quot;NotificationEvents&quot;: [], 
-&quot;NotificationType&quot;: &quot;&quot;
-}, 
-&quot;CompletedCount&quot;: 1, 
-&quot;Targets&quot;: [], 
-&quot;StatusDetails&quot;: &quot;Success&quot;, 
-&quot;ErrorCount&quot;: 0, 
-&quot;OutputS3KeyPrefix&quot;: &quot;&quot;, 
-&quot;RequestedDateTime&quot;: 1492638088.475, 
-&quot;CommandId&quot;: &quot;11cf0866-fdec-43a4-987b-b7a5f8ad60e9&quot;, 
-&quot;InstanceIds&quot;: [
-&quot;i-01222ecf7db201ca2&quot;
-], 
-&quot;MaxConcurrency&quot;: &quot;50&quot;
-}
-]
-}
-</code></pre> 
-<h4>Step 4: Run the command with velocity control</h4> 
-<p>Now you’re ready to send a command to your group of instances.</p> 
-<p>Run Command exposes <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/send-commands-multiple.html">two new concepts</a> to help you control the rate at which commands are sent. You can control how many instances execute the command at the same time by using the max-concurrency parameter. You can specify either an absolute number of instances, for example 10, or a percentage, like 50%. The system will gradually create more invocations (the pairing of command and instance ID) until it reaches the max concurrency limit, at which time it will wait for each current invocation to finish before creating the next.</p> 
-<p>The second parameter, max-errors, allows you to specify how many errors are allowed before Run Command stops sending commands to additional instances. Like max-concurrency, max-errors can be specified as either an absolute number or percentage.</p> 
-<p>Send a command to all instances in the Auto Scaling Group created, and as an example, we specify max-concurrency of 40% and max-errors of 100%. You can use the autogenerated Auto Scaling Group tag without any additional work. By setting max-concurrency to 40%, you ensure that commands are not sent to all instances at the same time. Setting max-errors to 100% will make sure that the command runs for all instances, even if some of the command invocations are not successful.</p> 
-<p>Because you have CloudWatch Events notification set up, you will be notified when the command finishes. The Run Command API has a limit of 1200 characters for the output, so specifying an S3 location will ensure that the full output is captured.</p> 
-<pre><code class="lang-java">aws ssm send-command --document-name &quot;InstanceDiagnostics&quot; --target &quot;Key=tag:aws:autoscaling:groupName,Values=RunCommandASG&quot; --max-concurrency 40% --max-errors 100% --output-s3-bucket-name &quot;run-command-blog&quot; --output-s3-key-prefix &quot;diagnostics&quot;
-{
-&quot;Command&quot;: {
-&quot;Comment&quot;: &quot;&quot;, 
-&quot;Status&quot;: &quot;Pending&quot;, 
-&quot;MaxErrors&quot;: &quot;100%&quot;, 
-&quot;Parameters&quot;: {}, 
-&quot;ExpiresAfter&quot;: 1492647224.49, 
-&quot;ServiceRole&quot;: &quot;&quot;, 
-&quot;DocumentName&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;TargetCount&quot;: 0, 
-&quot;OutputS3BucketName&quot;: &quot;run-command-blog&quot;, 
-&quot;NotificationConfig&quot;: {
-&quot;NotificationArn&quot;: &quot;&quot;, 
-&quot;NotificationEvents&quot;: [], 
-&quot;NotificationType&quot;: &quot;&quot;
-}, 
-&quot;CompletedCount&quot;: 0, 
-&quot;Targets&quot;: [
-{
-&quot;Values&quot;: [
-&quot;RunCommandASG&quot;
-], 
-&quot;Key&quot;: &quot;tag:aws:autoscaling:groupName&quot;
-}
-], 
-&quot;StatusDetails&quot;: &quot;Pending&quot;, 
-&quot;ErrorCount&quot;: 0, 
-&quot;OutputS3KeyPrefix&quot;: &quot;diagnostics&quot;, 
-&quot;RequestedDateTime&quot;: 1492640024.49, 
-&quot;CommandId&quot;: &quot;666b0ea2-0004-4352-bddc-ac212e0e4090&quot;, 
-&quot;InstanceIds&quot;: [], 
-&quot;MaxConcurrency&quot;: &quot;40%&quot;
-}
-}
-</code></pre> 
-<h4>Step 5: Verify the command results</h4> 
-<p>When the command finishes, you receive an SNS notification in email.</p> 
-<pre><code class="lang-json">{
-&quot;version&quot;: &quot;0&quot;,
-&quot;id&quot;: &quot;8bb24048-9af4-4f88-a70d-47feba9da26c&quot;,
-&quot;detail-type&quot;: &quot;EC2 Command Status-change Notification&quot;,
-&quot;source&quot;: &quot;aws.ssm&quot;,
-&quot;account&quot;: &quot;040557870006&quot;,
-&quot;time&quot;: &quot;2017-04-19T22:38:19Z&quot;,
-&quot;region&quot;: &quot;us-west-1&quot;,
-&quot;resources&quot;: [
-],
-&quot;detail&quot;: {
-&quot;command-id&quot;: &quot;666b0ea2-0004-4352-bddc-ac212e0e4090&quot;,
-&quot;document-name&quot;: &quot;InstanceDiagnostics&quot;,
-&quot;requested-date-time&quot;: &quot;2017-04-19T22:38:16.105Z&quot;,
-&quot;expire-after&quot;: &quot;2017-04-20T00:38:16.105Z&quot;,
-&quot;output-s3bucket-name&quot;: &quot;run-command-blog&quot;,
-&quot;output-s3key-prefix&quot;: &quot;diagnostics&quot;,
-&quot;parameters&quot;: &quot;&quot;,
-&quot;status&quot;: &quot;Success&quot;
-}
-}
-</code></pre> 
-<p>Use the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/list-commands.html">ListCommands </a>API to check on the overall command status. This returns information such as the status of the command, how many instances were targeted (TargetCount), and how many invocations finished (CompletedCount).</p> 
-<pre><code class="lang-java">aws ssm list-commands --command-id 666b0ea2-0004-4352-bddc-ac212e0e4090 
-{
-&quot;Commands&quot;: [
-{
-&quot;Comment&quot;: &quot;&quot;, 
-&quot;Status&quot;: &quot;Success&quot;, 
-&quot;MaxErrors&quot;: &quot;100%&quot;, 
-&quot;Parameters&quot;: {}, 
-&quot;ExpiresAfter&quot;: 1492647224.49, 
-&quot;ServiceRole&quot;: &quot;&quot;, 
-&quot;DocumentName&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;TargetCount&quot;: 5, 
-&quot;OutputS3BucketName&quot;: &quot;run-command-blog&quot;, 
-&quot;NotificationConfig&quot;: {
-&quot;NotificationArn&quot;: &quot;&quot;, 
-&quot;NotificationEvents&quot;: [], 
-&quot;NotificationType&quot;: &quot;&quot;
-}, 
-&quot;CompletedCount&quot;: 5, 
-&quot;Targets&quot;: [
-{
-&quot;Values&quot;: [
-&quot;RunCommandASG&quot;
-], 
-&quot;Key&quot;: &quot;tag:aws:autoscaling:groupName&quot;
-}
-], 
-&quot;StatusDetails&quot;: &quot;Success&quot;, 
-&quot;ErrorCount&quot;: 0, 
-&quot;OutputS3KeyPrefix&quot;: &quot;diagnostics&quot;, 
-&quot;RequestedDateTime&quot;: 1492640024.49, 
-&quot;CommandId&quot;: &quot;666b0ea2-0004-4352-bddc-ac212e0e4090&quot;, 
-&quot;InstanceIds&quot;: [], 
-&quot;MaxConcurrency&quot;: &quot;40%&quot;
-}
-]
-}
-</code></pre> 
-<p>Now you want the diagnostic information you collected from a specific instance. Use the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html">GetCommandInvocation </a>API. This returns the output of the command, including more details about the execution such as when it started and how long it took.</p> 
-<pre><code class="lang-java">aws ssm get-command-invocation --command-id 666b0ea2-0004-4352-bddc-ac212e0e4090 --instance-id i-01222ecf7db201ca2
-{
-&quot;Comment&quot;: &quot;&quot;, 
-&quot;ExecutionElapsedTime&quot;: &quot;PT0.004S&quot;, 
-&quot;ExecutionEndDateTime&quot;: &quot;2017-04-19T22:13:47.122Z&quot;, 
-&quot;StandardErrorContent&quot;: &quot;&quot;, 
-&quot;InstanceId&quot;: &quot;i-01222ecf7db201ca2&quot;, 
-&quot;StandardErrorUrl&quot;: &quot;https://s3-us-west-1.amazonaws.com/run-command-blog/diagnostics/666b0ea2-0004-4352-bddc-ac212e0e4090/i-01222ecf7db201ca2/awsrunShellScript/0.diagnose/stderr&quot;, 
-&quot;DocumentName&quot;: &quot;InstanceDiagnostics&quot;, 
-&quot;StandardOutputContent&quot;: &quot;eth0      Link encap:Ethernet  HWaddr 02:9B:C5:26:4B:00  \n          inet addr:172.31.24.177  Bcast:172.31.31.255  Mask:255.255.240.0\n          inet6 addr: fe80::9b:c5ff:fe26:4b00/64 Scope:Link\n          UP BROADCAST RUNNING MULTICAST  MTU:9001  Metric:1\n          RX packets:9905 errors:0 dropped:0 overruns:0 frame:0\n          TX packets:3260 errors:0 dropped:0 overruns:0 carrier:0\n          collisions:0 txqueuelen:1000 \n          RX bytes:11135049 (10.6 MiB)  TX bytes:514905 (502.8 KiB)\n\nlo        Link encap:Local Loopback  \n          inet addr:127.0.0.1  Mask:255.0.0.0\n          inet6 addr: ::1/128 Scope:Host\n          UP LOOPBACK RUNNING  MTU:65536  Metric:1\n          RX packets:2 errors:0 dropped:0 overruns:0 frame:0\n          TX packets:2 errors:0 dropped:0 overruns:0 carrier:0\n          collisions:0 txqueuelen:1 \n          RX bytes:140 (140.0 b)  TX bytes:140 (140.0 b)\n\n&quot;, 
-&quot;Status&quot;: &quot;Success&quot;, 
-&quot;StatusDetails&quot;: &quot;Success&quot;, 
-&quot;PluginName&quot;: &quot;diagnose&quot;, 
-&quot;ResponseCode&quot;: 0, 
-&quot;ExecutionStartDateTime&quot;: &quot;2017-04-19T22:13:47.122Z&quot;, 
-&quot;CommandId&quot;: &quot;666b0ea2-0004-4352-bddc-ac212e0e4090&quot;, 
-&quot;StandardOutputUrl&quot;: &quot;https://s3-us-west-1.amazonaws.com/run-command-blog/diagnostics/666b0ea2-0004-4352-bddc-ac212e0e4090/i-01222ecf7db201ca2/awsrunShellScript/0.diagnose/stdout&quot;
-</code></pre> 
-<p>Finally, because you set up an S3 bucket, the output from all the command invocations end up in the common S3 location you specified.</p> 
-<p><img class="alignnone size-full wp-image-161" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/04/20/S3.png" alt="" width="624" height="367" /></p> 
-<h3>Conclusion</h3> 
-<p>In this post, I showed how you can use Run Command, along with other AWS services, to take administrative actions on a group of instances. Run Command provides a simple and scalable way for you to administer your instances. You can control the rate at which you send commands, use fine-grained permissions, and use notifications to simplify your workflow.</p> 
-<h3><span style="text-decoration: underline">About the Author</span></h3> 
-<p><img class="size-full wp-image-162 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/04/20/EmilyFr.png" alt="" width="118" height="160" />Emily Freebairn is a Software Development Engineer in the Amazon EC2 Systems Manager team. She has been with Amazon for four years, working on Run Command and other features in Amazon EC2 and Systems Manager. When she’s not at work designing and building scalable products, she enjoys sailing and&nbsp;dancing.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a></span> 
 </footer> 
 </article> 
 <p>

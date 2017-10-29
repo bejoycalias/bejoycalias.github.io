@@ -19,13 +19,13 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 
     <meta property="og:url" content="https://bejoycalias.github.io/blogsataws/computeblogs1.html" />
     <meta property="og:site_name" content="Bejoy's TechNotes"/>
-    <meta property="og:title" content="Bejoy's TechNotes - Compute Blogs Blogs @ AWS" />
+    <meta property="og:title" content="Bejoy's TechNotes - Compute Blogs @ AWS" />
     <meta property="og:image" content="https://bejoycalias.github.io/assets/images/og-image.png"/>
     <meta property="og:image:width" content="1200"/>
     <meta property="og:image:height" content="1200"/>
     <meta property="og:description" content="" />
 
-    <title>Bejoy's TechNotes - Compute Blogs Blogs @ AWS</title>
+    <title>Bejoy's TechNotes - Compute Blogs @ AWS</title>
     <link href="../assets/stylesheets/application-832aa42c.css" rel="stylesheet" />
 
     <!--[if lt IE 9]>
@@ -189,6 +189,163 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a</p>
 <br>
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Job Layer (Part 2 of 4)</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-05-31T09:45:02+00:00">31 MAY 2017</time> | 
+<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2123" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2123&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Job+Layer+%28Part+2+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2123');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
+<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
+<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
+<p>This post is the second in a series on how to build a genomics workflow on AWS. In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1</a>, we introduced a general architecture, shown below, and highlighted the three common layers in a batch workflow:</p> 
+<ul> 
+<li>Job</li> 
+<li>Batch</li> 
+<li>Workflow</li> 
+</ul> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
+<p>In Part 2, you tackle the job layer and package a set of bioinformatics applications into Docker containers and store them in <a href="https://aws.amazon.com/ecr">Amazon ECR</a>. We illustrate some common patterns and best practices for these containers, such as how you can effectively use <a href="https://aws.amazon.com/s3">Amazon S3</a> to exchange data between jobs.<span id="more-2123"></span></p> 
+<p>ECR is a fully managed Docker container registry that makes it easy for developers to store, manage, and deploy Docker container images. ECR is integrated with <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>, simplifying your development to a production workflow. ECR eliminates the need to operate your own container repositories or worry about scaling the underlying infrastructure by hosting your images in a highly available and scalable architecture. You can integrate with <a href="https://aws.amazon.com/iam">IAM</a> to provide resource-level control for each repository.</p> 
+<p>All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
+<b id="toc_0">Packaging an application in a Docker container</b> 
+<p>Genomic analysis often relies on open source software that is developed by academic groups or open-sourced by industry leaders. These applications have a range of requirements for libraries and reference data, and are typically executed using a Linux command line interface.</p> 
+<p>Docker containers provide a consistent, reproducible run-time environment for applications to run in, which results in reproducible results. Consequently, containerization of the applications using Docker has received much attention from the bioinformatics community, resulting in the development of application registries such as <a href="https://dockstore.org/">Dockstore.org</a>, <a href="http://biocontainers.pro/">BioContainers</a>, and the <a href="https://galaxyproject.org/admin/tools/docker/">Galaxy Tool Shed</a>. In this post, we cover several good practices for packing genomics applications in Docker containers, including:</p> 
+<ul> 
+<li>Building your Dockerfile</li> 
+<li>Dealing with job multitenancy</li> 
+<li>Sharing data between jobs</li> 
+</ul> 
+<b id="toc_1">Building your Dockerfile</b> 
+<p>Your Dockerfile contains all of the commands that you use to package your Docker container. In it, you pick a base image to build from, include any metadata to attribute to the image, describe how to build and configure the environment, and how to access the code running within it.</p> 
+<p>We recommend that you adopt a standard set of conventions for your Dockerfiles. Add metadata to describe the contained application, and have an order set of sections for application packaging needs. Here is an example from the provided <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/docker/Dockerfile">Isaac Dockerfile</a>:</p> 
+<pre><code class="language-none">FROM python:2.7
+# Metadata
+LABEL container.base.image=&quot;python:2.7&quot;
+LABEL software.name=&quot;iSAAC&quot;
+LABEL software.version=&quot;03.17.03.01&quot;
+LABEL software.description=&quot;Aligner for sequencing data&quot;
+LABEL software.website=&quot;https://github.com/Illumina/Isaac3&quot;
+LABEL software.documentation=&quot;https://github.com/Illumina/Isaac3/blob/master/src/markdown/manual.md&quot;
+LABEL software.license=&quot;GPLv3&quot;
+LABEL tags=&quot;Genomics&quot;
+RUN apt-get -y update &amp;&amp; \
+apt-get -y install zlib1g-dev gnuplot &amp;&amp; \
+apt-get clean
+RUN pip install boto3 awscli
+RUN git clone https://github.com/Illumina/Isaac3.git &amp;&amp; cd /Isaac3 &amp;&amp; git checkout 6f0191a4e0d4b332e8f34b7ced57dc6e6eb4f2f1
+RUN mkdir /iSAAC-build /isaac
+WORKDIR /iSAAC-build
+RUN /Isaac3/src/configure --prefix=/isaac
+RUN make
+RUN make install
+WORKDIR /
+RUN rm -rf /Isaac3 /iSAAC-build
+RUN chmod -R +x /isaac/bin/
+ENV PATH=&quot;/isaac/bin:$PATH&quot;
+ENV LD_LIBRARY_PATH=&quot;/usr/local/lib:/usr/lib:/isaac/libexec:${LD_LIBRARY_PATH}&quot;
+COPY isaac/src/run_isaac.py /
+COPY common_utils /common_utils
+ENTRYPOINT [&quot;python&quot;, &quot;/run_isaac.py&quot;]</code></pre> 
+<p>There are many ways to architect Docker containers, but we wanted to consolidate some recommendations that we have observed our customers successfully using:</p> 
+<ul> 
+<li>Work off of a base image that satisfies most dependencies across a set of applications. In the code provided, we often use the <a href="https://github.com/docker-library/python/blob/a248f4583c5f788e1af02016f762cdc323ee5765/2.7/Dockerfile">official <code>python:2.7</code> image</a> from <a href="https://hub.docker.com/_/python/">Docker Hub</a>.</li> 
+<li>In the above Dockerfile, you can see that we have separated out the metadata, underlying system and library dependencies, application-specific dependencies, and the installation requirements into a logical ordered set for easier maintenance. It’s worth noting that if you are building a production application, you would traditionally have a golden set of images to build from and application artifacts to install that have been validated with internal processes.</li> 
+<li>Instead of building large datasets into the container itself, we recommend that you download reference data at runtime instead. This allows the decoupling of the algorithm from reference data updates, which could happen nightly. It also allows you to download a subset of all reference data for an algorithm that is specific to the running analysis, for example the particular species under study.</li> 
+<li>Provide an application entry point to both expose and limit the default functionality of the container image. In this example, we created a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/src/run_isaac.py">simple Python script</a> that takes care of downloading the dependencies from S3, such as reference data for your analysis, on the fly from a set of provided runtime parameters and stage results back into S3. We dive deeper into this script in the following section.</li> 
+</ul> 
+<p>Often these shared dependencies are a mix of packaged code that is easily installable (in this case via pip) or private modules usually shared as part of internal source repositories, as is the case here.</p> 
+<p>When you build the Docker images, you should take care to include both the necessary private modules within the context of the build. The example below shows how you would accomplish that given a directory context with some dependencies a few levels higher that the Dockerfile. In the project, we provided a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/docker/Makefile">Makefile</a> for taking care of some of these items, but for clarity’s sake we issue the necessary Docker commands.</p> 
+<pre><code class="language-none"># Given the following partial directory tree structure
+# .
+# └── tools
+#     ├── common\_utils
+#     │   ├── __init__.py
+#     │   ├── job_utils.py
+#     │   └── s3_utils.py
+#     └── isaac
+#         └── docker
+#             ├── Dockerfile
+#             └── Makefile
+# cd &lt;git repository&gt;/tools/isaac/docker
+$ docker build -t isaac:03.17.03.01 \
+-t isaac:latest \
+-f Dockerfile ../..</code></pre> 
+<b id="toc_2">Job multitenancy and sharing data between jobs</b> 
+<p>Many bioinformatics tools have been developed to run in any Linux environment, and not necessarily optimized for cloud computing or multitenancy. To overcome these challenges, you can use a simple Python wrapper script for each tool that facilitates the deployment of a job.</p> 
+<p>Our tools have several of the same requirements, such as the need to read and write from S3 and deal with job multitenancy. For these common utilities, we built a separate <a href="https://github.com/awslabs/aws-batch-genomics/tree/master/tools/common_utils"><code>common_utils</code></a> package to import during the creation of the Docker image. These utilities deal with the previously mentioned common requirements, such as:</p> 
+<ul> 
+<li style="list-style-type: none"> 
+<ul> 
+<li><strong>Container placement</strong></li> 
+</ul> </li> 
+</ul> 
+<p>To make your workflow as flexible as possible, each job should run independently. As a result, you cannot necessarily guarantee that different jobs in the same overall workflow run on the same instance. Using S3 as the location to exchange data between containers enables you to decouple storage of your intermediate files from compute. The <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/common_utils/s3_utils.py"><code>tools/common_utils/s3_utils.py</code></a> script contains the functions required to leverage S3.</p> 
+<ul> 
+<li style="list-style-type: none"> 
+<ul> 
+<li><strong>Multitenancy</strong></li> 
+</ul> </li> 
+</ul> 
+<p>Multiple container jobs may run concurrently on the same instance. In these situations, it’s essential that your job writes to a unique subdirectory. An easy way to do this is to create a subfolder using a UUID and have your application write all of your data there.</p> 
+<ul> 
+<li style="list-style-type: none"> 
+<ul> 
+<li><strong>Cleanup</strong></li> 
+</ul> </li> 
+</ul> 
+<p>As your jobs complete and write the output back to S3, you can delete the scratch data on your instance generated by that job. This allows you to optimize for cost by reusing EC2 instances if there are jobs remaining in the queue, rather than terminating the EC2 instances. As you ensure that you’re writing to a unique subdirectory in the multitenancy solution, you can simply delete that subdirectory to minimize your storage footprint.</p> 
+<p>Each of the Python wrappers takes in all of the requisite data dependencies, residing in S3, as command-line arguments and any other necessary commands to run the tool it wraps. It then handles all of the file downloading, running the bioinformatics tool, and uploading the files back to S3. For more information about each of these tools, see the READMEs for each individual tool.</p> 
+<b id="toc_3">Deploying images to Amazon ECR</b> 
+<p>Next, publish the Docker images to ECR. The first example below creates an ECR repository and collects the URI you provide to Docker in order to push the image to ECR. If a repository already exists for the container image, query for it, as shown in the second example.</p> 
+<pre><code class="language-none"># Create an ECR repository for Isaac, then copy the `repositoryUri` into a variable
+$ REPO\_URI=$(aws ecr create-repository \
+--repository-name isaac \
+--output text --query &quot;repository.repositoryUri&quot;)
+# If the repository already exists, then
+# query ECR for the `repositoryUri`
+$ REPO\_URI=$(aws ecr describe-repositories \
+--repository-names isaac \
+--output text --query &quot;repositories[0].repositoryUri&quot;)</code></pre> 
+<p>After you have a repository URI, you can tag the container image and push it to ECR.</p> 
+<pre><code class="language-none">$ eval $(aws ecr get-login)
+$ docker tag isaac:latest $(REPO\_URI):latest
+$ docker push $(REPO\_URI):latest
+$ docker tag isaac:03.17.03.01 $(REPO\_URI):03.17.03.01
+$ docker push $(REPO\_URI):03.17.03.01</code></pre> 
+<b id="toc_4">Conclusion</b> 
+<p>In part 2 of this series, we showed a practical example of packaging up a bioinformatics application within a Docker container, and publishing the container image to an ECR repository. Along the way, we discussed some generally applicable best practices and design decisions specific to this demonstration project.</p> 
+<p>Now that you have built one of the Docker containers, you can go ahead and build each of the containers. We have provided all of the necessary code within a GitHub repository and within that repository are specific instructions, as well as some helpers for building container images using GNU make.</p> 
+<p>In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3</a> of this series, you’ll dive deep into the batch processing layer and how to leverage the packaged applications within AWS Batch.</p> 
+<p>Other posts in this four-part series:</p> 
+<ul> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
+<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
+</ul> 
+<p>Please leave any questions and comments below.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2123');
+});
+</script> 
+</article> 
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Introduction (Part 1 of 4)</b> 
@@ -1789,292 +1946,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-1960');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">SAML for Your Serverless JavaScript Application: Part I</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Bryan Liston</span></span> | on 
-<time property="datePublished" datetime="2017-03-14T09:41:53+00:00">14 MAR 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-api-gateway/" title="View all posts in Amazon API Gateway"><span property="articleSection">Amazon API Gateway</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/saml-for-your-serverless-javascript-application-part-i/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-1941" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=1941&amp;disqus_title=SAML+for+Your+Serverless+JavaScript+Application%3A+Part+I&amp;disqus_url=https://aws.amazon.com/blogs/compute/saml-for-your-serverless-javascript-application-part-i/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1941');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p><strong>Contributors: Richard Threlkeld, Gene Ting, Stefano Buliani</strong></p> 
-<p>The full code for this blog, including <a href="https://docs.aws.amazon.com/lambda/latest/dg/deploying-lambda-apps.html">SAM templates</a>—can be found at the <a href="https://github.com/awslabs/samljs-serverless-sample">samljs-serverless-sample</a> GitHub repository. We highly recommend you use the SAM templates in the GitHub repository to create the resources, opitonally you can manually create them.</p> 
-<hr /> 
-<p>Want to enable SAML federated authentication? You can use the AWS platform to exchange SAML assertions for short-term, temporary AWS credentials.</p> 
-<p>When you build enterprise web applications, it is imperative to ensure that authentication and authorization (AuthN and AuthZ) is done consistently and follows industry best practices. At AWS, we have built a service called <a href="https://aws.amazon.com/cognito">Amazon Cognito</a> that allows you to create unique Identities for users and grants them short-term credentials for interacting with AWS services. These credentials are tied to roles based on IAM policies so that you can grant or deny access to different resources.</p> 
-<p>In this post, we walk you through different strategies for federating SAML providers with Amazon Cognito. Additionally, you can federate with different types of identity providers (IdP). These IdPs could be third-party social media services like Facebook, Twitter, and others. You can also federate with the User Pools service of Amazon Cognito and create your own managed user directory (including registration, sign-In, MFA, and other workflows).<span id="more-1941"></span></p> 
-<p>For example, you may want to build a JavaScript application that allows a user to authenticate against Active Directory Federation Services (ADFS). The user can be granted scoped AWS credentials to invoke an API to display information in the application or write to an <a href="https://aws.amazon.com/dynamodb">Amazon DynamoDB</a> table. In the <a href="https://aws.amazon.com/blogs/mobile/announcing-saml-support-for-amazon-cognito/">Announcing SAML Support for Amazon Cognito</a> AWS Mobile blog post, we introduced the new SAML functionality with some sample code in Java as well as Android and iOS snippets. This post goes deeper into customizing the ADFS flow and JavaScript samples.</p> 
-<h3 id="toc_0">Scenarios</h3> 
-<p>In this post, we cover the scenario of “client-side” flow, where SAML assertions are passed through <a href="https://aws.amazon.com/api-gateway">Amazon API Gateway</a> and the browser code retrieves credentials directly from Amazon Cognito Identity. In the next, related post, we’ll cover “backend request logic”, where the SAML assertions and credentials selection take place in <a href="https://aws.amazon.com/lambda">AWS Lambda</a> functions allowing for customized business logic and audit tracking.</p> 
-<p>The full code for this scenario, including <a href="https://docs.aws.amazon.com/lambda/latest/dg/deploying-lambda-apps.html">SAM templates</a>—can be found at the <a href="https://github.com/awslabs/samljs-serverless-sample">samljs-serverless-sample</a> GitHub repository. We highly recommend you use the SAM templates in the github repository to create the resources, opitonally you can manually create them.</p> 
-<p>Although this is a Serverless system, you can substitute certain components for traditional compute types, like EC2 instances, to integrate with ADFS. For terms and definitions used in this post, see <a href="https://msdn.microsoft.com/en-us/library/office/ee534975.aspx">Claims-based identity term definitions</a>.</p> 
-<b id="toc_1">Prerequisites</b> 
-<p>For this blog post, you need ADFS running in your environment. Use the following references:</p> 
-<ol> 
-<li>ADFS federated with the AWS console. For a walkthrough with an AWS CloudFormation template, see <a href="https://aws.amazon.com/blogs/security/enabling-federation-to-aws-using-windows-active-directory-adfs-and-saml-2-0/">Enabling Federation to AWS Using Windows Active Directory, ADFS, and SAML 2.0</a>.</li> 
-<li>Verify that you can authenticate with user example\bob for both the ADFS-Dev and ADFS-Production groups via the sign-in page (https://localhost/adfs/IdpInitiatedSignOn.aspx).</li> 
-<li>Create an <a href="https://docs.aws.amazon.com/cognito/latest/developerguide/identity-pools.html">Amazon Cognito identity pool</a>.</li> 
-</ol> 
-<p> 
-<!--more--></p> 
-<b id="toc_2">ADFS configuration overview</b> 
-<p>Before you start the tutorials, review a few AWS and SAML details, starting with the <a href="https://aws.amazon.com/iam">IAM</a> roles that were created in the prerequisites. You may create a new IAM role and AD group for your application. For this post, we use the ADFS-Dev and ADFS-Production from the previous <a href="https://aws.amazon.com/blogs/security/enabling-federation-to-aws-using-windows-active-directory-adfs-and-saml-2-0/">Enabling Federation to AWS Using Windows Active Directory, ADFS, and SAML 2.0</a> post as a learning exercise.</p> 
-<ol> 
-<li>In the IAM console, choose <strong>Roles</strong>, select ADFS-Dev, and choose <strong>Trust Relationships</strong> tab to see the following code: 
-<pre><code class="language-JSON">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Federated&quot;: &quot;arn:aws:iam::YOURACCOUNTNUMBER:saml-provider/ADFS&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRoleWithSAML&quot;,
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;SAML:aud&quot;: &quot;https://signin.aws.amazon.com/saml&quot;
-}
-}
-}
-]
-}</code></pre> 
-</ol> 
-<p>This policy allows a user authenticated with the SAML IdP called “ADFS” to assume the role. It also includes a condition where the audience restriction (contained in the SAML assertion) has an AudienceRestriction of <a href="https://signin.aws.amazon.com/saml"><em>https://signin.aws.amazon.com/saml</em></a>. The SAML assertion is sent to AWS with a header called SAMLResponse from ADFS via an HTTP POST. If you have followed the federation post listed in the Prerequisites section, this would have been configured in the ADFS console when you specified the AWS metadata URL as the relaying party. For more information about this process, see <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_saml_assertions.html">Configuring SAML Assertions for the Authentication Response</a>.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_1.png" alt="lambdasamlone_1.png" /></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_2.png" alt="lambdasamlone_2.png" /></p> 
-<p>After authentication, ADFS automatically redirects to the Relaying Party Application realm.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_3.png" alt="lambdasamlone_3.png" /></p> 
-<p>In the above screenshot, we used Chrome to view the SAMLResponse value after authenticating. You can do this in other browsers, as documented in <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_saml_view-saml-response.html">How to View a SAML Response in Your Browser for Troubleshooting</a>. There are “SAML Decoders” available on the Internet that allow you to view values such as Audience, Roles, and Destination if you paste in SAMLResponse. In Part II of this blog series we will walk through how this can be done programmatically.</p> 
-<b id="toc_3">Redirect from ADFS to a Serverless website followed by Amazon Cognito federation</b> 
-<p>The scenario in this first blog is less complex; for many organizational requirements, it might be the best route. Users authenticate against ADFS and receive AWS credentials from Amazon Cognito so that they can perform actions in your app. This sample application:</p> 
-<ol> 
-<li>Exposes a login mechanism to authenticate against ADFS and captures the SAMLResponse header. This is automatically kicked off when the user visits the website hosted on S3.</li> 
-<li>Changes the ADFS-Dev role trust policy to allow users that are in the AWS-gDev Active Directory group to receive temporary AWS credentials from Amazon Cognito.</li> 
-<li>Adds a mechanism in the code to select the application role for the user. In this post, the chosen role is ADFS-Dev.</li> 
-</ol> 
-<p>Note that #3 is happening in the federated AWS console example when the user clicks the radio button after the redirect from the IdpInitiatedSignOn.aspx webpage that ADFS provides. For more information, see the <a href="https://aws.amazon.com/blogs/security/enabling-federation-to-aws-using-windows-active-directory-adfs-and-saml-2-0/">Enabling Federation to AWS Using Windows Active Directory, ADFS, and SAML 2.0</a> post on the AWS Security blog. If users are only in a single Active Directory group, then #3 can be omitted, as the SAMLResponse will never contain multiple roles in the ADFS claims. Amazon Cognito can automatically assume the single role.</p> 
-<p>The architecture you build is outlined in the following diagram.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_4.png" alt="lambdasamlone_4.png" /></p> 
-<b id="toc_4">Tutorial: Redirect from ADFS to a Serverless website followed by Amazon Cognito federation</b> 
-<p>First, set up a Serverless website and initiate a login workflow to get credentials. Use S3 for hosting the single page web app.</p> 
-<h3 id="toc_5">S3 bucket creation</h3> 
-<ol> 
-<li>In the S3 console, choose <strong>Create bucket</strong> and enter a unique bucket name. The following example bucket is called “<em>serverlessweb</em>” but yours can be something different.</li> 
-<li>After the bucket is created, on the details page, choose <strong>Properties,</strong> <strong>Edit bucket policy</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_5.png" alt="lambdasamlone_5.png" /></p></li> 
-<li>Add the following policy, replacing YOURBUCKETNAMEGOESHERE. This policy allows anyone to issue GET requests on any of the objects that it contains, such as HTML or JavaScript files. Web browsers issue GET requests when they try to access websites and this policy allows users to load the resources. 
-<pre><code class="language-JSON">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;PublicReadForGetBucketObjects&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Action&quot;: &quot;s3:GetObject&quot;,
-&quot;Resource&quot;: &quot;arn:aws:s3:::YOURBUCKETNAMEGOESHERE/*&quot;
-}
-]
-}</code></pre> 
-<li>Choose <strong>Static Website Hosting</strong>, <strong>Enable website hosting</strong>. Type in ‘<strong>index.html</strong>’ and ‘<strong>error.html</strong>’ in the appropriate forms. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_6.png" alt="lambdasamlone_6.png" /></p></li> 
-<li>At this point, add a simple HTML file to your bucket and browse to https://YOURBUCKETNAME.s3-website-REGION.amazonaws.com and see the page (replace YOURBUCKETNAME and REGION as appropriate). As a starting point, you can use the following template. First, download the <a href="https://aws.amazon.com/sdk-for-browser/">AWS JavaScript SDK</a> and also place it in the bucket. 
-<pre><code class="language-HTML">&lt;!DOCTYPE html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;title&gt;
-Amazon Cognito SAML Example
-&lt;/title&gt;
-&lt;script src=&quot;aws-sdk.min.js&quot;&gt;
-&lt;/script&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;b&gt;
-Testing SAMLResponse
-&lt;/b&gt;
-&lt;/body&gt;
-&lt;/html&gt;</code></pre> 
-<li>After downloading the minified version of the JavaScript SDK (aws-sdk.min.js) and placing it in the bucket along with the above HTML file, verify that your page loads without any errors.</li> 
-</ol> 
-<h3 id="toc_6">(Optional) CloudFront distribution set up</h3> 
-<p>Before going further, you should set up one more thing: a CloudFront distribution. The S3 static web hosting is HTTP, and CloudFront or another CDN provider of your choice provides SSL.</p> 
-<p>While this isn’t mandatory to get these examples functional (you can do redirects from API Gateway to HTTP sites), you should have end-to-end HTTPS for your site and an AuthN/AuthZ system. Setting this up is minimal work and should be done.</p> 
-<ol> 
-<li>In the CloudFront console, create a new distribution of type <strong>Web</strong>.</li> 
-<li>For <strong>Viewer Protocol Policy</strong>, choose <strong>HTTPS Only</strong>.</li> 
-<li>For <strong>Origin Domain Name</strong>, select your S3 bucket.</li> 
-<li>As a best practice, choose <strong>Restrict Bucket Access</strong> so that the bucket is protected from direct browsing. Then you can access the site via the listed <strong>Domain Name</strong> for the CloudFront distribution.</li> 
-</ol> 
-<h3 id="toc_7">Login mechanism</h3> 
-<p>Next, build a login mechanism. Your website can either prompt the user to log in with a button or automatically check to see if credentials are valid and redirect them with a login workflow.</p> 
-<p>This example takes the second approach, using JavaScript to check the status immediately when the user visits the page and redirect them if it’s an initial visit to get their credentials. Because users also get redirected to the page during the login process from API Gateway, the workflow needs to redirect users to the ADFS login as well as capture incoming SAMLResponse data based on some capture progress state. An example flow might look like the following:</p> 
-<pre><code class="language-javascript">function loginWorkflow(){
-var activelogin = sessionStorage.getItem('activelogin');
-if (activelogin=='inProgress'){                                   //ADFS login redirect from API Gateway
-var samlResponse = getParameterByName('SAMLResponse');
-sessionStorage.removeItem(‘activelogin’);
-if (samlResponse != null){
-getSamlCredentials(samlResponse.replace(/\s/g, ''));
-}
-} 
-else if (activelogin === null) {                                 //First page visit. Redirect to ADFS login.
-var RPID = encodeURIComponent('urn:amazon:webservices');
-var result = 'https://localhost/adfs/ls/IdpInitiatedSignOn.aspx' + &quot;?loginToRp=&quot; + RPID;
-sessionStorage.setItem('activelogin', 'inProgress');
-window.location = result;
-}   
-else {//Credentials exist, page refresh, etc.
-console.log('activelogin already exists in session and the value is ' + activelogin);
-}
-}</code></pre> 
-<p>The flow above sets a session variable to initiate a call to the ADFS IdP and return to the site to call a <em>getSamlCredentials()</em> routine after with SAMLResponse (more on this and <em>getParameterByName()</em> in a moment).</p> 
-<p>The SAMLResponse value from ADFS that AWS requires is only supported in the POST binding. However, S3 static websites can only receive GET requests. For this reason, use API Gateway to capture the SAMLResponse from ADFS for the JavaScript application. Use Lambda as a “proxy” and redirect the user back to the static website along with SAMLResponse, which is encapsulated in a query string.</p> 
-<h3 id="toc_8">Lambda function configuration</h3> 
-<ol> 
-<li>In the Lambda console, create a function named <strong>samlRedirect</strong> using <strong>/Scenario1/lambda/redirect/index.js</strong> from <a href="https://github.com/awslabs/samljs-serverless-sample">the GitHub repository</a> with Node.js 4.3 as the runtime. The execution role only needs permission to right to CloudWatch Logs for logging.</li> 
-<li>If you don’t have a basic execution role handy, you can ask Lambda to create a new one when you create the function.</li> 
-<li>Create environment variables named <strong>LOG_LEVEL</strong> and <strong>REDIRECT_URL</strong>. Set LOG_LEVEL to <strong>info</strong> and REDIRECT_URL to your S3 static website URL (either the endpoint URL displayed on the properties of the bucket when you enabled static hosting or—if you completed the optional step earlier of setting up a CloudFront distribution— the domain name listing).</li> 
-</ol> 
-<h3 id="toc_9">API Gateway configuration</h3> 
-<ol> 
-<li>In the API Gateway console, create an API called SAMLAuth or something similar.</li> 
-<li>Choose <strong>Resources</strong> and create a child resource called SAML. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_7.png" alt="lambdasamlone_7.png" /></p></li> 
-<li>Create a <strong>POST</strong> method. For <strong>Integration Type</strong>, choose <strong>Lambda</strong>. Select the <strong>samlRedirect</strong> function. For <strong>Method Request Header</strong>, enter <strong>SAMLResponse</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_8.png" alt="lambdasamlone_8.png" /></p></li> 
-</ol> 
-<p>When you created the samlRedirect function earlier, that function set the <strong>location</strong> property to contain your static website URL along with SAMLResponse appended as a query string. To finish the redirect, configure API Gateway to respond with a 302 status code.</p> 
-<ol> 
-<li>Delete the <strong>Method Response</strong> code for 200 and add a 302. Create a Response Header called <strong>Location</strong> and use an <strong>Empty</strong> Response Model of Content-Type <strong>application/json</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_9.png" alt="lambdasamlone_9.png" /></p></li> 
-<li>Delete the Integration Response for 200 and add one for 302 that has a <em>Method response status</em> of 302. Edit the Response header for <strong>Location</strong> with a Mapping value of <strong>integration.response.body.location</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_10.png" alt="lambdasamlone_10.png" /></p></li> 
-<li>To have the Lambda function capture SAMLResponse and RelayState, edit the Integration Request and add a <strong>Body Mapping Template</strong> of Content-Type <strong>application/x-www-form-urlencoded</strong> with the following template: 
-<pre><code class="language-JSON">{
-&quot;SAMLResponse&quot; :&quot;$input.params('SAMLResponse')&quot;,
-&quot;formparams&quot; : $input.json('$')
-}</code></pre> 
-<li>Save the changes.</li> 
-<li>On your <strong>/saml</strong> resource root, choose <strong>Actions</strong>, <strong>Enable CORS,</strong> <strong>Enable CORS and replace existing CORS headers</strong>.</li> 
-<li>Choose <strong>Actions</strong>, <strong>Deploy API</strong>. Use a stage of <strong>Prod</strong> or something similar. In Stage Editor, choose <strong>SDK Generation</strong>. For <strong>Platform</strong>, choose <strong>JavaScript</strong> and then choose <strong>Generate SDK.</strong> Save the folder someplace close. Take note of the <strong>Invoke URL</strong> at the top as you need this for ADFS next.</li> 
-</ol> 
-<h3 id="toc_10">ADFS redirect configuration</h3> 
-<ol> 
-<li>In the ADFS console, edit the properties under <strong>Relaying Party Trusts</strong> for Amazon Web Services. Disable (clear) the <strong>Automatically update relaying party</strong> field. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_11.png" alt="lambdasamlone_11.png" /></p></li> 
-<li>Choose <strong>Endpoints</strong>. For <strong>Binding</strong>, choose <strong>POST;</strong> For <strong>URL,</strong> enter the <strong>InvokeURL</strong> from API Gateway when you deployed the API. Make sure to add <strong>/saml</strong> onto the end of the InvokeURL value. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_12.png" alt="lambdasamlone_12.png" /></p> <p>To recap what you’ve built:</p> 
-<ul> 
-<li>A webpage that redirects users to the ADFS login page if they don’t have credentials.</li> 
-<li>Upon successful authentication, ADFS sends the user back to the webpage (via API Gateway) along with the SAMLResponse.</li> 
-<li>The SAMLResponse is passed back to the original website as part of the query string.</li> 
-</ul> <p>To get credentials from Amazon Cognito, grab this query string in your JavaScript code and send it as part of a logins map value for the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/CognitoIdentity.html">getCredentialsForIdentity</a> call.</p></li> 
-<li>In the Amazon Cognito Federated Identities console, locate the identity pool that you set up in the prerequisites. Find the identity pool ID and put it in the top of the following JavaScript code as well as the appropriate AWS region. 
-<pre><code class="language-javascript">const identityPool = 'YOURCOGNITOPOOLID';
-AWS.config.region = 'COGNITOREGION'; // Region
-AWS.config.credentials = new AWS.CognitoIdentityCredentials({
-IdentityPoolId: identityPool
-});
-var identityId = localStorage.getItem('cognitoid');
-if (identityId != null){
-console.log('Identity ID: ' + identityId);
-loginWorkflow();
-} else {
-console.log('Calling GetID');
-AWS.config.credentials.get(function(){
-console.log('Identity ID: ' + AWS.config.credentials.identityId);
-localStorage.setItem('cognitoid', AWS.config.credentials.identityId);
-identityId = localStorage.getItem('cognitoid');
-loginWorkflow();
-});
-}</code></pre> 
-</ol> 
-<p>This code is the entry point for your application by first ensuring that a unique user ID is generated with Amazon Cognito. It then initiates the loginWorkflow() code from earlier to return the SAMLResponse value to the browser in a query string.</p> 
-<p>The following is a sample utility function <a href="https://stackoverflow.com/questions/901115/how-can-i-get-query-string-values-in-javascript">from a Stack Overflow query</a>, which allows you to grab this value from the query string. Put this code after the above sample.</p> 
-<pre><code class="language-javascript">function getParameterByName(name, url) {
-if (!url) {
-url = window.location.href;
-}
-name = name.replace(/[\[\]]/g, &quot;\\$&amp;amp;&quot;);
-var regex = new RegExp(&quot;[?&amp;amp;]&quot; + name + &quot;(=([^&amp;amp;#]*)|&amp;amp;|#|$)&quot;),
-results = regex.exec(url);
-if (!results) return null;
-if (!results[2]) return '';
-return decodeURIComponent(results[2].replace(/\+/g, &quot; &quot;));
-}</code></pre> 
-<p>Now that your webpage has the SAMLResponse base64-encoded value from ADFS, this can be passed to Amazon Cognito in order for the client to get AWS credentials. The <em>getSamlCredentials()</em> routine called by <em>loginWorkflow()</em> looks something like the following:</p> 
-<pre><code class="language-javascript">function getSamlCredentials(samlResponse) {
-var role = 'arn:aws:iam::ACCOUNTNUMBER:role/ADFS-Dev';
-var params = {
-IdentityId: identityId,
-CustomRoleArn: role,
-Logins: {
-'arn:aws:iam:: ACCOUNTNUMBER:saml-provider/ADFS' : samlResponse,
-}
-};
-cognitoidentity.getCredentialsForIdentity(params, function(err, data) {
-if (err) console.log(err, err.stack);
-else {
-console.log('Credentials from Cognito: ');
-console.log(data.Credentials);
-}
-});
-}</code></pre> 
-<p>Notice that ACCOUNTNUMBER for the ARN must be updated in both role variables, which in this case are hardcoded to show the selection process. If you’re not returning multiple roles in your SAML claim, then this parameter isn’t required. If you do, then you might want some logic for selecting the role for the client to assume. Part II of this blog series will cover how you can do this on the backend rather than the client.</p> 
-<p>Also, take note that the key in the logins map matching up to the samlResponse value is the ARN of the IdP that you created in the IAM console with your ADFS federation metadata document. Update this as well with your account number. This information is what allows Amazon Cognito to do validation for the SAMLResponse value against the ADFS trust.</p> 
-<p>If you try this code now, it won’t work. First, enable the SAML IdP as an authentication provider in your Amazon Cognito identity pool.</p> 
-<ol> 
-<li>In the Amazon Cognito Federated Identities console, select the pool and scroll to <strong>Authentication Providers</strong>. Choose <strong>SAML</strong>. Select the checkbox next to your IdP for ADFS</li> 
-<li>Choose <strong>Save</strong>. <p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_13.png" alt="lambdasamlone_13.png" /></p></li> 
-</ol> 
-<p>Next, modify the trust policy to allow Amazon Cognito to assume the role on behalf of the user when the service receives a valid SAMLResponse assertion. Amazon Cognito does this by calling the <a href="https://docs.aws.amazon.com/STS/latest/APIReference/Welcome.html">STS</a> <a href="https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html">AssumeRoleWithWebIdentity</a> API action.</p> 
-<p>In the IAM console, edit the trust policy for the ADFS-Dev role with the following policy (insert the Amazon Cognito pool ID where appropriate, as you did in the JavaScript code earlier):</p> 
-<pre><code class="language-JSON">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Federated&quot;: &quot;cognito-identity.amazonaws.com&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRoleWithWebIdentity&quot;,
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;cognito-identity.amazonaws.com:aud&quot;: &quot;YOURCOGNITOPOOLID&quot;
-},
-&quot;ForAnyValue:StringLike&quot;: {
-&quot;cognito-identity.amazonaws.com:amr&quot;: &quot;authenticated&quot;
-}
-}
-}
-]
-}</code></pre> 
-<p>Now that your Amazon Cognito trusts have been set up, you should be able to test your webpage. The credentials returned to console logging in the <strong>“data”</strong> object takes the form of a triple (AccessKey, SecretKey, Token), which can be used to sign requests to AWS services. A common scenario for applications is to do this via API Gateway by setting AWS_IAM authorization on a method. If you do this, then you can pass this credentials object through to a SDK request. If the role that you specified above has invoke rights to that API, then they’ll successfully call the method.</p> 
-<p>For example, if you create an API with API Gateway, you can enable AWS_IAM on those methods. For the role specified above (passed into the logins map), ensure that it has rights to invoke the method. For more details, see <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/permissions.html">Control Access to API Gateway with IAM Permissions</a>. Then, when you deploy the API, you can use the <strong>Generate SDK</strong> tab on the stage to generate and download a JavaScript SDK of your methods. You then include this in your webpage to call these methods. For more information, see <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-generate-sdk-javascript.html">Use a JavaScript SDK Generated by API Gateway</a>. At the bottom of that topic, it shows how you can pass in ACCESS<em>KEY and SECRET</em>KEY to the <strong>apigClientFactory.newClient</strong> constructor.</p> 
-<p>Because you are using Amazon Cognito Identity with short-lived credentials (expiring in an hour), you can pass the temporary accessKey, secretKey and sessionToken into the apigClientFactory.newClient constructor:</p> 
-<pre><code class="language-javascript">        var apigwClient = apigClientFactory.newClient({
-accessKey: data.Credentials.AccessKeyId,
-secretKey: data.Credentials.SecretKey,
-sessionToken: data.Credentials.SessionToken
-});  </code></pre> 
-<p>A working version of the webpage code demonstrating this functionality is in the <a href="https://github.com/awslabs/samljs-serverless-sample">GitHub repo</a> under /scenario1/website/index.html. Update the <strong>configs.js</strong> file in the same directory with your appropriate region, Cognito Identity Pool, SAML IdP ARN, and the ADFS-Dev Role ARN. The SAM template also creates a MOCK endpoint in API Gateway with AWS_IAM Authorization, along with a button on the webpage to “ping” as a test to see if the federated credentials are working.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/lambdasamlone/lambdasamlone_14.png" alt="lambdasamlone_14.png" /></p> 
-<b id="toc_11">Final Thoughts</b> 
-<p>Hopefully this walk through tutorial has helped you understand how SAML authentication and AWS authorization with Amazon Cognito Identity works at a deeper level. If you haven’t done so already please do take a few moments to test the full working code located at the <a href="https://github.com/awslabs/samljs-serverless-sample">samljs-serverless-sample</a> GitHub repository to see this in action and let us know your thoughts.</p> 
-<p>This scenario may be enough to get you started however some organizations might be looking to do a bit more. For instance you might want to move the role selection away from the client and to a backend process or implement a custom IAM scoping scheme based on business logic. In Part II of this series we’ll walk through how you can accomplish this.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/adfs/" rel="tag">adfs</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cognito/" rel="tag">cognito</a>, <a href="https://aws.amazon.com/blogs/compute/tag/javascript/" rel="tag">JavaScript</a>, <a href="https://aws.amazon.com/blogs/compute/tag/s3/" rel="tag">S3</a>, <a href="https://aws.amazon.com/blogs/compute/tag/saml/" rel="tag">SAML</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1941');
 });
 </script> 
 </article> 
