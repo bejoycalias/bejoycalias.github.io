@@ -191,6 +191,405 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Running Salt States Using Amazon EC2 Systems Manager</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Andres Silva</span></span> | on 
+<time property="datePublished" datetime="2017-07-16T22:38:49+00:00">16 JUL 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/running-salt-states-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Like <a href="https://www.ansible.com/">Ansible</a>, <a href="https://saltstack.com/">Salt</a> is a popular tool for configuration management. As with other tools in the same category, one of the key challenges is efficiently managing the deployment and execution of the automation directives.</p> 
+<p><a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> is a powerful configuration management platform. One of its key benefits is that it allows customers to use whatever configuration management tool they are currently using. In the <a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/">Running Ansible Playbooks using EC2 Systems Manager Run Command and State Manager</a> post, I explained how Systems Manager can be used to manage configuration management states using Ansible.</p> 
+<p>In this post, I explore how to use Salt (on master-less mode), while leveraging the power, simplicity, and security of Systems Manager. I also introduce a new Systems Manager document that makes it easier for customers to run Salt states.</p> 
+<p><span id="more-693"></span></p> 
+<b>Systems Manager overview</b> 
+<p>Systems Manager uses <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">documents</a> to define actions to be executed on your managed instances.</p> 
+<p>Some of the benefits of using Systems Manager:</p> 
+<ul> 
+<li>Improved security posture 
+<ul> 
+<li>There is no need to open incoming ports to remotely execute the directives. This eliminates the need for using SSH.</li> 
+<li>You can use granular IAM policies to restrict and control access to the platform</li> 
+<li>All command execution is audited via AWS CloudTrail.</li> 
+</ul> </li> 
+<li>Performance and reliability 
+<ul> 
+<li>Asynchronously execute commands.</li> 
+<li>Commands are delivered and executed even when the system comes back from being offline.</li> 
+<li>Execute at scale by taking advantage of velocity control and sending commands based on tags.</li> 
+<li>Control deployment rate if errors increase during deployment.</li> 
+</ul> </li> 
+</ul> 
+<p>&nbsp;</p> 
+<b>Salt overview</b> 
+<p>Salt uses the concept of states. A state is a set of configuration directives that represents what software should be installed and how it should be configured.</p> 
+<p>In typical deployments, Salt is used with a master server. The servers that receive automation directives are called minions. However, Salt states can also be run locally in what is called master-less mode. Using this feature, you can leverage Systems Manager to distribute and execute the Salt state files using <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">Amazon EC2 State Manager</a> or <a href="https://aws.amazon.com/ec2/run-command/">Run Command</a>.</p> 
+<b>AWS-RunSaltState document</b> 
+<p>The new document that automates the process of running Salt states locally using Systems Manager is AWSRunSaltState. It is available to use via the console or API. Here are the different parts of the document and how it works:</p> 
+<ul> 
+<li>Parameters</li> 
+<li>Steps</li> 
+<li>Salt-call</li> 
+</ul> 
+<h3>Parameters</h3> 
+<p>The AWSRunSaltState document provides a number of parameters to execute the Salt states:</p> 
+<ul> 
+<li><strong>State</strong> – Allows for input YAML to define the Salt state automation.</li> 
+<li><strong>Stateurl</strong> – (Optional) Provides a URL to a file that contains the YAML text for the Salt state. The URL can be in http or s3 format.</li> 
+<li><strong>Pillars</strong> – (Optional) Passes additional variables to be used during the execution. Salt uses the concept of pillars to define data that can be used to configure the managed instances (minions).</li> 
+<li><strong>Test</strong> – If true, performs a dry-run of the state. This reports on the actions to be performed by the automation but does not execute them.</li> 
+</ul> 
+<h3>Steps</h3> 
+<p>The AWSRunSaltState document performs a few validations, then executes the automation using the YAML definitions passed by the parameters. Here is a summary of how the logic works:</p> 
+<ul> 
+<li>Checks the Salt version to determine if Salt is present on the system.</li> 
+<li>Determines if the <strong>State</strong> parameter was passed as YAML using the <strong>State</strong> text or as a URL using <strong>Stateurl</strong>. Based on the input, it copies the data to a temporary state file for later execution.</li> 
+<li>Determines if the test option was selected and executes the proper command.</li> 
+</ul> 
+<h3>Salt-call</h3> 
+<p>Salt includes an application called salt-call that can be used on managed instances to execute Salt states locally. The AWSRunSaltState document uses this application to execute the Salt state locally.</p> 
+<b>Walkthrough using Systems Manager and State Manager</b> 
+<p>Here’s an example of using State Manager with the new document to execute Salt state files.</p> 
+<b>Prerequisites</b> 
+<p>Complete the following requirements before going through this walkthrough:</p> 
+<ul> 
+<li>Target instances must be managed by Systems Manager. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html">Installing SSM Agent</a>.</li> 
+<li>Salt must be pre-installed on the target instance or execution fails. This document runs Salt states locally. For more information, see the following section on installing Salt for master-less execution.</li> 
+<li>For S3 URLs in the playbook field, the <a href="https://aws.amazon.com/cli/">AWS CLI</a> must be installed on the target instance or server.</li> 
+</ul> 
+<b>Installing Salt for master-less execution</b> 
+<p><em>If you already have Salt installed on the target instances, you can skip this section. </em></p> 
+<p>Install Salt on the target instances to run what is called a master-less minion. Execute the following on the Linux instance:</p> 
+<pre><code class="lang-bash">curl -L https://bootstrap.saltstack.com -o bootstrap_salt.sh
+sudo sh bootstrap_salt.sh</code></pre> 
+<p>&nbsp;</p> 
+<p>You could also run these two commands using Systems Manager Run Command and the AWS-RunShellScript document. This installs the necessary files to run Salt in master-less mode, using the salt-call application to execute the automation. This command is installed as part of the master-less bootstrapping.</p> 
+<b>Using State Manager and the AWSRunSalt document</b> 
+<p>The following YAML Salt state file contains automation that installs Apache if it is not already installed.</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-yaml">apache:
+pkg.installed:
+{% if grains['os'] == 'Amazon' %}
+- name: httpd
+{% elif grains['os'] == 'Ubuntu' %}
+- name: apache2
+{% endif %}</code></pre> 
+<p>To use this Salt state file with Systems Manager, follow these steps:</p> 
+<ol> 
+<li>In the EC2 console, choose <strong>State Manager, Create Association</strong>.</li> 
+<li>From the Document list, choose the new document “AWS-RunSaltState”.</li> 
+<li>For <strong>Document Version</strong>, leave $DEFAULT selected.</li> 
+<li>Under <strong>Targets</strong>, choose <strong>Manually Selecting instances</strong> and select the instance or instances to target with the Salt state. Alternatively, use a tag to select the instances to target. <img class="wp-image-9" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/07/SaltPicture4.png" /></li> 
+<li>Under <strong>Schedule</strong>, enter how frequently to run the association.</li> 
+<li>Under <strong>Parameters</strong>, for <strong>State, </strong>paste the YAML text for the Salt state. Leave <strong>Stateurl</strong> empty. <img class="wp-image-10" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/10/SaltPicture6-1.png" /></li> 
+<li>For <strong>Pillars</strong>, enter the additional variables to use for the Salt state. Make sure the values are entered in the following format:</li> 
+</ol> 
+<p>{“SSM”:”True”}</p> 
+<p>You can also use nested dict:</p> 
+<p>{‘pkg’: {‘apache’: ‘httpd’}}</p> 
+<ol> 
+<li>(Optional) Choose the test option.</li> 
+<li>(Optional) Enter a comment for this association.</li> 
+<li>Choose <strong>Run</strong>.</li> 
+<li>To verify the output from the console, choose the <strong>Association ID</strong> link for this run. <img class="wp-image-11" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/07/SaltPicture8.png" /></li> 
+</ol> 
+<p>After the association runs for the first time, you can see the results of the execution by navigating to the association and looking at the <strong>Status</strong> column. Now, every time the association runs, it run the salt state and this in turn ensures that the software is installed and running.</p> 
+<b>Integration with Parameter Store</b> 
+<p>All Systems Manager documents support referencing settings or secrets stored in Parameter Store, which provides a secure storage for configuration data such as passwords, database connection strings, and license code. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-paramstore.html">Systems Manager Parameter Store</a>.</p> 
+<p>To use data stored in Parameter Store with Salt, reference it as part of the State code using the following format:</p> 
+<pre><code class="lang-json">{{ssm:parameter_name}}</code></pre> 
+<p>&nbsp;</p> 
+<p>For example, to run a simple touch command to create a file in the /tmp directory and pass the file name as a saved setting, make sure that the parameter is created in Parameter Store. The Salt state file looks like the following:</p> 
+<pre><code class="lang-yaml">mycommand:
+cmd.run:
+- name: touch /tmp/{{ssm:tempfilename}} /</code></pre> 
+<p>&nbsp;</p> 
+<b>Summary</b> 
+<p>In this post, I introduced the new Systems Manager document to execute Salt state files using State Manager and Run Command. I also demonstrated how you can use this new document to deploy and manage your Salt automation.</p> 
+<p>You can also use this Systems Manager document with the Run Command option and leverage velocity control. For an example on how to do this, see the <a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/">Running Ansible Playbooks using EC2 Systems Manager Run Command and State Manager</a> post.</p> 
+<p>&nbsp;</p> 
+<h3>About the Author</h3> 
+<p><img class="alignleft wp-image-453 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/23/Andres-headshot-150x150.jpg" alt="" width="150" height="150" /></p> 
+<p>Andres Silva is a Senior Technical Account Manager for AWS Enterprise Support. He has been working with AWS technology for more than 6 years. Andres works with Enterprise customers to design, implement and support complex cloud infrastructures. When he is not building cloud automation he enjoys skateboarding with his 2 kids.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Monitor and Notify on AWS Account Root User Activity</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Sudhanshu Malhotra</span></span> | on 
+<time property="datePublished" datetime="2017-07-14T11:16:44+00:00">14 JUL 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch"><span property="articleSection">Amazon CloudWatch</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/monitor-and-notify-on-aws-account-root-user-activity/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Are you aware when someone uses your AWS account credentials to perform some activity? Are you notified in time?</p> 
+<p>When you first create an AWS account, you begin only with a single sign-in identity that has complete access to all AWS services and resources in the account. This identity is called the root user and is accessed by signing in with the email address and password that you used to create the account.</p> 
+<p>An AWS account root user has full access to all your resources for all AWS services, including billing information. It is critical to prevent root user access from getting into the wrong hands and to be aware whenever root user activity occurs in your AWS account. For more information about AWS recommendations, see <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html">IAM Best Practices</a>. Some of the key recommendations include:</p> 
+<ul> 
+<li>Enabling multi factor authentication (MFA)</li> 
+<li>Setting complex passwords</li> 
+<li>Avoiding creating access key for root</li> 
+<li>Creating an admin level IAM user to perform any high privilege activities</li> 
+</ul> 
+<p>However, there are <a href="https://docs.aws.amazon.com/general/latest/gr/aws_tasks-that-require-root.html">certain actions that can only be performed by the root user</a>. To be certain that all root user activity is authorized and expected, it is important to monitor root API calls to a given AWS account and to notify when this type of activity is detected. This notification gives you the ability to take any necessary steps when an illegitimate root API activity is detected or it can simply be used as a record for any future auditing needs.</p> 
+<p>In this post, I walk through a solution that monitors and notifies on root API activity for an AWS account.</p> 
+<p><span id="more-751"></span></p> 
+<b>Solution</b> 
+<p>The diagram below describes the solution at a high level.</p> 
+<p>&nbsp;</p> 
+<p><img class="alignnone size-full wp-image-1365" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/flow_diagram-1.jpg" alt="" width="2118" height="294" /></p> 
+<ol> 
+<li>An <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a> rule detects any AWS account root user API events.</li> 
+<li>It triggers an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function.</li> 
+<li>The Lambda function then processes the root API event. It also publishes a message to an <a href="https://aws.amazon.com/sns">Amazon SNS topic</a>, where the subject contains the AWS account ID or AWS account alias where the root API call was detected and the type of API activity.</li> 
+<li>The SNS topic then sends notifications to its email subscribers about this event.</li> 
+</ol> 
+<p>I walk through deploying the <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> stack that creates these resources and then validates that root user activity is detected and notified. It helps if you know about&nbsp;<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">CloudWatch Events rules</a>,&nbsp;<a href="https://docs.aws.amazon.com/lambda/latest/dg/welcome.html">Lambda</a>,&nbsp;and&nbsp;<a href="https://docs.aws.amazon.com/sns/latest/dg/welcome.html">SNS</a>.</p> 
+<p>&nbsp;</p> 
+<b>Prerequisites</b> 
+<ul> 
+<li>Create and enable a multi-region <a href="https://aws.amazon.com/cloudtrail">AWS CloudTrail</a> trail for all AWS regions.</li> 
+<li>Upload the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/RootActivityLambda.zip">RootActivityLambda.zip</a> file to an S3 bucket.</li> 
+</ul> 
+<p>&nbsp;</p> 
+<b>Deployment steps</b> 
+<ol> 
+<li>In the CloudFormation console, choose <strong>Create Stack</strong>.&nbsp;Use the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/RootAPIMonitor.json">RootAPIMonitor.json</a> CloudFormation JSON template. Choose <strong>Next</strong>.</li> 
+<li>Create the stack in the region in which to monitor root API activity, as well as the us-east-1 region. Root API login is a global event and logged in us-east-1. I recommend deploying in all AWS regions.</li> 
+<li>Enter the following parameter details and choose <strong>Next</strong>: 
+<ul> 
+<li><strong>SNSTopicName</strong>: A unique name for the SNS topic to be created.</li> 
+<li><strong>SNSSubscriptions</strong>: An email address to subscribe to the SNS topic.&nbsp;. I recommend sending these notifications to a distribution list rather than an individual.</li> 
+<li><strong>LambdaTimeout</strong>: The Lambda function timeout value in seconds. The default is 30 seconds.</li> 
+<li><strong>LambdaS3Bucket</strong>: Name of the S3 bucket where the Lambda function zip file is stored.</li> 
+<li><strong>LambdaS3Key</strong>: Name of the Lambda function zip file. This is the full path to the S3 object, with the prefix. For example, “/dir1/dir2/lambdafunction.zip”.</li> 
+</ul> </li> 
+<li>Select <strong>Capabilities Acknowledgement</strong> and choose <strong>Create</strong>. This field gives permission to the stack to create IAM roles and policies. These roles and policies are used by the Lambda function to perform certain actions such as publishing messages to the SNS topic, listing the account alias, and so on.</li> 
+<li>After the CloudFormation stack completes, check for an SNS subscription email sent to the email provided for <strong>SNSSubscriptions</strong>. Open the <strong>SubscribeURL</strong> link to complete the subscription.<img class="alignnone size-full wp-image-1378" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/subscribe_email.png" alt="" width="496" height="285" /></li> 
+<li>After the SNS topic is subscribed, the subscriber starts receiving email notification when root API activity is detected.</li> 
+</ol> 
+<p>&nbsp;</p> 
+<p>The CloudFormation template created three main AWS resources for this solution:</p> 
+<p>&nbsp;</p> 
+<h3>CloudWatch Events rule</h3> 
+<p>The rule catches a console login event and all other API events by a root user, and triggers the Lambda function (set as a target) when such events are detected.</p> 
+<p><img class="alignnone size-full wp-image-1379" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/CWE_snapshot.png" alt="" width="824" height="545" /></p> 
+<p>&nbsp;</p> 
+<h3>Lambda function</h3> 
+<p>The function collects the necessary information about the root API event and publishes it to the SNS topic. The function parses the name of the event and the AWS account alias where this root API event occurred and puts them in the subject field for the message that it publishes to the SNS topic.</p> 
+<p>&nbsp;</p> 
+<p>Code for getting the name of the event:</p> 
+<pre><code class="lang-python">def lambda_handler(event, context):
+logger.setLevel(logging.INFO)
+eventname = event['detail']['eventName']
+</code></pre> 
+<p>Code for getting the AWS account alias:</p> 
+<pre><code class="lang-python">response = client.list_account_aliases()
+logger.debug(&quot;List account alias response --- %s&quot; %response)
+try:
+if not response['AccountAliases']:
+accntAlias = (boto3.client('sts').get_caller_identity()['Account'])
+logger.info(&quot;Account alias is not defined. Account ID is %s&quot; %accntAliase)
+else:
+accntAliase = response['AccountAliases'][0]
+logger.info(&quot;Account alias is : %s&quot; %accntAliase)
+except ClientError as e:
+logger.error(&quot;Client error occurred&quot;)</code></pre> 
+<p>Code for publishing to the SNS topic:</p> 
+<pre><code class="lang-python">try: 
+#Sending the notification...
+snspublish = snsclient.publish(
+TargetArn= snsARN,
+Subject=((&quot;Root API call-\&quot;%s\&quot; detected in Account-\&quot;%s\&quot;&quot; %(eventname,accntAliase))[:100]),
+Message=json.dumps({'default':json.dumps(event)}),
+MessageStructure='json')
+</code></pre> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<h3>SNS topic</h3> 
+<p>The topic sends the email notification published by the Lambda function.</p> 
+<p><img class="alignnone size-full wp-image-1380" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/SNS.png" alt="" width="826" height="406" /></p> 
+<p>&nbsp;</p> 
+<b>Solution validation</b> 
+<p>Now that you have the solution deployed and ready, test and validate. First, sign in to your AWS account using your access credentials. This console login activity by a root user should send an email notification in near real time.</p> 
+<p><img class="alignnone size-full wp-image-1381" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/login_notify.png" alt="" width="609" height="269" /></p> 
+<p>&nbsp;</p> 
+<p>Next, validate if other root API events are also detected and notified on. For example, you can create an EBS volume using the root credentials and confirm that you receive an email notification in near real time.</p> 
+<p><img class="alignnone size-full wp-image-1382" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/ebs.png" alt="" width="630" height="260" /></p> 
+<p>Some AWS services—such as Auto Scaling, Elastic Load Balancing, and Trusted Advisor—use root to access resources in your AWS account, instead of an IAM role. When this happens, you see the service name in the&nbsp;<strong>invokedBy</strong>&nbsp;field of the&nbsp;<strong>userIdentity</strong>&nbsp;JSON statement. This event is legitimate and can be ignored. For more information, see <a href="https://aws.amazon.com/premiumsupport/knowledge-center/cloudtrail-root-action-logs/">My AWS CloudTrail logs show root credentials are being used to authenticate actions I didn’t initiate</a>.</p> 
+<b>Summary</b> 
+<p>In this post, I showed you how to monitor and notify on root API activity for an AWS account. This framework can be extended to monitor and notify on other IAM user activity, giving you the ability to monitor highly privileged users in near real time.</p> 
+<p>For more information, I recommend the following whitepapers:</p> 
+<ul> 
+<li><a href="https://d0.awsstatic.com/whitepapers/Security/AWS_Security_Whitepaper.pdf">Amazon Web Services: Overview of Security Processes</a></li> 
+<li><a href="https://d0.awsstatic.com/whitepapers/compliance/AWS_Security_at_Scale_Governance_in_AWS_Whitepaper.pdf">Security at Scale: Governance in AWS</a></li> 
+<li><a href="https://d0.awsstatic.com/whitepapers/compliance/Automating_Governance_on_AWS.pdf">Automating Governance on AWS</a></li> 
+</ul> 
+<p>&nbsp;</p> 
+<h3>About the Author</h3> 
+<p><img class="alignleft size-thumbnail wp-image-747" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/10/dp-119x150.jpeg" alt="" width="119" height="150" />Sudhanshu Malhotra is a Solutions Architect at AWS Professional Services. Sudhanshu enjoys working with our customers and helping them deliver complex solutions in AWS in the area of DevOps, Infrastructure-as-Code and Config Management. In his spare time, Sudhanshu enjoys spending time with his family, hiking and tinkering with cars.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/root-credentials/" rel="tag">root credentials</a>, <a href="https://aws.amazon.com/blogs/mt/tag/secdevops/" rel="tag">SecDevOps</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Monitor Changes and Auto-Enable Logging in AWS CloudTrail</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Sudhanshu Malhotra</span></span> | on 
+<time property="datePublished" datetime="2017-07-10T10:45:09+00:00">10 JUL 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch"><span property="articleSection">Amazon CloudWatch</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudtrail/" title="View all posts in AWS CloudTrail"><span property="articleSection">AWS CloudTrail</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/monitor-changes-and-auto-enable-logging-in-aws-cloudtrail/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><a href="https://aws.amazon.com/cloudtrail">AWS CloudTrail</a> is a service that enables governance, compliance, operational auditing, and risk auditing of your AWS account. Hence, it’s crucial to monitor any changes to CloudTrail and make sure that logging is always enabled.</p> 
+<p>With CloudTrail, you can log, continuously monitor, and retain events related to API calls across your AWS infrastructure. CloudTrail provides a history of API calls for your account, including API calls made through the console, AWS SDKs, command line tools, and other AWS services. This history simplifies security analysis, resource change tracking, and troubleshooting.</p> 
+<p>In this post, I describe a solution to notify on changes to CloudTrail and re-enable logging whenever logging is disabled.</p> 
+<p><span id="more-744"></span></p> 
+<b>Change monitoring and notification</b> 
+<p>For this walkthrough, you use an <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a> rule to monitor changes to a CloudTrail trail. An <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function set as a target for this rule contains the logic to detect changes to the trail and publish a message to an <a href="https://aws.amazon.com/sns">Amazon SNS</a> notification. The diagram below depicts the workflow.</p> 
+<p>&nbsp;</p> 
+<p><img class="aligncenter wp-image-1339 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/05/Flow_Diagram-1.jpg" alt="" width="1938" height="376" /></p> 
+<p>&nbsp;</p> 
+<ol> 
+<li>An IAM user makes changes to a CloudTrail trail.</li> 
+<li>That change event gets detected by a CloudWatch Events rule.</li> 
+<li>The rule triggers a Lambda function.</li> 
+<li>The function publishes the change event to an SNS topic.</li> 
+<li>The SNS topic sends the email to its subscribers.</li> 
+<li>If the change event was to disable logging, the function re-enables logging on that trail.</li> 
+</ol> 
+<p>The CloudWatch Events rule detects the following CloudTrail operational events:</p> 
+<ul> 
+<li>“StopLogging”</li> 
+<li>“StartLogging”</li> 
+<li>“UpdateTrail”</li> 
+<li>“DeleteTrail”</li> 
+<li>“CreateTrail”</li> 
+<li>“RemoveTags”</li> 
+<li>“AddTags”</li> 
+<li>“PutEventSelectors”</li> 
+</ul> 
+<p>After a “StopLogging” event is detected, the Lambda function re-enables logging for that trail. This generates a “StartLogging” event that again sends an SNS notification.</p> 
+<p>&nbsp;</p> 
+<b>Walkthrough</b> 
+<p>Now, I walk you through creating an SNS topic and subscription, Lambda function, and CloudWatch Events rule. To deploy this solution, download the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/CloudTrailMonitor.json">CloudTrailMonitor.json</a> AWS CloudFormation template. The <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/README.md">README</a> document provides instructions to deploy the stack.</p> 
+<b></b> 
+<b>Create the SNS topic and subscription</b> 
+<p>In the SNS console, choose <strong>Create topic</strong> and enter appropriate values for <strong>Topic name</strong> (such as CloudTrailAlert) and <strong>Display name</strong> (CT-Alert). Choose <strong>Create topic</strong>. Select the topic and view the details.</p> 
+<p>Next, choose <strong>Create subscription</strong>.</p> 
+<p>For <strong>Protocol</strong>, choose <strong>Email-JSON</strong>. Enter the email address where notifications should be sent and choose <strong>Create subscription</strong>.</p> 
+<p>An email is sent to confirm the SNS topic subscription. In the email, open the <strong>SubscribeURL</strong> link to complete the subscription. Note the SNS topic ARN, as it is used later by the Lambda function.</p> 
+<p><img class="size-full wp-image-1355 alignnone" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-sns.png" alt="" width="513" height="200" /></p> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/sns/latest/dg/CreateTopic.html">Create a Topic</a> in the Amazon SNS Developer Guide.</p> 
+<p>&nbsp;</p> 
+<b>Create the Lambda function</b> 
+<p>In the Lambda console, choose <strong>Functions</strong>, <strong>Create a Lambda function</strong>. Choose Blank Function and on the <strong>Configure trigger page</strong>, choose <strong>Next</strong>.</p> 
+<p>On the next page, enter the following values:</p> 
+<ul> 
+<li><strong>Name:</strong>&nbsp;An appropriate name for the Lambda function</li> 
+<li><strong>Runtime:</strong>&nbsp;Python 2.7</li> 
+<li><strong>Code entry type:</strong>&nbsp;Upload a ZIP file</li> 
+<li><strong>Function package:</strong>&nbsp;Upload the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/Cloudtraillambdamonitor.zip">Cloudtraillambdamonitor.zip</a> file</li> 
+<li><strong>Environment variables:</strong> 
+<ul> 
+<li>Key: SNSARN</li> 
+<li>Value: The SNS topic ARN noted earlier</li> 
+</ul> </li> 
+<li><strong>Handler: </strong>Cloudtraillambdamonitor.lambda_handler</li> 
+<li><strong>Role:</strong>&nbsp;Create a custom role (takes you to another page). Call the role CloudTrailLambda.</li> 
+</ul> 
+<p>For the policy document, enter the following policy:</p> 
+<pre><code class="lang-markup">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;LambdaCloudtraiMonitor&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;cloudtrail:DescribeTrails&quot;,
+&quot;cloudtrail:GetTrailStatus&quot;,
+&quot;cloudtrail:StartLogging&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:cloudtrail:*:&lt;AWS-ACCOUNT-ID&gt;:trail/*&quot;
+]
+},
+{
+&quot;Sid&quot;: &quot;CloudWacthLogspermissions&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:logs:*:*:*&quot;
+]
+},
+{
+&quot;Sid&quot;: &quot;SNSPublishpermissions&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;sns:Publish&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:sns:*:*:*&quot;
+]
+}
+]
+}
+</code></pre> 
+<p>On the <strong>Configure function</strong> page, choose <strong>Next</strong>. Review the configuration settings before choosing <strong>Create function</strong>.</p> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/get-started-create-function.html"><strong>Step 2.1: Create a Hello World Lambda Function</strong></a> in the <em>AWS Lambda Developer Guide</em>.</p> 
+<p>&nbsp;</p> 
+<b>Create the CloudWatch Events rule</b> 
+<p>In the CloudWatch Events console, choose <strong>Create rule</strong>. Enter the following values:</p> 
+<ul> 
+<li><strong>Service Name:</strong> &nbsp;CloudTrail</li> 
+<li><strong>Event Type:</strong> &nbsp;AWS API call via CloudTrail</li> 
+<li><strong>Specific Operations:</strong> &nbsp;StopLogging, StartLogging, UpdateTrail, DeleteTrail, CreateTrail, RemoveTags, AddTags, PutEventSelectors</li> 
+</ul> 
+<p>For <strong>Targets</strong>, select the name of the Lambda function created earlier and choose <strong>Configure details</strong>. On next page, enter an appropriate name and description for this rule. For <strong>State</strong>, select <strong>Enabled</strong>. Choose <strong>Create rule</strong>.</p> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/RunLambdaSchedule.html">Tutorial: Schedule Lambda Functions Using CloudWatch Events</a> in the <em>Amazon CloudWatch Events User Guide</em>.</p> 
+<p>&nbsp;</p> 
+<b>Validate monitoring</b> 
+<p>To validate if the solution is working properly, make a change to CloudTrail and see if you get the notification about this change. The following are some sample emails for when a change in CloudTrail was detected. In this case, logging was disabled and re-enabled automatically.</p> 
+<p><img class="alignnone wp-image-1356 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-stoplogging.png" alt="" width="634" height="319" /></p> 
+<p><img class="alignnone wp-image-1357" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-startlogging.png" alt="" width="634" height="366" /></p> 
+<p>&nbsp;</p> 
+<b>Summary</b> 
+<p>In this post, I explained how to create a solution with CloudWatch Events, Lambda, and SNS to notify you about changes to CloudTrail trails, and to re-enable logging automatically whenever logging is disabled. If you can’t guarantee that your compliance logging is fully managed and automatic, your organizational governance or auditing may be at risk.</p> 
+<p>For more information, I recommend the following whitepapers:</p> 
+<ul> 
+<li><a href="https://d0.awsstatic.com/whitepapers/Security/AWS_Security_Whitepaper.pdf">AWS Security Whitepaper</a></li> 
+<li><a href="https://d0.awsstatic.com/whitepapers/compliance/AWS_Security_at_Scale_Governance_in_AWS_Whitepaper.pdf">Security at Scale: Governance in AWS</a></li> 
+<li><a href="https://d0.awsstatic.com/whitepapers/compliance/Automating_Governance_on_AWS.pdf">Automating Governance on AWS</a></li> 
+</ul> 
+<h3>About the Author</h3> 
+<p><img class="alignleft wp-image-747" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/10/dp.jpeg" alt="" width="60" height="80" />Sudhanshu Malhotra is a Solutions Architect at AWS Professional Services. Sudhanshu enjoys working with our customers and helping them deliver complex solutions in AWS in the area of DevOps, Infrastructure-as-Code and Config Management. In his spare time, Sudhanshu enjoys spending time with his family, hiking and tinkering with cars.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudtrail/" rel="tag">AWS CloudTrail</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/secdevops/" rel="tag">SecDevOps</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Keeping CloudWatch Dashboards up to date using AWS Lambda</b> 
 <footer class="meta">
 by 
@@ -1375,378 +1774,6 @@ by
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-complaince/" rel="tag">Patch Complaince</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-manager/" rel="tag">Patch Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Running Ansible Playbooks using EC2 Systems Manager Run Command and State Manager</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Andres Silva</span></span> | on 
-<time property="datePublished" datetime="2017-05-25T13:30:02+00:00">25 MAY 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>If you are running complex workloads on AWS and managing large groups of instances, chances are you are using some form of configuration management. Configuration management tools are effective in automating the deployment and configuration of applications on hybrid instances. However, efficiently managing the distribution and execution of the playbooks or recipes, centrally managing the code, having a secure and scalable deployment mechanism and properly logging system changes is a challenge. To address this, some of our customers use tools like cron, Rundeck or others provided by configuration management vendors.</p> 
-<p><a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-state.html">State Manager</a> and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a>, part of <a href="https://aws.amazon.com/ec2/systems-manager/">EC2 Systems Manager</a>, automate management tasks by providing a secure, and easy to use platform to maintain state and remotely execute commands on large groups of instances. Using these tools also addresses many of the common challenges of managing infrastructure at scale. Here are some of the benefits of these tools:</p> 
-<ul> 
-<li>Better security 
-<ul> 
-<li>There is no need to open incoming ports to remotely execute the directives. This eliminates the need for using SSH</li> 
-<li>You can use IAM to restrict and control access to the platform</li> 
-<li>All command execution is audited via AWS Cloudtrail</li> 
-</ul> </li> 
-<li>Performance and reliability 
-<ul> 
-<li>Asynchronous execution of commands</li> 
-<li>Commands are delivered and executed even when the system comes back from being offline</li> 
-<li>Execute at scale by taking advantage of velocity control</li> 
-<li>Control deployment rate if errors increase during deployment</li> 
-</ul> </li> 
-</ul> 
-<p>In this blog post, I will show you how to execute configuration management directives using Ansible on your instances using State Manager and Run Command, and the new “AWS-RunAnsiblePlaybook” public document. This document runs Ansible locally on your instances.</p> 
-<p><span id="more-469"></span></p> 
-<h3>Getting Started</h3> 
-<h4>Pre-requisities</h4> 
-<ul> 
-<li>Target instances must be set up as managed instances. To set up managed instances, please see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-setting-up.html">here</a></li> 
-<li>Ansible must be pre-installed on the instances. Please see the following section on installing Ansible</li> 
-<li>For Amazon S3 URLs in the playbook field, the <a href="https://aws.amazon.com/cli/">AWS Command line</a> tools must be installed on the target instance or server</li> 
-</ul> 
-<h4>Installing Ansible on target instances</h4> 
-<p>Ansible can be installed as part of the bootstrapping of the instance or with Run Command. The following is some reference information you can use to install Ansible on different Linux distributions:</p> 
-<p><span style="text-decoration: underline">Amazon Linux</span><br /> For Amazon Linux Ansible can be installed using pip. You can use the following command.</p> 
-Bash 
-<pre class=" language-bash"><code class=" language-bash"><span class="token function">sudo</span> pip <span class="token function">install</span> ansible</code></pre> 
-<p><span style="text-decoration: underline">Ubuntu</span><br /> For Ubuntu you can install Ansible using the default package manager. Use this command.</p> 
-Bash 
-<pre class=" language-bash"><code class=" language-bash"><span class="token function">sudo</span> <span class="token function">apt-get</span> <span class="token function">install</span> ansible <span class="token operator">-</span>y</code></pre> 
-<p><span style="text-decoration: underline">RedHat 7</span><br /> For RedHat 7 you can install Ansible by enabling the epel repo. Use the following commands:</p> 
-Bash 
-<pre class=" language-bash"><code class=" language-bash"><span class="token function">sudo</span> rpm <span class="token operator">-</span>Uvh https<span class="token punctuation">:</span><span class="token operator">/</span><span class="token operator">/</span>dl<span class="token punctuation">.</span>fedoraproject<span class="token punctuation">.</span>org<span class="token operator">/</span>pub<span class="token operator">/</span>epel<span class="token operator">/</span>epel<span class="token operator">-</span>release<span class="token operator">-</span>latest<span class="token operator">-</span><span class="token number">7</span><span class="token punctuation">.</span>noarch<span class="token punctuation">.</span>rpm
-<span class="token function">sudo</span> yum <span class="token operator">-</span>y <span class="token function">install</span> ansible</code></pre> 
-<h4>Document Parameters</h4> 
-<p>The “AWS-RunAnsiblePlaybook” document has a few parameters that can be used to execute playbooks locally:</p> 
-<ul> 
-<li>Playbook – Use this parameter if you would like to pass the YAML text for the playbook directly</li> 
-<li>Playbookurl – Use this parameter if you would like to specify a URL where the playbook file is stored. The URL can be a web (http or https) or an s3 URL in the form of s3://bucket-name/playbook.yml . For s3 URL there is a pre-requisite of the AWS Command line tools</li> 
-<li>Extravars – This is a string list of additional variables that will be passed to Ansible for the execution of the playbook</li> 
-<li>Check – This flag tells Ansible not to execute the actions of the playbook, but try to predict the outcome and log it. This is helpful for testing playbook execution</li> 
-</ul> 
-<h4>Workflow</h4> 
-<p>The document performs a few checks and then execute the playbook specified in the parameter. Here is a summary of how the logic works:</p> 
-<ul> 
-<li>Check the Ansible version to determine if Ansible is present on the system. Having Ansible installed is a pre-requisite of this document. See prerequisites section and also the section on installing Ansible</li> 
-<li>Determine if the playbook parameter was passed as YAML using the playbook variable text or a URL using the Playbookurl. Based on the input it will copy the data to a temporary playbook file for later execution</li> 
-<li>Determine if the check option was selected and based on the input execute the proper ansible-playbook command</li> 
-</ul> 
-<h3>State Manager Walkthrough</h3> 
-<p>Let’s walk through the process of using State Manager to set the desired state for an instance using Ansible Playbook. To understand better how you can use this new public document with State Manager, let’s imagine you have a fleet of servers running Apache. You want to make sure that the web server software is installed and running all the time.</p> 
-<p><strong>Step 1: Create Ansible playbook</strong></p> 
-<p>This playbook installs Apache and makes sure is running. It has some logic to use different package management tools depending on the operating system:</p> 
-YAML 
-<pre class=" language-yaml"><code class=" language-yaml"><span class="token punctuation">-</span> <span class="token key atrule">hosts</span><span class="token punctuation">:</span> all
-<span class="token key atrule">become</span><span class="token punctuation">:</span> <span class="token boolean important">true</span>
-<span class="token key atrule">tasks</span><span class="token punctuation">:</span>
-<span class="token punctuation">-</span> <span class="token key atrule">name</span><span class="token punctuation">:</span> gather ec2 facts
-<span class="token key atrule">action</span><span class="token punctuation">:</span> ec2_facts
-<span class="token punctuation">-</span> <span class="token key atrule">name</span><span class="token punctuation">:</span> install apache on redhat or centos instances
-<span class="token key atrule">yum</span><span class="token punctuation">:</span> name=httpd state=present
-<span class="token key atrule">when</span><span class="token punctuation">:</span> ansible_os_family == &quot;RedHat&quot;
-<span class="token punctuation">-</span> <span class="token key atrule">name</span><span class="token punctuation">:</span> install apache on debian or ubuntu instances
-<span class="token key atrule">apt</span><span class="token punctuation">:</span> name=apache2 state=present
-<span class="token key atrule">when</span><span class="token punctuation">:</span> ansible_os_family == &quot;Debian&quot;
-<span class="token punctuation">-</span> <span class="token key atrule">name</span><span class="token punctuation">:</span> enable apache on startup and start service for redhat or centos
-<span class="token key atrule">service</span><span class="token punctuation">:</span> name=httpd enabled=yes state=started
-<span class="token key atrule">when</span><span class="token punctuation">:</span> ansible_os_family == &quot;RedHat&quot;
-<span class="token punctuation">-</span> <span class="token key atrule">name</span><span class="token punctuation">:</span> enable apache on startup and start service for debian or ubuntu
-<span class="token key atrule">service</span><span class="token punctuation">:</span> name=apache2 enabled=yes state=started
-<span class="token key atrule">when</span><span class="token punctuation">:</span> ansible_os_family == &quot;Debian&quot;
-</code></pre> 
-<p><strong class="lang-yaml">Step 2: Create State Manager Association</strong></p> 
-<p>From the EC2 section of the AWS Console, select “State Manager” from the “System Manager Services” section of the left pane menu, and click on “Create Association”.</p> 
-<p>Select the “AWS-RunAnsiblePlaybook” document, your target instances (or tag) and the application schedule. In the Parameters section, since the playbook will be specified as direct YAML text, let’s just paste it on the Playbook field and leave the Playbookurl field empty.</p> 
-<p><img class="alignnone wp-image-443" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/23/doc-parameters.png" alt="" width="588" height="322" /></p> 
-<p>In the Extravars field, we can enter any additional variables we would like to pass to the playbook for execution. In this case we are not using any additional variables, so we take the default. Select if you want to use the Check option.<br /> After you click the “Run” button, the console will display the Association ID of this run, which you can to see the result and verify the output from the console.</p> 
-<p>After the association runs for the first time, you can see the results of the execution by navigating to the association and looking at the status column. Now every time the association runs it will run the playbook and this in turn will ensure the software is installed and running.</p> 
-<h3>Run Command Walkthrough</h3> 
-<p>Run Command lets you rate control remote execution by configuring maximum number of concurrent invocations and errors allowed. This feature will set a threshold to detect errors and stop the execution if the threshold is passed.</p> 
-<p>Let’s walk through an example of using velocity control when running the AWS-RunAnsiblePlaybook Document. In this example, we will be running the AWS- RunAnsiblePlaybook document on 3 target instances. We will pass the playbook as an s3 URL. To do this you can use the following command:</p> 
-Bash 
-<pre class=" language-bash"><code class=" language-bash">aws ssm send<span class="token operator">-</span><span class="token function">command</span> <span class="token operator">--</span>document<span class="token operator">-</span>name <span class="token string">&quot;AWS-RunAnsible&quot;</span> <span class="token operator">--</span>instance<span class="token operator">-</span>ids <span class="token string">&quot;i-02f6bdc3d73044db6&quot;</span> <span class="token string">&quot;i-0e6954b9ae36b4b68&quot;</span> <span class="token string">&quot;i-023834f459f1a9fe6&quot;</span> <span class="token operator">--</span>max<span class="token operator">-</span>errors <span class="token number">1</span> <span class="token operator">--</span>parameters '<span class="token punctuation">{</span><span class="token string">&quot;extravars&quot;</span><span class="token punctuation">:</span><span class="token punctuation">[</span><span class="token string">&quot;SSM=True&quot;</span><span class="token punctuation">]</span><span class="token punctuation">,</span><span class="token string">&quot;check&quot;</span><span class="token punctuation">:</span><span class="token punctuation">[</span><span class="token string">&quot;False&quot;</span><span class="token punctuation">]</span><span class="token punctuation">,</span><span class="token string">&quot;playbook&quot;</span><span class="token punctuation">:</span><span class="token punctuation">[</span><span class="token string">&quot;s3://andress-web/playbook.yml&quot;</span><span class="token punctuation">]</span><span class="token punctuation">}</span>' <span class="token operator">--</span><span class="token function">timeout</span><span class="token operator">-</span>seconds <span class="token number">600</span> <span class="token operator">--</span>region us<span class="token operator">-</span>east<span class="token operator">-</span><span class="token number">1</span></code></pre> 
-<p>This command performs the following actions:</p> 
-<ul> 
-<li>Executes the document AWS- RunAnsiblePlaybook</li> 
-<li>Sets the target instances</li> 
-<li>Defines the max errors as 1. This means that if the execution encounters 1 error it will stop on the remaining targets</li> 
-<li>Passes the parameters for the Ansible document</li> 
-<li>It also sets a timeout of 600 seconds</li> 
-</ul> 
-<h3>Conclusion</h3> 
-<p>In this post, we’ve showed you how to use State Manager and Run Command to deploy Ansible playbooks at scale. These tools are secure, easy to use platforms that let you perform remote administration and maintain state of your hybrid instances. You can control the rate at which you send commands, use fine-grained permissions, and use notifications to simplify your workflow.</p> 
-<hr /> 
-<h3>About the Author</h3> 
-<p><img class="alignleft wp-image-453 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/23/Andres-headshot-150x150.jpg" alt="" width="150" height="150" /></p> 
-<p>Andres Silva is a Senior Technical Account Manager for AWS Enterprise Support. He has been working with AWS technology for more than 6 years. Andres works with Enterprise customers to design, implement and support complex cloud infrastructures. When he is not building cloud automation he enjoys skateboarding with his 2 kids.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Use Application Load Balancers with your AWS OpsWorks Chef 12 Stacks</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Kai Rubarth</span></span> | on 
-<time property="datePublished" datetime="2017-05-23T08:47:14+00:00">23 MAY 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS Ops Works"><span property="articleSection">AWS Ops Works</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/use-application-load-balancers-with-your-aws-opsworks-chef-12-stacks/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Want to build scalable applications that take advantage of <a href="https://aws.amazon.com/elasticloadbalancing">Elastic Load Balancing</a> Application Load Balancer features? You could add capabilities such as content-based routing, HTTP/2 and WebSocket protocols, support for containers, and enhanced metrics, and more.</p> 
-<p><a href="https://aws.amazon.com/opsworks">AWS OpsWorks</a> Stacks users have been asking AWS how they can use the new Application Load Balancer option with their layer. So AWS decided to develop and open source a set Chef 12 recipes to make this integration simple. This post walks you through the steps required to make any Chef 12 Linux layer in OpsWorks Stacks work with Application Load Balancers.</p> 
-<p><span id="more-434"></span></p> 
-<b>Walkthrough</b> 
-<p>Unless otherwise noted, all steps are completed in the OpsWorks console.</p> 
-<b>Overview of the alb_support recipes</b> 
-<p><strong>alb_support::attach_to_alb:</strong> &nbsp;This recipe does the actual work of attaching an instance to a target group of an Application Load Balancer. Recipes to be executed during the <strong>Setup</strong> lifecycle event must be added before this recipe, before your instance is attached to an Application Load Balancer.</p> 
-<p><strong>alb_support::detach_from_alb: </strong>&nbsp;This recipe detaches instances from the load balancer. Add this recipe to the <strong>Shutdown</strong> lifecycle event. Recipes to be executed after the <strong>Shutdown</strong> lifecycle event must come after this recipe, when the instance is detached from the Application Load Balancer and the connection is drained.</p> 
-<p><strong>alb_support::install</strong> and <strong>alb_support::uninstall_http_server:&nbsp; </strong>To give you an easy way to pass the default Application Load Balancer health check, and provide you with a visual indication that the load balancer works as expected, AWS also included sample recipes that install and uninstall an NGINX server on port 80 to serve as a default test page.</p> 
-<b>Step 1: &nbsp;Create an Application Load Balancer</b> 
-<p><a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-application-load-balancer.html">Create a simple ALB with a default TCP listener and HTTP health checks performed on port 80</a>. Do not add any instances to the target groups as this is handled by the open source Chef recipes.</p> 
-<b>Step 2: &nbsp;Create a Chef 12 stack</b> 
-<p><a href="http://docs.aws.amazon.com/opsworks/latest/userguide/gettingstarted-linux-create-stack.html">Create a new Chef 12 stack</a>. Be sure to enable <strong>Use custom Chef cookbooks</strong> and use the following settings:</p> 
-<ul> 
-<li>For <strong>Repository type</strong>, choose Git.</li> 
-<li>For <strong>Repository URL</strong>, use <a href="https://github.com/awslabs/opsworks-example-cookbooks">https://github.com/awslabs/opsworks-example-cookbooks</a>. If you already have a running stack, you can download the <strong>alb_cookbook</strong> from the repository, and merge it into your Chef repository and continue with the next section.</li> 
-</ul> 
-<b>Step 3: &nbsp;Grant the instances in your stack permission to call the Elastic Load Balancing API</b> 
-<ol> 
-<li>Choose <strong>Stack Settings</strong>.</li> 
-<li>Choose the link next to <strong>Default IAM Instance Profile</strong> to open your instance profile in IAM.</li> 
-<li>On the <strong>Permissions</strong> tab, expand <strong>Inline Policies</strong> and choose <strong>create here</strong> to create an inline policy.</li> 
-<li>Choose <strong>Custom Policy</strong>, and then choose <strong>Select</strong>.</li> 
-<li>Type a name for the policy, paste the following into the <strong>Policy Document</strong> field, and then choose <strong>Apply Policy</strong>.</li> 
-</ol> 
-<pre><code class="lang-json">{   
-&quot;Version&quot;: &quot;2012-10-17&quot;,   
-&quot;Statement&quot;: [     
-{ 
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;elasticloadbalancing:RegisterTargets&quot;,
-&quot;elasticloadbalancing:DeregisterTargets&quot;,
-&quot;elasticloadbalancing:DescribeTargetHealth&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;
-}
-]
-}
-</code></pre> 
-<b>Step 4:&nbsp; Create and configure an Application Load Balancer layer</b> 
-<p><a href="http://docs.aws.amazon.com/opsworks/latest/userguide/layers-elb.html">Create a new layer.</a> Next, use recipes from the open source <strong>alb_support</strong> cookbook to manage layer instance association with your Application Load Balancer.</p> 
-<h3>Configure the layer recipes</h3> 
-<p>To configure the recipes for your layer, do the following:</p> 
-<ul> 
-<li>Add <strong>alb_support::install_http_server </strong>and <strong>alb_support::attach_to_alb</strong> to the <strong>Setup</strong> lifecycle event.</li> 
-<li>Add <strong>alb_support::detach_from_alb </strong>and <strong>alb_support::uninstall_http_server </strong>to the <strong>Shutdown </strong>lifecycle event.</li> 
-</ul> 
-<p><img class="aligncenter wp-image-435 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/23/layer_recipes.png" alt="" width="986" height="353" /></p> 
-<h3>Specify your ALB configuration details</h3> 
-<p>After you’ve configured the <strong>alb_support</strong> recipes, change the instance shutdown timeout and provide some details via custom JSON.</p> 
-<ol> 
-<li>On the <strong>Layer Settings</strong> page, enter an <strong>Instance shutdown timeout</strong> that allows enough time for the execution of your shutdown recipes and the connection drainage. I recommend that you specify a period equal to the connection draining timeout (see below), plus the maximum time it takes your post-draining recipes to execute.</li> 
-<li>Edit the layer settings and specify the following custom JSON before saving:</li> 
-</ol> 
-<pre><code class="lang-json">{ 
-&quot;alb_helper&quot;: 
-{ 
-&quot;target_group_arn&quot;: &quot;SPECIFY ARN OF YOUR ALB TARGET GROUP HERE&quot;
-} 
-}
-</code></pre> 
-<p>There are two optional parameters you might want to add to the alb_helper JSON block:</p> 
-<ul> 
-<li><strong>connection_draining_timeout</strong> (default: 750)</li> 
-</ul> 
-<p>This is the maximum amount time, in seconds, to wait for the Application Load Balancer to drain connections from the instance before executing additional shutdown recipes. You might want to set this value to match the draining timeout of your load balancer. If you do not want to postpone the execution of your shutdown recipes until the instance is drained, specify the parameter with a value of 0.</p> 
-<ul> 
-<li><strong>state_check_frequency</strong> (default: 30)</li> 
-</ul> 
-<p>This is the frequency, in seconds, in which to call <strong>EC2::describeTargetHealth</strong> to get an update on the connection draining process.</p> 
-<h3>Security</h3> 
-<p>To pass the Application Load Balancer health checks, you need to allow incoming HTTP traffic. Choose <strong>Security</strong> on the layer, then add the <strong>AWS-OpsWorks-Web-Server</strong> group to your layer. This layer allows incoming traffic from any source address on port 80.</p> 
-<b>Verify your Application Load Balancer</b> 
-<p>You’re done! On the <strong>Instances </strong>page of your stack, add a new instance, choose <strong>start</strong>, and wait for it to come online. Now open the Amazon EC2 console and find the DNS name of your Application Load Balancer. When you open the address in your browser, you see the NGINX test page:</p> 
-<p><img class="aligncenter wp-image-436 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/23/nginx_test_page.png" alt="" width="669" height="396" /></p> 
-<p>Instances added to the layer are attached automatically to the target group that you specified in the layer’s custom JSON block. Your Application Load Balancer uses health checks to detect unhealthy OpsWorks Stacks instances, and reroutes traffic to the remaining ones until the unhealthy instances have been restored.</p> 
-<p>Instances that are terminated have their connections drained and are removed from their assigned Application Load Balancer. The execution of shutdown recipes specified with an order later than <strong>alb_support::detach_from_alb</strong> are postponed until the instance is drained from the Application Load Balancer or the <strong>connection_ draining_timeout</strong> value is exceeded.</p> 
-<b>Conclusion</b> 
-<p>This post showed how easy it is to integrate an Application Load Balancer with your OpsWorks Stacks application. With the help of the Chef recipes, instances in your layers can automatically be added and removed from an Application Load Balancer. You can extend this example to take advantage of features such as path-based routing, HTTP/2 or WebSocket, container support and advanced metrics.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">More Automation Actions for Amazon EC2 Systems Manager</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Taylor Anderson</span></span> | on 
-<time property="datePublished" datetime="2017-05-17T15:04:45+00:00">17 MAY 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/more-automation-actions-for-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Recently, AWS released five new <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> Automation <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ami-actions.html">actions</a>. These actions allow you to:</p> 
-<ul> 
-<li>Launch an <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> stack</li> 
-<li>Delete the stack</li> 
-<li>Insert a delay in your workflow</li> 
-<li>Copy and encrypt Amazon Machine Images (AMIs)</li> 
-<li>Tag AWS resources</li> 
-</ul> 
-<p>These actions extend the existing collection of actions, which can be used to orchestrate tasks such as instance launch, OS-level instance configuration and patching, <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> function invocation, and AMI creation.</p> 
-<p>In this post, I introduce the actions, discuss possible uses, and include examples.</p> 
-<p><strong><em>Automation Overview</em></strong></p> 
-<p><a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-automation.html">Automation</a> allows you to patch, update agents, or bake applications into an AMI. With Automation, you can avoid the time and effort associated with manual image updates, and instead build AMIs through a streamlined, repeatable, and auditable process. Automation workflows are composed of a series of steps, where each step is based on an action.</p> 
-<h3>Automation actions</h3> 
-<p>Here are the actions:</p> 
-<ul> 
-<li><strong>aws:createStack</strong></li> 
-<li><strong>aws:deleteStack</strong></li> 
-<li><strong>aws:sleep</strong></li> 
-<li><strong>aws:createTags</strong></li> 
-<li><strong>aws:copyImage</strong></li> 
-</ul> 
-<p><span id="more-255"></span><br /> <strong>aws:createStack</strong></p> 
-<p>Creates a new <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html">CloudFormation stack</a> from a template.</p> 
-<p>Use this action when running a workflow that requires creation of AWS resources. An example is a workflow that creates a new AMI and subsequently invokes a Lambda function, where the Lambda function updates an <a href="http://docs.aws.amazon.com/autoscaling/latest/userguide/WhatIsAutoScaling.html">Auto Scaling</a> group’s launch configuration with the new AMI ID.</p> 
-<p>By embedding the creation of the Lambda function and the needed IAM permissions directly into the Automation workflow, <strong>aws:createStack</strong> enables a self-contained solution for both automation and resource creation.</p> 
-<p><strong>aws:createStack</strong> is also helpful when running an Automation workflow requiring AWS resources in a newly created account. In your primary account, create an Automation workflow as a <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-how-to-share.html">shared Systems Manager document</a>, then execute the workflow locally in each account.</p> 
-<p>The following example shows an Automation step of type <strong>aws:createStack</strong>:</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;makeStack&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:createStack&quot;,
-&nbsp;&nbsp;&nbsp;&quot;maxAttempts&quot;:1,
-&nbsp;&nbsp;&nbsp;&quot;onFailure&quot;:&quot;Abort&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Capabilities&quot;:[&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;CAPABILITY_IAM&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;StackName&quot;:&quot;myStack&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;TemplateURL&quot;:&quot;http://s3.amazonaws.com/mybucket/myStackTemplate&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;TimeoutInMinutes&quot;:5
-&nbsp;&nbsp;&nbsp;}
-}</pre> 
-<p>&nbsp;</p> 
-<p><strong>aws:deleteStack</strong></p> 
-<p>Deletes a CloudFormation stack.</p> 
-<p>To complete the example above, you can add the <strong>aws:deleteStack</strong> step to your workflow to remove all resources created during the execution of the Automation workflow.</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;deleteStack&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:deleteStack&quot;,
-&nbsp;&nbsp;&nbsp;&quot;maxAttempts&quot;:1,
-&nbsp;&nbsp;&nbsp;&quot;onFailure&quot;:&quot;Abort&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;StackName&quot;:&quot;{{stackName}}&quot;
-&nbsp;&nbsp;&nbsp;}
-}</pre> 
-<p>&nbsp;</p> 
-<p><strong>aws:sleep</strong></p> 
-<p>Delays Automation execution for a specified amount of time.</p> 
-<p>Use this action to insert a delay in your workflow. You can set the delay over a specific duration, or until a specific time is reached. Let’s say you have multiple Run Command steps of type <strong>aws:runCommand</strong> that you’re running to configure an instance, and you’d like to ensure a pause between them. Using <strong>aws:sleep</strong>, you can insert a delay.</p> 
-<p>The following examples show how to define the sleep interval using either a duration or timestamp―both are formatted following <a href="https://www.iso.org/iso-8601-date-and-time-format.html">ISO 8601</a>.</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Duration&quot;:&quot;PT10M&quot;
-&nbsp;&nbsp;&nbsp;}
-}</pre> 
-<p>Duration passed in as a parameter:</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Duration&quot;:&quot;PT{{delayInMinutes}}M&quot;
-&nbsp;&nbsp;&nbsp;}
-}</pre> 
-<p>Using a timestamp to terminate the sleep interval:</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:sleep&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Timestamp&quot;:&quot;2020-01-01T01:00:00Z&quot;
-&nbsp;&nbsp;&nbsp;}
-}
-</pre> 
-<h3></h3> 
-<p><strong>aws:createTags</strong><br /> Creates new tags for resources such as Amazon EC2 instances or Amazon Machine Images (AMIs).</p> 
-<p>Tagging is a popular way to keep track of AMIs. With <strong>aws:createTags</strong>, your workflow can tag images after it creates them. Similarly, you can use tags to keep track of any temporary instances created by your workflow. In the event that your workflow ceases before terminating the instances, your tagged temporary instances are easier to track down.</p> 
-<p>The following example shows how to tag an AMI and an instance as production resources for a particular department:</p> 
-<pre>{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&quot;name&quot;:&quot;createTags&quot;,
-&nbsp;&nbsp;&nbsp;&quot;action&quot;:&quot;aws:createTags&quot;,
-&nbsp;&nbsp;&nbsp;&quot;maxAttempts&quot;:3,
-&nbsp;&nbsp;&nbsp;&quot;onFailure&quot;:&quot;Abort&quot;,
-&nbsp;&nbsp;&nbsp;&quot;inputs&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;ResourceType&quot;:&quot;EC2&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;ResourceIds&quot;:[&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;ami-9a3768fa&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;i-02951acd5111a8169&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Tags&quot;:[&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Key&quot;:&quot;production&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Value&quot;:&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;},
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Key&quot;:&quot;department&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Value&quot;:&quot;devops&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]
-&nbsp;&nbsp;&nbsp;}
-}</pre> 
-<p>&nbsp;</p> 
-<p><strong>aws:copyImage</strong><br /> Copies an AMI from any region into the current region. This action can also encrypt the new AMI.</p> 
-<p>An example use case is to copy images across regions. To automate the process, you can use a Lambda function to post to an SNS topic upon the creation of a new image in the source region. A Lambda function in the target region is then trigged by this topic, and invokes Automation to copy the image. After you’ve copied the shared image, you can encrypt using a second <strong>aws:copyImage</strong> action in the workflow.</p> 
-<p>The following example creates a copy of an AMI from the Seoul region. The new AMI is copied to the region where you initiated the Automation action.</p> 
-<pre> { 
-&quot;name&quot;: &quot;createEncryptedCopy&quot;,
-&quot;action&quot;: &quot;aws:copyImage&quot;,
-&quot;maxAttempts&quot;: 3,
-&quot;onFailure&quot;: &quot;Abort&quot;,
-&quot;inputs&quot;: {
-&quot;SourceImageId&quot;: &quot;ami-0fe10819&quot;,
-&quot;SourceRegion&quot;: &quot;ap-northeast-2&quot;,
-&quot;ImageName&quot;: &quot;Encrypted copy of LAMP base AMI in ap-northeast-2&quot;,
-&quot;Encrypted&quot;: false
-} 
-} 
-</pre> 
-<h3></h3> 
-<h3>Summary</h3> 
-<p>In this post, I discussed five recently released Automation actions that can help you orchestrate even more tasks with other AWS services.</p> 
-<p>Before creating your own Automation workflow, try the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ami-consolewalk.html">Getting Started Walkthrough</a> and run your first workflow using a AWS-managed Automation document. Then, try <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ami-createdoc.html">creating your own workflow</a>, using <a href="https://aws.amazon.com/blogs/aws/streamline-ami-maintenance-and-patching-using-amazon-ec2-systems-manager-automation/">AWS-UpdateLinuxAmi</a> or AWS-UpdateWindowsAmi (coming soon!) as a template.</p> 
-<h3></h3> 
-<p>&nbsp;</p> 
-<h3>About the author</h3> 
-<p>Taylor Anderson is a product manager for EC2 Systems Manager. When he’s not working on new hybrid-cloud management tools, he enjoys spending time writing code for Arduino projects, or kiteboarding the waters of Puget Sound.</p> 
-<p><img class="alignnone size-full wp-image-289" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/05/17/badgephoto.jpeg" alt="" width="119" height="160" /></p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a></span> 
 </footer> 
 </article> 
 <p>
