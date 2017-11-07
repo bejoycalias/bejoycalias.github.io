@@ -191,6 +191,631 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Multi-Account Strategy: Using AWS CloudFormation Custom Resources to Create Amazon Route 53 Resources in Another Account</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Brian Beach</span></span> | on 
+<time property="datePublished" datetime="2017-08-24T16:06:05+00:00">24 AUG 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/multi-account-strategy-using-aws-cloudformation-custom-resources-to-create-amazon-route-53-resources-in-another-account/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Today, most customers have more than one AWS account. While a multi-account strategy brings many benefits―simplified billing, security isolation, decentralized control, etc., it also introduces new challenges. One challenge is that the users in one account occasionally need to create resources in another.</p> 
+<p>In this post, I will show you how to use a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html">custom resource</a> from <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> to create <a href="https://aws.amazon.com/route53">Amazon Route 53</a> resource records in another account.</p> 
+<p><span id="more-976"></span></p> 
+<b>Multi-account scenario</b> 
+<p>A common driver for adopting a multi-account strategy is to give autonomy and agility to individual business units.</p> 
+<p>Imagine that you work for a company that has adopted this strategy. There is a centralized IT team that manages consolidated billing and shared resources such as AWS Direct Connect connections. In addition, they manage the Domain Name System (DNS) for the company. They have chosen to host DNS in Amazon Route 53. Various business units have their own accounts and operate with relatively little oversight.</p> 
+<p>The marketing team regularly creates short-lived websites for various marketing campaigns. They use CloudFormation to launch and manage these sites, but CloudFormation cannot create resources in other accounts. Therefore, the marketing team has to submit a request to central IT to update DNS. This often takes hours or even days to complete. They want a simple way to create a CNAME record in the central account from a CloudFormation template in their own account.</p> 
+<b>CloudFormation custom resources</b> 
+<p>One way to create resources in another account is to use a CloudFormation custom resource, which allows you to execute custom code from a CloudFormation template. CloudFormation supports two types of custom resources:</p> 
+<ul> 
+<li>The first invokes an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function, allowing you to execute custom code.</li> 
+<li>The second sends a message to an <a href="https://aws.amazon.com/sns">Amazon SNS</a> topic to which you have subscribed.</li> 
+</ul> 
+<p>Here’s an example. The Figure below outlines a solution to the problem scenario described earlier. Marketing is launching a CloudFormation stack and wants to create a CNAME in Amazon Route 53 hosted in another account.</p> 
+<p>The high-level workflow goes like this:</p> 
+<ol> 
+<li>CloudFormation sends a message to an SNS topic in the central account.</li> 
+<li>A Lambda function is invoked in response to the message.</li> 
+<li>Lambda creates the Amazon Route 53 CNAME record.</li> 
+<li>Lambda calls an Amazon S3 presigned URL, indicating that it completed successfully.</li> 
+<li>CloudFormation marks the custom resource complete.</li> 
+</ol> 
+<p><img class="alignnone size-full wp-image-982" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/27/cfn-r53-cross-account.png" alt="" width="795" height="761" /><br /> <i>You might be asking yourself why I used SNS when CloudFormation custom resources can invoke Lambda directly. I could have invoked Lambda directly, but SNS simplifies cross account permissions and makes the configuration easier.</i></p> 
+<b>Configuring the custom resource</b> 
+<p>Begin by configuring the services in the central account. I will assume that Amazon Route 53 is already configured, so you need to configure SNS and Lambda.</p> 
+<p>I have included a <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ConfigCentralAccount.yaml">CloudFormation template to configure these services in the central account</a> for you. The template requires two inputs:</p> 
+<ul> 
+<li>The ID of the Amazon Route 53 <a href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingHostedZone.html">hosted zone</a> in which to allow the business units to create records.</li> 
+<li>A list of the account IDs that are authorized to create resource records in Amazon Route 53.</li> 
+</ul> 
+<p>This restricts access so that only the accounts that you specify can create resource records in the hosted zone that you specify. Obviously, you don’t want to allow everyone to create―or worse, change―records anywhere in your DNS system.</p> 
+<p>After the CloudFormation template completes, it outputs the ARN of the SNS topic used to request new resources. Make note of this, as you use it to configure the custom resource later in this post.</p> 
+<p>In the Lambda console, you see a new function called CreateRoute53CNAME. This is the logic for the custom resource. The primary method, lambda_handler, is shown in the code below.</p> 
+<p><strong>Example: Lambda function snippet</strong></p> 
+<pre><code class="lang-python">def lambda_handler(event, context):
+#SNS events contain a wrapper around the Lambda event. Unpack the
+#Lambda event from SNS. Not needed if you’re calling Lambda directly.
+print(&quot;SNS Event: &quot; + json.dumps(event))
+event = json.loads(event['Records'][0]['Sns']['Message'])            
+print(&quot;Lambda Event: &quot; + json.dumps(event))
+try: 
+hostedzone = 'ZXAOMNFL85JIZ'
+type = event['RequestType']
+source = event['ResourceProperties']['Source']
+target = event['ResourceProperties']['Target']
+if type == 'Create':
+print &quot;Creating CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
+change_resource_record_sets('UPSERT', hostedzone, source, target)
+elif type == 'Update':
+oldsource = event['OldResourceProperties']['Source']
+oldtarget = event['OldResourceProperties']['Target']
+print &quot;Deleting old CNAME &quot; + oldsource + &quot;-&gt;&quot; + oldtarget + &quot; in &quot; + hostedzone
+change_resource_record_sets('DELETE', hostedzone, oldsource, oldtarget)
+print &quot;Creating new CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
+change_resource_record_sets('UPSERT', hostedzone, source, target)
+elif type == 'Delete':
+print &quot;Deleting CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
+change_resource_record_sets('DELETE', hostedzone, source, target)
+else:
+print &quot;Unexpected Request Type&quot;
+raise Exception(&quot;Unexpected Request Type&quot;)
+print &quot;Completed successfully&quot;
+responseStatus = 'SUCCESS'
+responseData = {}
+sendResponse(event, context, responseStatus, responseData)
+except: 
+print(&quot;Error:&quot;, sys.exc_info()[0])
+responseStatus = 'FAILED'
+responseData = {}
+sendResponse(event, context, responseStatus, responseData)
+</code></pre> 
+<p>As you can see, the first thing the Lambda function does is unpack the SNS event to get the properties that were passed from CloudFormation. In this example, you pass in a source (for example, www.example.com) and a target (for example, my-loadbalancer-1234567890.us-east-1.elb.amazonaws.com) for a CNAME record.</p> 
+<p>In addition, the event always includes a RequestType value of Create, Update, or Delete. The code below is an example of an Update event. In the case of an Update, you get an additional set of OldResourceProperties values that are not included in Create and Delete events.</p> 
+<p><strong>Example: Sample update event in SNS</strong></p> 
+<pre><code class="lang-json">{ &quot;Records&quot;: [ 
+{ &quot;EventVersion&quot;: &quot;1.0&quot;, 
+&quot;EventSubscriptionArn&quot;: &quot;arn:aws:sns:us-east-1:…:RequestRoute53CNAME:…&quot;, 
+&quot;EventSource&quot;: &quot;aws:sns&quot;, 
+&quot;Sns&quot;: { 
+&quot;MessageId&quot;: &quot;6ae3f7a1-2772-568c-9175-a603bc40bf03&quot;, 
+&quot;Message&quot;: {
+&quot;RequestType&quot;:“Update&quot;,
+&quot;ResponseURL&quot;:&quot; https://cloudformation-custom-resource-response-useast1...&quot;,
+&quot;ResourceType&quot;:&quot;Custom::CNAME&quot;,
+&quot;OldResourceProperties&quot;:{
+“Target&quot;:&quot;my-first-loadbalancer.us-east-1.elb.amazonaws.com&quot;,
+“Source&quot;:&quot;test.example.com“
+},
+&quot;ResourceProperties&quot;:{
+“Target&quot;:&quot;my-second-loadbalancer.us-east-1.elb.amazonaws.com&quot;,
+“Source&quot;:&quot;test.example.com“
+}
+}
+} 
+} 
+} 
+]}
+</code></pre> 
+<p>Depending on the type of event received, call the Amazon Route 53 <a href="http://boto3.readthedocs.io/en/latest/reference/services/route53.html#Route53.Client.change_resource_record_sets">change_resource_record_sets</a> API operation to create or delete the appropriate records. Finally, you must send the result of the operation to CloudFormation so it can mark the resource complete. The code below reports status.</p> 
+<p><strong>Example: Reporting results to CloudFormation</strong></p> 
+<pre><code class="lang-python">def sendResponse(event, context, responseStatus, responseData):
+data = json.dumps({
+'Status': responseStatus,
+'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
+'PhysicalResourceId': context.log_stream_name,
+'StackId': event['StackId'],
+'RequestId': event['RequestId'],
+'LogicalResourceId': event['LogicalResourceId'],
+'Data': responseData
+})
+opener = urllib2.build_opener(urllib2.HTTPHandler)
+request = urllib2.Request(url=event['ResponseURL'], data=data)
+request.add_header('Content-Type', '')
+request.get_method = lambda: 'PUT'
+url = opener.open(request)
+</code></pre> 
+<p>As you can see, CloudFormation expects the Lambda function to provide a JSON document. This document must include a status of either SUCCESS or FAILED. The original request (such as the SNS update event) included a response URL, an <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/PresignedUrlUploadObject.html">S3 presigned URL</a>. I use the urllib2 module to PUT the JSON document to the presigned URL.</p> 
+<b>Using the custom resource</b> 
+<p>Now that you have your Lambda function created in the central account, you can invoke it from a custom resource in one of the accounts owned by your authorized business units. The code below shows a simple example stack that uses the custom resource.</p> 
+<p>Pass three things to your custom resource. First, pass the ARN of the SNS topic used to initiate the custom resource. The ARN was an output from the template used earlier to create the custom resource in the central account. Second and third, pass the source and target values for the CNAME.</p> 
+<p><strong>Example: Using the custom resource</strong></p> 
+<pre><code class="lang-yaml">Parameters:
+Queue: 
+ServiceToken: The ARN of the SNS topic used to request a CNAME record. 
+Type: String
+Default: arn:aws:sns:us-east-1:999999999999:RequestRoute53CNAME
+Source: 
+Description: The pretty name for the CNAME record.
+Type: String
+Default: www.example.com 
+Target: 
+Description: The target of the CNAME record.
+Type: String
+Default: my-loadbalancer-1234567890.us-east-1.elb.amazonaws.com
+Resources: 
+CNAME: 
+Type: Custom::CNAME
+Properties: 
+ServiceToken: !Ref Queue
+Source: !Ref Source
+Target: !Ref Target
+</code></pre> 
+<p>As you can see, the custom resource is easy to use but not valuable on its own. Here’s how to incorporate this into a larger solution. In the code below, I create an Elastic Beanstalk stack (using the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/quickref-elasticbeanstalk.html">PHP sample application stack</a>) and use the custom resource to create a CNAME record (for example, beanstalk.example.com) and a friendly name for the stack.</p> 
+<p><strong>Example: Using the custom resource in a larger solution</strong></p> 
+<pre><code class="lang-yaml">Resources: 
+sampleApplication:
+Type: AWS::ElasticBeanstalk::Application
+Properties:
+Description: AWS Elastic Beanstalk Sample Application
+sampleApplicationVersion:
+Type: AWS::ElasticBeanstalk::ApplicationVersion
+Properties:
+ApplicationName:
+Ref: sampleApplication
+Description: AWS Elastic Beanstalk Sample Application Version
+SourceBundle:
+S3Bucket: !Sub &quot;elasticbeanstalk-samples-${AWS::Region}&quot;
+S3Key: php-sample.zip
+sampleConfigurationTemplate:
+Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+Properties:
+ApplicationName:
+Ref: sampleApplication
+Description: AWS Elastic Beanstalk Sample Configuration Template
+OptionSettings:
+- Namespace: aws:autoscaling:asg
+OptionName: MinSize
+Value: '2'
+- Namespace: aws:autoscaling:asg
+OptionName: MaxSize
+Value: '6'
+- Namespace: aws:elasticbeanstalk:environment
+OptionName: EnvironmentType
+Value: LoadBalanced
+SolutionStackName: 64bit Amazon Linux running PHP 5.3
+sampleEnvironment:
+Type: AWS::ElasticBeanstalk::Environment
+Properties:
+ApplicationName:
+Ref: sampleApplication
+Description: AWS Elastic Beanstalk Sample Environment
+TemplateName:
+Ref: sampleConfigurationTemplate
+VersionLabel:
+Ref: sampleApplicationVersion
+CNAME: 
+Type: Custom::CNAME
+Properties: 
+ServiceToken: arn:aws:sns:us-east-1:999999999999:RequestRoute53CNAME
+Source: beanstalk.example.com
+Target: !GetAtt sampleEnvironment.EndpointURL
+</code></pre> 
+<p>This CloudFormation stack waits for the Elastic Beanstalk environment to launch and then creates a CNAME record in the central IT account.</p> 
+<b>Conclusion</b> 
+<p>In this post, you learned how to create a CloudFormation custom resource, which allows you to execute custom logic in a CloudFormation template. You also learned how to invoke custom code in one AWS account, from a CloudFormation stack in another account.</p> 
+<p><strong>About the Author</strong></p> 
+<p><img class="size-full wp-image-1180 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/24/beabrian.jpg" alt="" width="119" height="160" /><a href="https://www.linkedin.com/in/brianjbeach/">Brian Beach</a> is a Solutions Architect on the World Wide Public Sector team&nbsp;where he focuses on higher education. Brian is excited by the growth of cloud computing and enjoys&nbsp;teaching others about technology. He is a frequent author and speaker. In his free time, Brian can be found playing with his three children in Raleigh, NC.</p> 
+<footer> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Amazon EC2 Systems Manager Automation is now a Amazon CloudWatch Events Target</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-08-21T11:42:35+00:00">21 AUG 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-automation-is-now-a-amazon-cloudwatch-events-target/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Today&nbsp;we are excited to announce a new target for Amazon CloudWatch Events: Amazon EC2 Systems Manager Automation. Through this integration, Automation workflows can be triggered by a schedule, or when specific AWS system events occur.</p> 
+<ul> 
+<li><a href="https://aws.amazon.com/ec2/systems-manager/automation/">Automation </a>is part of <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a>.&nbsp; Using Automation you can build workflows that are streamlined, repeatable and auditable. For example, you can create workflows to patch, update agents, or bake applications into an Amazon Machine Image (AMI). You can also avoid the time and effort associated with updating your images manually, and instead build AMIs that meet your IT standards and make the approved AMIs available to you teams.</li> 
+<li>Amazon&nbsp;<a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">CloudWatch Events</a> allows you to create rules that trigger based on AWS events, or on a periodic schedule. &nbsp;CloudWatch Events can be setup to respond to Amazon EC2 Service state changes, Amazon Simple Storage Service (S3) bucket operations, and other events automatically. Supported targets include <a href="https://aws.amazon.com/lambda/">AWS Lambda</a>, Amazon SNS, Amazon EC2 Systems Manager Run Command, and now Amazon EC2 Systems Manager Automation.</li> 
+</ul> 
+<p>With Automation as a supported CloudWatch Events target, you can take advantage of some interesting use cases. You can perform routine tasks better when you schedule tasks for specific days and times or after specific event patterns. In this blog, we are going to show examples of how you can use CloudWatch Events and Automation to automate repetitive tasks, such as periodically starting and stopping instances.</p> 
+<p><span id="more-825"></span></p> 
+<h3>Automatically stop and start instances on weekends</h3> 
+<p>Identifying and automatically stopping unused non-production instances in your account can save costs and improve efficiency of how you use your resources. Suppose you would like to automatically stop an instance every Friday evening and start it back on Monday morning. You can easily accomplish this using two CloudWatch Events that triggers an Automation Document for stopping and starting instances.</p> 
+<h3>Create an Automation Document</h3> 
+<p>For this example, follow the steps to <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-createdoc.html">create an Automation Document</a>. The following code can be used to quickly create the Document.</p> 
+<pre><code class="lang-json">{
+&quot;description&quot;:&quot;Systems Manager Automation Demo - Start Instances via CWE&quot;,
+&quot;schemaVersion&quot;:&quot;0.3&quot;,
+&quot;parameters&quot;:{
+&quot;automationRoleArn&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The ARN of the role that allows Automation to perform the actions on your behalf.&quot;
+},
+&quot;instanceIds&quot;:{
+&quot;type&quot;:&quot;StringList&quot;,
+&quot;description&quot;:&quot;(Required) The Instance ID(s) to Stop or Start.&quot;
+},
+&quot;state&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The state you would like the Instance(s) placed in. Options are: running | stopped&quot;
+}
+},
+&quot;assumeRole&quot;:&quot;{{automationRoleArn}}&quot;,
+&quot;mainSteps&quot;:[
+{
+&quot;name&quot;:&quot;startStopInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:2,
+&quot;timeoutSeconds&quot;:120,
+&quot;onFailure&quot;:&quot;Continue&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[&quot;{{instanceIds}}&quot;],
+&quot;DesiredState&quot;:&quot;{{state}}&quot;
+}
+}
+]
+}</code></pre> 
+<h3>Steps to create CloudWatch event rules to trigger Automation</h3> 
+<p>After you have created the Document and saved it, you can create two CloudWatch event rules that automatically trigger at specific times.</p> 
+<p><strong>Step 1</strong>. In the AWS Management Console, choose CloudWatch, Events, Rules and Create rule.</p> 
+<p><img class="alignnone size-full wp-image-854" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/CWERules.png" alt="" width="1152" height="603" /></p> 
+<p><strong>Step 2:&nbsp;</strong>&nbsp;Under <strong>Event Source</strong>, choose <strong>Schedule</strong>, <strong>Cron expression</strong>. To stop specified instances automatically at 6 PM every Friday, enter the following cron expression to trigger the rule:</p> 
+<p><em>0 18 ? * FRI *</em></p> 
+<p><img class="alignnone size-full wp-image-945" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/CR1-1.png" alt="" width="1021" height="636" /></p> 
+<p>&nbsp;</p> 
+<p><strong>Step 3:</strong> Under Targets, choose <strong>Add target</strong>, <strong>SSM Automation</strong>.</p> 
+<p><strong>Step 4:</strong>&nbsp;For Document, select the Automation Document you saved for stopping and starting specified instances.</p> 
+<p><strong>Step 5:</strong>&nbsp;For Configure document version, choose Default or a particular version number.</p> 
+<p><strong>Step 6:</strong>&nbsp;Choose <strong>‘Constant’</strong> automation &nbsp;and enter the enter instance ID that you would like to be stopped automatically per the rule that you are creating. You can also choose&nbsp;<strong>‘Input Transformer’</strong> to provide custom inputs based on a template.</p> 
+<p><img class="alignnone size-full wp-image-861" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/Targets.png" alt="" width="785" height="822" /></p> 
+<p><strong>Step 7:</strong>&nbsp;Provide permission for CloudWatch event to call SSM Start Automation Execution. You can either create an existing role that you previously created or create a new role.</p> 
+<p><strong>Step 8:</strong>&nbsp;Choose <strong>Configure details</strong>, and enter a name and description for your rule. Ensure that Enabled is selected.</p> 
+<p><strong>Step 9:</strong>&nbsp;Choose <strong>Create rule</strong>.</p> 
+<p>Your rule is now created and automatically executes every Friday at 6 PM to stop your specified instance. To start the instance back up say on Monday morning, repeat the steps to create another CloudWatch event rule, set your cron expression to Monday AM at your desired time, and target the same Automation Document. Make sure you provide “running” as your desired state.</p> 
+<p>With this setup you can now automatically stop and start your instances, thus using your resources optimally.</p> 
+<h3>Additional methods to trigger Automation</h3> 
+<p>Outside of setting up an Automation workflow to be triggered on a schedule, you can also trigger executions based on event patterns. For example, you can setup a CloudWatch event on a&nbsp;<a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-paramstore.html">Parameter Store</a> value. Based on changes to the value you can trigger an Automation workflow. You can create&nbsp;a Parameter Store key/value to store AMI Ids which you typically use to create golden images for your organization. Every time you change the value of the key to a new AMI ID, you can setup a CloudWatch event rule on that parameter and target Automation. The target can point either to your custom Document or the <em>AWS-UpdateWindowsAMI</em> Document published by AWS. This automatically creates a new image with the latest updates that you can provide as inputs to your CI/CD pipeline or to Auto Scaling groups. For your reference, here is a blog that talks about how you can <a href="https://aws.amazon.com/blogs/mt/windows-ami-patching-and-maintenance-with-amazon-ec2-systems-manager-2/">update and patch your Windows AMIs</a>&nbsp;using Automation.</p> 
+<p><img class="alignnone size-full wp-image-857" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/PS.png" alt="" width="1009" height="852" /></p> 
+<p>&nbsp;</p> 
+<h3>Conclusion</h3> 
+<p>Automation simplifies common system maintenance and deployment tasks. By using CloudWatch Events, you can orchestrate task execution based on any events relating to AWS services. You can also trigger your predefined workflows on a schedule. Using this integration, you can easily orchestrate management of your resources and expect your workflows to perform tasks at scale automatically.</p> 
+<p><strong>About the author</strong></p> 
+<p><a href="https://www.linkedin.com/in/venkatkr/"><img class="size-full wp-image-831 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/KRVenkt.jpg" alt="" width="119" height="160" /></a></p> 
+<p><a href="https://www.linkedin.com/in/venkatkr/">Venkat Krishnamachari</a> is a Product Manager in the Amazon EC2 Systems Manager team. Venkat is excited by the opportunities presented by cloud computing, and loves helping customers benefit from the value of efficient infrastructure and management. In his personal time Venkat volunteers with NGOs and loves producing live theater and music shows.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-codedeploy/" rel="tag">AWS CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/documents/" rel="tag">Documents</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-complaince/" rel="tag">Patch Complaince</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-manager/" rel="tag">Patch Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Maintenance Windows: Support for New Task Types Using Amazon EC2 Systems Manager</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Lavanya Krishnan</span></span> | on 
+<time property="datePublished" datetime="2017-08-16T10:50:46+00:00">16 AUG 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/maintenance-windows-support-for-new-task-types-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>In <a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager</a>, the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-maintenance.html">Maintenance Windows</a> service allows you to define a set of tasks, along with the instances where those tasks should be run and a run schedule. In this post, I talk about a new feature for Maintenance Windows—support for New Task types.</p> 
+<p>Maintenance Windows now supports Systems Manager Automation documents, AWS Step Functions tasks, and AWS Lambda functions as tasks, including support for Parameter Store (when using Step Functions and Lambda).&nbsp;This allows you to perform complex workflows on your instances, such as patching a server running SQL Server using an Automation document.</p> 
+<p>In this post, I show you the steps for executing this example and walk through the required configuration steps one-by-one.</p> 
+<p><span id="more-1127"></span></p> 
+<h4>Walkthrough</h4> 
+<p>In this walkthrough, you learn how to create a maintenance window with an Automation task type. This task stops an instance, creates snapshots of attached EBS volumes using a Lambda function, restarts the instance, checks for missing Windows updates using another Lambda function, and installs the missing updates. The walkthrough includes the following steps:</p> 
+<ul> 
+<li>Set up IAM users and roles.</li> 
+<li>Create Lambda functions.</li> 
+<li>Create an Automation document.</li> 
+<li>Create an EC2 instance.</li> 
+<li>Create a maintenance window.</li> 
+<li>Register an Automation task with the maintenance window.</li> 
+</ul> 
+<h4>Set up IAM users and roles</h4> 
+<p>Because maintenance windows run on a schedule without a user taking specific actions, you need to create a role that grants the maintenance window the appropriate permissions to run the Automation document you’re creating. Similarly, a role needs to be created for the Automation document that grants the permissions to perform the actions in the document. Finally, create a role for the Lambda function so the function can take EBS snapshots.</p> 
+<ol> 
+<li>Create a user with Systems Manager full access as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-access-user">Create a User Account for Systems Manager</a>.</li> 
+<li>Create an instance role for Systems Manager as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-configuring-access-role">Create a Role for Systems Manager Managed Instances</a>.</li> 
+<li>Create a role for Systems Manager Automation to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-role">Create an IAM Role for Automation</a> and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-trust2">Add a Trust Relationship for Automation</a>.</li> 
+<li>Create a role for the Systems Manager to allow Lambda functions to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-simpatch.html#automation-pet2">Create an IAM Role for AWS Lambda</a> 
+<ul> 
+<li>Attach a policy: <strong>AmazonEC2FullAccess.</strong></li> 
+<li>Add a <strong>lambda.amazonaws.com</strong> trust relationship (similar to what was done in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-trust2">Add a Trust Relationship for Automation</a> but replacing ssm.amazonaws.com with lambda.amazonaws.com).</li> 
+</ul> </li> 
+<li>Create a role for the Systems Manager maintenance window to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-permissions.html#sysman-maintenance-perm-console">Controlling Access to Maintenance Windows Using the AWS Console</a>. 
+<ul> 
+<li>Attach the iam:PassRole policy to this role for passing the Automation role created earlier (similar to what was defined for the Automation role in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-passpolicy">Attach the iam:PassRole Policy</a>).</li> 
+</ul> </li> 
+</ol> 
+<h4>Create Lambda functions</h4> 
+<p>Create two Lambda functions:</p> 
+<ul> 
+<li>One to initiate the creation of an EBS snapshot.</li> 
+<li>One to check the status of the snapshot creation so you can wait for the snapshot to be created.</li> 
+</ul> 
+<p>Here are the steps to create these functions.</p> 
+<ol> 
+<li>Open the AWS Lambda console at <a href="https://console.aws.amazon.com/lambda/">https://console.aws.amazon.com/lambda/</a>.</li> 
+<li>Choose <strong>Create a Lambda function</strong>.</li> 
+<li>On the <strong>Select blueprint</strong> page, choose <strong>Author from scratch</strong>.</li> 
+<li>On the <strong>Configure triggers</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Configure function</strong> page, for Name, type SSM-Automation-CreateSnapshots, and type an optional description.</li> 
+<li>For <strong>Runtime</strong>, choose <strong>Python 2.7</strong>.</li> 
+<li>In the <strong>Lambda function code</strong> section, delete the pre-populated code and paste the code in Table 1.</li> 
+<li>In the <strong>Lambda function handler and role</strong> section, for <strong>Role</strong>, choose the service role for Lambda that you created earlier.</li> 
+<li>Choose <strong>Next</strong>, <strong>Create function</strong>.</li> 
+</ol> 
+<p>Table 1.</p> 
+<pre><code class="lang-python">from __future__ import print_function
+import json
+import boto3
+print('Loading function')
+#Expects instanceIds
+def lambda_handler(event, context):
+print(&quot;Received event: &quot; + json.dumps(event, indent=2))
+# get EC2 client
+ec2 = boto3.client('ec2')
+# find volumes for given instances
+response = ec2.describe_volumes(
+Filters=[
+{
+'Name': 'attachment.instance-id',
+'Values': [ event['instanceIds'] ],
+},
+]
+)
+# hold list of snapshot ids
+snapshotIdList = []
+# create snapshot of each volume id
+for ids in response['Volumes']:
+print('Creating snapshot for volumeId : %s' % ids['VolumeId'])
+# create snapshot
+response = ec2.create_snapshot(
+Description='New snapshot for test',
+VolumeId=ids['VolumeId'],
+DryRun=False
+)
+print('Created snapshotId : %s' % response['SnapshotId'])
+# add snapshot id to be returned
+snapshotIdList.append(response['SnapshotId'])
+returnString = &quot;,&quot;.join(str(id) for id in snapshotIdList)
+return returnString</code></pre> 
+<ol> 
+<li>Repeat steps 1–4 from the first Lambda function.</li> 
+<li>On the <strong>Configure function</strong> page, for <strong>Name</strong>, type SSM-Automation-CheckSnapshots and type an optional description.</li> 
+<li>For <strong>Runtime</strong>, choose <strong>Python 2.7</strong>.</li> 
+<li>In the <strong>Lambda function code</strong> section, delete the pre-populated code and paste the code in Table 2.</li> 
+<li>In the <strong>Lambda function handler and role</strong> section, for <strong>Role</strong>, choose the service role for Lambda that you created earlier.</li> 
+<li>Choose <strong>Next</strong>, <strong>Create function</strong>.</li> 
+</ol> 
+<p>Table 2.<code class="lang-python"><br /> </code></p> 
+<pre><code class="lang-python">from __future__ import print_function
+import json
+import boto3
+print('Loading function')
+#Expects snapshotIds
+def lambda_handler(event, context):
+print(&quot;Received event: &quot; + json.dumps(event, indent=2))
+# get EC2 client
+ec2 = boto3.client('ec2')
+# get the snapshotIds passed
+snapshotIds = event['snapshotIds'].split(',')
+# check the state of each snapshot
+for id in snapshotIds:
+response = ec2.describe_snapshots(
+SnapshotIds=[
+id,
+],
+DryRun=False
+)
+# if the state is not completed then it can't continue, so throw an error
+for state in response['Snapshots']:
+print('SnapshotId ' + id + ' in state : %s' % state['State'])
+if state['State'] != 'completed':
+errorString = 'Unable to proceed, snapshot in ' + state['State'] + ' state for: ' + id
+raise Exception(errorString)
+return &quot;Snapshots completed.&quot;</code></pre> 
+<h4>Create an Automation document</h4> 
+<p>An Automation document allows you to create your own custom workflow using a series of steps. Automation has several predefined actions that when stitched together can create complex and robust workflows.</p> 
+<p>In this example, you use a few of these actions to build a custom workflow, such as <strong>aws:changeInstanceState</strong>, <strong>aws:invokeLambdaFunction</strong>, <strong>aws:sleep</strong> and <strong>aws:runCommand</strong>.&nbsp; The steps in this Automation document perform the following actions:</p> 
+<ul> 
+<li>Stop an EC2 instance</li> 
+<li>Initiate the creation of volume snapshots with a Lambda function</li> 
+<li>Wait a specified time while the snapshots are created</li> 
+<li>Use another Lambda function to check if the snapshots have been successfully created</li> 
+<li>Restart the EC2 instance</li> 
+<li>Use a Run Command document to install updates on to the EC2 instance.</li> 
+</ul> 
+<p>Here are the steps to create the document.</p> 
+<ol> 
+<li>Open the Amazon EC2 console at https://console.aws.amazon.com/ec2/v2/home.</li> 
+<li>In the navigation pane, choose <strong>Documents</strong>, <strong>Create Document</strong>.</li> 
+<li>For <strong>Name</strong>, type CreateVolumeSnapshots.</li> 
+<li>For <strong>Document Type</strong>, choose <strong>Automation</strong>.</li> 
+<li>Delete the brackets in the <strong>Content</strong> box, and then paste the following JSON document.</li> 
+<li>Choose <strong>Create Document</strong>.</li> 
+</ol> 
+<pre><code class="lang-json">{
+&quot;schemaVersion&quot;:&quot;0.3&quot;,
+&quot;description&quot;:&quot;Create EBS snapshots and update a Windows instance.&quot;,
+&quot;assumeRole&quot;:&quot;{{AutomationAssumeRole}}&quot;,
+&quot;parameters&quot;:{
+&quot;instanceId&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) Id of the instance&quot;
+},
+&quot;AutomationAssumeRole&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) Role under which to execute this automation.&quot;
+},
+&quot;SnapshotTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) Timeout for checking for snapshot completion.&quot;,
+&quot;default&quot;: &quot;PT20M&quot;
+}
+},
+&quot;mainSteps&quot;:[
+{
+&quot;name&quot;:&quot;stopInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:1,
+&quot;timeoutSeconds&quot;:300,
+&quot;onFailure&quot;:&quot;Abort&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[
+&quot;{{ instanceId }}&quot;
+],
+&quot;DesiredState&quot;:&quot;stopped&quot;
+}
+},
+{
+&quot;name&quot;:&quot;createVolumeSnapshots&quot;,
+&quot;action&quot;:&quot;aws:invokeLambdaFunction&quot;,
+&quot;timeoutSeconds&quot;:120,
+&quot;maxAttempts&quot;:1,
+&quot;onFailure&quot;:&quot;Abort&quot;,
+&quot;inputs&quot;:{
+&quot;FunctionName&quot;:&quot;Automation-CreateSnapshots&quot;,
+&quot;Payload&quot;:&quot;{\&quot;instanceIds\&quot;:\&quot;{{instanceId}}\&quot;}&quot;
+}
+},
+{
+&quot;name&quot;:&quot;waitForSnapshotsToCreate&quot;,
+&quot;action&quot;:&quot;aws:sleep&quot;,
+&quot;inputs&quot;:{
+&quot;Duration&quot;:&quot;{{ SnapshotTimeout }}&quot;
+}
+},
+{
+&quot;name&quot;:&quot;checkVolumeSnapshots&quot;,
+&quot;action&quot;:&quot;aws:invokeLambdaFunction&quot;,
+&quot;timeoutSeconds&quot;:120,
+&quot;maxAttempts&quot;:1,
+&quot;onFailure&quot;:&quot;Abort&quot;,
+&quot;inputs&quot;:{
+&quot;FunctionName&quot;:&quot;Automation-CheckSnapshots&quot;,
+&quot;Payload&quot;:&quot;{\&quot;snapshotIds\&quot;:\&quot;{{createVolumeSnapshots.Payload}}\&quot;}&quot;
+}
+},
+{
+&quot;name&quot;:&quot;startInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:1,
+&quot;timeoutSeconds&quot;:600,
+&quot;onFailure&quot;:&quot;Abort&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[
+&quot;{{ instanceId }}&quot;
+],
+&quot;DesiredState&quot;:&quot;running&quot;
+}
+},
+{
+&quot;name&quot;:&quot;installMissingWindowsUpdates&quot;,
+&quot;action&quot;:&quot;aws:runCommand&quot;,
+&quot;maxAttempts&quot;:1,
+&quot;timeoutSeconds&quot;:14400,
+&quot;onFailure&quot;:&quot;Continue&quot;,
+&quot;inputs&quot;:{
+&quot;DocumentName&quot;:&quot;AWS-InstallWindowsUpdates&quot;,
+&quot;InstanceIds&quot;:[
+&quot;{{ instanceId }}&quot;
+],
+&quot;Parameters&quot;:{}
+}
+}
+]
+}</code></pre> 
+<h4>Create an EC2 instance</h4> 
+<p>To try out the Automation document, you need to have an instance running and managed by Systems Manager.&nbsp; For this example, use a Windows instance.</p> 
+<p>Create an EC2 instance that uses the Systems Manager instance role created earlier. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-create-instance-with-role">Create an Amazon EC2 Instance that Uses the Systems Manager Role</a>.</p> 
+<h4>Create a maintenance window</h4> 
+<p>Maintenance Windows let customers set up recurring schedules to perform defined actions on their instances.&nbsp; Each maintenance window has a schedule, duration, set of registered targets, and set of registered tasks to be performed against the targets. In this example, you create a maintenance window so it can be the initiator of the Automation task created earlier.</p> 
+<p>Create a maintenance window and assign the new instance as a target. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-console.html">Maintenance Window Console Walkthrough</a>.</p> 
+<h4>Register an Automation task with the maintenance window</h4> 
+<p>With the maintenance window created, you can now register an Automation task to run the Automation document and pass it the necessary parameters.</p> 
+<ol> 
+<li>Open the Amazon EC2 console at <a href="https://console.aws.amazon.com/ec2/v2/home">https://console.aws.amazon.com/ec2/v2/home</a>.</li> 
+<li>In the navigation pane, choose <strong>Maintenance Windows</strong> and select the new maintenance window. Enter the following values: 
+<ul> 
+<li>For <strong>Actions</strong>, choose <strong>Register automation task</strong>.</li> 
+<li>For <strong>Document</strong>, choose the CreateVolumeSnapshots document.</li> 
+<li>For <strong>Task Priority</strong>, specify a priority for this task. 1 is the highest priority. Tasks in a maintenance window are scheduled in priority order with tasks that have the same priority scheduled in parallel.</li> 
+<li>In the <strong>Target by</strong> section, choose <strong>Selecting registered target groups</strong> and select the target that you created earlier.</li> 
+<li>In the <strong>Parameters</strong> section, for <strong>Execute</strong> <strong>on</strong>, specify 1. For <strong>Stop after</strong>, specify 1.</li> 
+<li>For <strong>Role</strong>, specify the maintenance window role ARN created earlier.</li> 
+<li>In the <strong>Input Parameters</strong> section, for <strong>AutomationAssumeRole</strong>, specify the Automation role ARN. Enter a timeout for waiting for the snapshots to complete. For InstanceId, type the instance ID of the instance created earlier.</li> 
+</ul> </li> 
+<li>Choose <strong>Register automation task</strong>.</li> 
+</ol> 
+<p>Most of the steps for registering a task in the AWS Management Console can be executed using AWS CLI commands instead.&nbsp; Furthermore, these steps could as easily be executed using the AWS SDK with Java, SDK for Python (Boto), or any of the other languages supported. This gives you many options when working with an AWS service. The following code examples use the AWS CLI for creating a maintenance window, registering a target with that maintenance window, and registering an Automation task using the Automation document created earlier.</p> 
+<ol> 
+<li>If needed, follow the steps to get started on creating a maintenance window with the AWS CLI in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-cli.html">Maintenance Window CLI Walkthrough</a>.</li> 
+<li>Run the following CLI command and find the WindowId value for the maintenance window created earlier.<br /> <strong><em>aws ssm describe-maintenance-windows</em></strong><br /> This command returns the following, noting that the values for WindowId, name, description, and other fields below are fictional examples:<p></p> <pre><code class="lang-json">{
+&quot;WindowIdentities&quot;: [
+{
+&quot;WindowId&quot;: &quot;mw-abc1234e3ddc9e286&quot;,
+&quot;Name&quot;: &quot;MW1&quot;,
+&quot;Description&quot;: &quot;MW1 description&quot;,
+&quot;Enabled&quot;: true,
+&quot;Duration&quot;: 2,
+&quot;Cutoff&quot;: 1
+}
+]
+}</code></pre> </li> 
+<li>Run the following CLI command and find the WindowTargetId value for the instance that was assigned when you created the maintenance window.</li> 
+</ol> 
+<p><em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>aws ssm describe-maintenance-window-targets –window-id “mw-abc1234e3ddc9e286”</strong> </em></p> 
+<p>This command returns the following:</p> 
+<pre><code class="lang-json">{
+&quot;Targets&quot;: [
+{
+&quot;WindowId&quot;: &quot;mw-abc1234e3ddc9e286&quot;,
+&quot;WindowTargetId&quot;: &quot;2ecce06f-130c-41a3-870c-d36deff6cbba&quot;,
+&quot;ResourceType&quot;: &quot;INSTANCE&quot;,
+&quot;Targets&quot;: [
+{
+&quot;Key&quot;: &quot;InstanceIds&quot;,
+&quot;Values&quot;: [
+&quot;i-000a0a0ca4caf9861&quot;
+]
+}
+],
+&quot;OwnerInformation&quot;: &quot;test&quot;,
+&quot;Name&quot;: &quot;test&quot;,
+&quot;Description&quot;: &quot;test description&quot;
+}
+]
+}</code></pre> 
+<p>4. Run the following CLI command to register the Automation task to the maintenance window.<code class="lang-json"><br /> </code></p> 
+<p><strong><em>aws ssm register-task-with-maintenance-window –window-id “mw-abc1234e3ddc9e286” –targets “Key=WindowTargetIds,Values=2ecce06f-130c-41a3-870c-d36deff6cbba” –task-arn “CreateVolumeSnapshots” –service-role-arn “arn:aws:iam::111111111111:role/MaintenanceWindowRole” –task-type “AUTOMATION” –task-invocation-parameters “Automation={Parameters={instanceId=i-000a0a0ca4caf9861,AutomationAssumeRole=arn:aws:iam::111111111111:role/AutomationRole,SnapshotTimeout=PT20M}}” –priority 1 –max-concurrency 1 –max-errors 1 –name “Automation_Task1” –description “Automation_Task1 description”</em></strong></p> 
+<p>This command returns the following:</p> 
+<pre><code class="lang-json">{
+&quot;WindowTaskId&quot;: &quot;563e10e1-7b9c-4285-8c0c-cb94912b2839&quot;
+}</code></pre> 
+<h4>View the maintenance window execution</h4> 
+<p>A maintenance window is executed based on the schedule that was specified.&nbsp; After the maintenance window execution, results can be viewed in the History tab on the selected maintenance window landing page.</p> 
+<h4>Conclusion</h4> 
+<p>In this post, I showed you how to use the newly launched task types in Maintenance Windows to schedule and automate the execution of many common systems administration tasks. Using the maintenance window, you can now create different types of tasks, run your tasks when needed on specified targets, and get notified about any problems running these tasks. This helps you get the status on scheduled tasks, with details of the errors, enabling you to take appropriate action.</p> 
+<hr /> 
+<h4>About the Authors</h4> 
+<p><img class="size-full wp-image-1146 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/16/Profile-pic.jpeg" alt="" width="120" height="120" />Lavanya Krishnan is a Technical Product Manager in the EC2 Systems Manager team responsible for Patch Manager and Maintenance Window capabilities. Lavanya is passionate about building Enterprise and Cloud Products and Services. When not working, she loves to spend time with family, travel, read books and play board games.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p><img class="size-full wp-image-1149 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/16/Tracy.jpeg" alt="" width="119" height="160" />Tracy Williams is a Software Development Manager in the EC2 Systems Manager team and is responsible for Maintenance Window Capabilities. In his free time Tracy enjoys hiking, movies and sports cars.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Improving Security through Delegated Administration with Amazon EC2 Systems Manager Automation</b> 
 <footer class="meta">
 by 
@@ -1490,307 +2115,6 @@ aws cloudformation create-stack --stack-name <span style="color: #ff0000">&lt;st
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Windows AMI Patching and Maintenance with Amazon EC2 Systems Manager</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
-<time property="datePublished" datetime="2017-07-19T16:47:01+00:00">19 JUL 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/windows-ami-patching-and-maintenance-with-amazon-ec2-systems-manager-2/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>The <a href="https://aws.amazon.com/ec2/systems-manager/automation/"><strong>Automation</strong> </a>service, which is part of <strong><a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a></strong>, helps you save time and the effort associated with routine management operations. Automation workflows are streamlined, repeatable, and auditable. For example, you can easily automate manual tasks such as golden image creation, baking applications into Amazon Machine Images (AMIs), or patching and updating agents.</p> 
-<p>In a recent post on the AWS Blog (<a href="https://aws.amazon.com/blogs/aws/streamline-ami-maintenance-and-patching-using-amazon-ec2-systems-manager-automation/">Streamline AMI Maintenance and Patching Using Amazon EC2 Systems Manager</a>), AWS announced the availability of the first public Document for Automation: AWS-UpdateLinuxAmi. This Document streamlines patching for Linux AMIs, allowing you to get started quickly with a predefined Automation workflow managed by AWS.</p> 
-<p>Today, AWS announces the updated availability of the Windows equivalent: <strong>AWS-UpdateWindowsAmi.</strong> The AWS-UpdateWindowsAmi Document is a great fit for building a hardened AMI from the monthly Windows AMI release, applying Windows patches and AWS agent updates to your proprietary Windows AMI, or baking applications into a golden Windows AMI as part of your CI/CD pipeline. You can also use your custom AMIs as a source for images that meet organizational IT policies.&nbsp;Documents help centrally create, manage, and share code for IT Ops and the management tasks that Systems Manager can perform on your managed infrastructure.</p> 
-<p><span id="more-823"></span></p> 
-<p><strong>The AWS-UpdateWindowsAmi Document automates the following workflow:</strong></p> 
-<ol> 
-<li>Launch a temporary EC2 instance from a source Windows AMI.</li> 
-<li>Perform Operating System compatibility checks.</li> 
-<li>(Optional) Invoke a user-provided, pre-update hook script.</li> 
-<li>Update EC2Config or EC2Launch (determined by the version of Windows launched in step 1).</li> 
-<li>Update the SSM Agent.</li> 
-<li>Update the AWS PV driver.</li> 
-<li>Install Windows updates.</li> 
-<li>(Optional) Invoke a user-provided, pre-update hook script on the instance.</li> 
-<li>Run Sysprep /generalize.</li> 
-<li>Stop the temporary instance.</li> 
-<li>Create a new AMI from the stopped instance.</li> 
-<li>Terminate the instance.</li> 
-</ol> 
-<h3>Prerequisites</h3> 
-<p>If you haven’t used Automation before, you must configure IAM roles and permissions. This <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ami-cf.html">CloudFormation template</a> completes the required prerequisite actions. After logging on to your AWS account, choose <strong>Launch Stack</strong>. The template:</p> 
-<ul> 
-<li>Creates a service role for Automation.</li> 
-<li>Grants PassRole permission to authorize a user to provide the service role.</li> 
-<li>Creates an instance role to enable instance management under Systems Manager.</li> 
-</ul> 
-<h3>Executing Automation</h3> 
-<p>1. In the EC2 console, choose Systems Manager, Automations.</p> 
-<p><img class="alignnone wp-image-841 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/EC2SSMAutomation-1.png" alt="" width="2294" height="1200" /></p> 
-<p>2. Choose <strong>Run automation document</strong>.</p> 
-<p>3. Under <strong>Document name</strong>, choose <strong>AWS-UpdateWindowsAmi</strong>. Use the $DEFAULT document version.</p> 
-<p><img class="alignnone wp-image-837 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/2.png" alt="" width="1877" height="514" /></p> 
-<p>4. For the SourceAmiId variable, enter the ID of the Windows AMI to update. This is the only required field. The InstanceIamRole and AutomationAssumeRole variables are assigned default values that match the resource IDs generated by the CloudFormation template executed earlier.</p> 
-<p><img class="alignnone wp-image-838 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/3-1.png" alt="" width="1741" height="860" /></p> 
-<p>Optionally, specify values for the following (descriptions for each variable are listed in the console):</p> 
-<ul> 
-<li>Target AMI name</li> 
-<li>Instance type</li> 
-<li>KBs to include or exclude</li> 
-<li>Update categories (Critical Update, Security Update)</li> 
-<li>Severity levels (MSRC level such as Critical, Important, Low)</li> 
-<li>Any pre– or post-update scripts to run</li> 
-</ul> 
-<p>5. Choose <strong>Run Automation</strong>.</p> 
-<p>6. Monitor progress in the Automation Steps tab, and view the step-level outputs.</p> 
-<p><img class="alignnone wp-image-829 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/4.png" alt="" width="1892" height="838" /></p> 
-<p>After execution is complete, you can view any outputs returned by the workflow in the <strong>Description</strong> tab. In this example, <strong>AWS-UpdateWindowsAmi</strong> returns the new AMI ID and is tagged with your source AMI ID.</p> 
-<p>Next, choose <strong>Images, AMIs</strong> to view your new AMI.</p> 
-<p><img class="alignnone wp-image-830 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/5.png" alt="" width="1898" height="856" /></p> 
-<p>There is no additional charge to use the Automation service, and any resources created by a workflow incur published usage charges. If you terminate AWS-UpdateWindowsAmi before reaching the “Terminate Instance” step, you should shut down the temporary instance created by the workflow.</p> 
-<h3>Conclusion</h3> 
-<p>Now that you’ve successfully run <strong>AWS-UpdateWindowsAmi</strong>, you may want to create default values for the service and instance roles. You can customize your workflow by creating your own Automation Document based on AWS-UpdateWindowsAmi. For more details, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sysman-ami-createdoc.html">Create an Automation Document</a>. After you’ve created your Document, you can write additional steps and add them to the workflow.</p> 
-<p>Example steps include:<br /> • Updating an Auto Scaling group with the new AMI ID (aws:invokeLambdaFunction action type)<br /> • Creating an encrypted copy of your new AMI (aws:encryptedCopy action type)<br /> • Validating your new AMI using Run Command with the RunPowerShellScript Document (aws:runCommand action type)<br /> Automation also makes a great addition to a CI/CD pipeline for application bake-in, and can be invoked as a CLI build step in Jenkins. For details on these examples, see the <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/systems-manager-ami.html">Systems Manager Automation</a> technical documentation. Be sure to follow the <a href="https://aws.amazon.com/blogs/mt/">Management Tools blog</a> for additional deep dives on maintaining Windows AMIs using <strong>AWS-UpdateWindowsAmi.</strong></p> 
-<p><strong>About the author</strong></p> 
-<p><strong><img class="size-full wp-image-831 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/KRVenkt.jpg" alt="" width="119" height="160" /></strong><a href="https://www.linkedin.com/in/venkatkr/">Venkat Krishnamachari</a> is a Product Manager in the Amazon EC2 Systems Manager team. Venkat is excited by the opportunities presented by cloud computing, and loves helping customers realize the value of efficient infrastructure and management. In his personal time Venkat volunteers with NGOs and loves producing live theater and music shows.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-codedeploy/" rel="tag">AWS CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/documents/" rel="tag">Documents</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-complaince/" rel="tag">Patch Complaince</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-manager/" rel="tag">Patch Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Amazon EC2 Systems Manager Documents: Support for Cross-platform Documents and Multiple Steps of the Same Type</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-07-18T12:21:11+00:00">18 JUL 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-documents-support-for-cross-platform-documents-and-multiple-steps-of-the-same-type/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p><em>This post was written by Babul Mehta, Software Development Engineer with Amazon Web Services.</em></p> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager</a> documents define the actions that Systems Manager services perform on your managed instances. <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">Documents</a> are essentially a series of steps executed in sequence, and can be versioned and shared across accounts (and even publicly). Systems Manager includes many pre-configured documents that you can use by specifying parameters at runtime. In addition to these pre-configured public documents, you can create your own documents to perform actions relevant to your needs.</p> 
-<p>With the launch of cross-platform support and the ability to have multiple steps of the same type in a document, some of the existing pain points are eliminated and you can build rich documents to perform cross-platform actions. In this post, I show you how to use these new features while creating documents and executing them via <a href="https://aws.amazon.com/ec2/systems-manager/run-command/">Run Command</a> and <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">State Manager</a>.</p> 
-<p><span id="more-800"></span></p> 
-<h3>Cross-platform document support</h3> 
-<p>For each step in a document, you can now set preconditions that let you specify whether a step can target Windows or Linux instances. Previously, you could not add Windows-only compatible and Linux-only compatible steps in a single document. You had to create multiple, duplicate documents. With cross-platform support, this restriction is removed. I walk through an example to demonstrate this. Preconditions are supported from document schema version 2.2, which is the latest version recommended for new documents.</p> 
-<h4>Precondition</h4> 
-<p>You can now specify an option precondition for each step. The step is executed if the precondition is met, else it is skipped. For example:</p> 
-<pre><code class="lang-json">{
-&quot;action&quot;:&quot;aws:runPowerShellScript&quot;,
-&quot;precondition&quot;: {
-&quot;StringEquals&quot;: [&quot;platformType&quot;, &quot;Windows&quot;]
-},
-&quot;name&quot;:&quot;runPowerShellScript&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;:[&quot;hostname&quot;]
-}
-}
-</code></pre> 
-<p>Here, the runPowerShellScript step is executed only on Windows instances. On Linux instances, this step is skipped.</p> 
-<p>To use cross-platform functionality, your instances must be running Systems Manager (SSM) Agent version 2.0.834.0 or later.</p> 
-<p>Another good example of cross-platform document is the AWS-RunPatchBaseline public document. It scans or installs patches from a patch baseline to a Linux or Windows operating system. For more information, see <a href="https://aws.amazon.com/blogs/aws/amazon-ec2-systems-manager-patch-manager-now-supports-linux/">Amazon EC2 Systems Manager Patch Manager now supports Linux</a>.</p> 
-<p>Here’s another example where you can create a custom document that lists open ports on Windows and Linux managed instances. The document contains two steps: &nbsp;one runs a PowerShell command and another a Shell command. They have preconditions with platformType equaling Windows and Linux respectively, so that the same document can be targeted against both platforms. Only the compatible step is executed, while the non-compatible step is skipped.</p> 
-<h4>Step 1: Create a cross-platform document</h4> 
-<p>Store the following JSON in a local file:</p> 
-<pre><code class="lang-json">{
-&quot;schemaVersion&quot;:&quot;2.2&quot;,
-&quot;description&quot;:&quot;Cross-platform demo document&quot;,
-&quot;mainSteps&quot;: [
-{
-&quot;action&quot;:&quot;aws:runPowerShellScript&quot;,
-&quot;precondition&quot;: {
-&quot;StringEquals&quot;: [&quot;platformType&quot;, &quot;Windows&quot;]
-},
-&quot;name&quot;:&quot;WindowsOpenPorts&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;: [&quot;netstat -a&quot;]
-}
-},
-{
-&quot;action&quot;:&quot;aws:runShellScript&quot;,
-&quot;precondition&quot;: {
-&quot;StringEquals&quot;: [&quot;platformType&quot;, &quot;Linux&quot;]
-},
-&quot;name&quot;:&quot;LinuxOpenPorts&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;: [&quot;netstat -lntu&quot;]
-}
-}
-]
-}
-</code></pre> 
-<p>To create the document, call the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-document.html">CreateDocument</a> API operation:</p> 
-<pre><code class="lang-bash">aws ssm create-document --name CrossPlatformDemo --content file://cross-platform_demo.json --document-type Command</code></pre> 
-<p>You can execute the preceding document using Systems Manager Run Command or State Manager. This post demonstrates both.</p> 
-<h4>Step 2: Execute cross-platform document via Run Command</h4> 
-<p>First, execute the CrossPlatformDemo document via the Send Command API. You are executing the command against two instances: &nbsp;Windows and Linux. You can do the same via tags as well.</p> 
-<pre><code class="lang-bash">aws ssm send-command --document-name &quot;CrossPlatformDemo&quot; --instance-ids &quot;i-09d19a0a297ad4c56&quot; &quot;i-07091332b7f4c71f2&quot;</code></pre> 
-<p>You can view the results via AWS CLI or console. Here is the console output:</p> 
-<p><img class="alignnone size-full wp-image-804" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_consoleoutput.png" alt="" width="1820" height="894" /></p> 
-<p><img class="alignnone size-full wp-image-806" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_OuptutLinuxports.png" alt="" width="1458" height="714" /></p> 
-<p><img class="alignnone size-full wp-image-808" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_windowsportoutput.png" alt="" width="1404" height="178" /></p> 
-<p>The preceding screenshots are the results from the Linux instance. You can see that the LinuxOpenPorts step got executed and returned valid results, while the WindowsOpenPorts step was skipped because the precondition was not satisfied on the Linux instance.</p> 
-<h4>Step 3: &nbsp;Execute the cross-platform document via State Manager</h4> 
-<p>Now, execute the same document via State Manager by <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-association.html">creating an association</a>. An association is a binding of the intent (described in the document) to a target specified by either a list of instance IDs or a tag query.</p> 
-<p>Use the following command to create an association using a tag query. The document name is from the previous step: “CrossPlatformDemo”.</p> 
-<pre><code class="lang-bash">aws ssm create-association --name CrossPlatformDemo --targets &quot;Key=tag:Scenario,Values=Demo&quot; --schedule-expression &quot;cron(0 0/30 * 1/1 * ? *)&quot;</code></pre> 
-<p>After you create an association, you can view the details using either the CLI or the console. You can easily drill down and find out which instances were targeted as part of this State Manager association, and their status.</p> 
-<p><img class="alignnone size-full wp-image-809" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/SM_mainpage.png" alt="" width="1536" height="956" /></p> 
-<h3>Multiple steps of the same type</h3> 
-<p>Previously, Systems Manager did not support having the same step or plugin multiple times within a document. This made it cumbersome to separate out logical steps, such as pre- and post-scripts in a configuration.</p> 
-<p>With this addition, you can perform more powerful configurations using Systems Manager. For example, you can use RunShellScript to install different applications. It is more organized if you have different steps for each application, instead of forcing everything in one step.</p> 
-<p>In the following example, you install SSMAgent and Apache HTTP Server in two separate steps. They both run the RunShellScript plugin.</p> 
-<h4>Step 1: &nbsp;Create a document with multiple steps of the same type</h4> 
-<p>Store the following JSON in a local file:</p> 
-<pre><code class="lang-json">{
-&quot;schemaVersion&quot;:&quot;2.0&quot;,
-&quot;description&quot;:&quot;Multiple steps of same type demo document&quot;,
-&quot;mainSteps&quot;: [
-{
-&quot;action&quot;:&quot;aws:runShellScript&quot;,
-&quot;name&quot;:&quot;installSSMAgent&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;:[
-&quot;sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm&quot;,
-&quot;sudo start amazon-ssm-agent&quot;,
-&quot;sudo status amazon-ssm-agent&quot;
-]
-}
-},
-{
-&quot;action&quot;:&quot;aws:runShellScript&quot;,
-&quot;name&quot;:&quot;installApache&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;:[
-&quot;sudo yum install -y httpd24&quot;
-]
-}
-}
-]
-}</code></pre> 
-<p>To create the document, call the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-document.html">CreateDocument</a> API operation:</p> 
-<pre><code class="lang-bash">aws ssm create-document --name MultipleStepsDemo --content file://multiple-steps_demo.json --document-type Command</code></pre> 
-<p>Again, you can execute this document via Systems Manager Run Command or State Manager. For this scenario, execute it via Run Command only.</p> 
-<h4>Step 2: Execute the multiple-steps document via Run Command</h4> 
-<p>The following command executes the MultipleStepsDemo document against one instance. You can do the same via tags as well.</p> 
-<pre><code class="lang-bash">aws ssm send-command --document-name &quot;MultipleStepsDemo&quot; --instance-ids &quot;i-09d19a0a297ad4c56&quot;</code></pre> 
-<p>You can view the results via CLI or console. Here’s the output from the console.</p> 
-<p><img class="alignnone size-full wp-image-803" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_console_multiplesteps.png" alt="" width="1848" height="896" /></p> 
-<p><img class="alignnone size-full wp-image-805" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_istallapache_output.png" alt="" width="1454" height="984" /></p> 
-<p><img class="alignnone size-full wp-image-807" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/RC_outputinstallssmagent.png" alt="" width="1436" height="1022" /></p> 
-<h3>Conclusion</h3> 
-<p>In this post, I showed you how to use the newly launched Systems Manager document features to create cross-platform documents, and have multiple steps of same type within a document. These features eliminate the current pain point of maintaining a duplicate set of documents for different platforms. They also open up more possibilities to create rich documents that you can use with Systems Manager to manage and configure your EC2 instance fleet.</p> 
-<hr /> 
-<h3>About the Author</h3> 
-<p><img class="size-full wp-image-810 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/18/babul.jpg" alt="" width="119" height="160" />Babul Mehta is a Software Development Engineer in the Amazon EC2 Systems Manager team. Outside of work, he loves to watch cricket and American football and he is a big fan of the Indian cricket team and the Seahawks.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/documents/" rel="tag">Documents</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">How to track configuration changes to CloudFormation stacks using AWS Config</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Shashi Prabhakar</span></span> and 
-<span property="author" typeof="Person"><span property="name">Sid Gupta</span></span> | on 
-<time property="datePublished" datetime="2017-07-18T11:02:01+00:00">18 JUL 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config"><span property="articleSection">AWS Config</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/how-to-track-configuration-changes-to-cloudformation-stacks-using-aws-config/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Recently, <a href="https://aws.amazon.com/config/">AWS Config</a> announced support for <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> stacks. You can now start tracking the current and historical configuration of your CloudFormation stacks, and get notified via <a href="https://aws.amazon.com/sns">Amazon SNS</a> when your stack configuration changes. You can also use a managed AWS Config rule to check whether your CloudFormation stacks are sending event notifications to an SNS topic.</p> 
-<p>Tracking configuration changes to a CloudFormation stack is valuable from a governance perspective. It tells you how and when a stack got modified. Use this information to troubleshoot operational issues and outages, and maintain audit compliance.</p> 
-<p>In this post, I describe two possible use cases, tracking stack changes and evaluating compliance, and walk you through each scenario.</p> 
-<p><span id="more-757"></span></p> 
-<h3>AWS services</h3> 
-<p>AWS Config enables you to assess, audit, and evaluate the configurations of your AWS resources. It continuously monitors and records your AWS resource configurations and allows you to automate the evaluation of recorded configurations against desired configurations. With AWS Config, you can review changes in configurations and relationships between AWS resources, dive into detailed resource configuration histories, and determine your overall compliance against the configurations specified in your internal guidelines.</p> 
-<p>CloudFormation gives developers and systems administrators an easy way to create and manage a collection of related AWS resources, provisioning and updating them in an orderly and predictable fashion. CloudFormation standardizes the manner in which resources get deployed into your environments and simplifies the management of cloud resources. You can create your own templates to describe the AWS resources, and any associated dependencies or runtime parameters, required to run your application. You can deploy and update a template and its associated collection of resources (called a stack) by using the AWS Management Console, AWS CLI, or APIs.</p> 
-<h3>Example: Track stack configuration changes</h3> 
-<p>When you create a stack, all update actions are allowed on all resources. By default, anyone with stack update permissions can update all of the resources in the stack.</p> 
-<p>With a stack policy, you can prevent <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html">stack resources</a> from being unintentionally updated or deleted during a stack update. A stack policy is a JSON document that defines the update actions that can be performed on designated resources. Use a stack policy only as a fail-safe mechanism to prevent accidental updates to specific stack resources.</p> 
-<p>Consider a scenario where Bob, a cloud administrator, provisions a stack that creates a secure VPC for a public-facing application that includes subnets, NAT gateways, route tables, and custom network ACL rules. The security of this stack and its underlying resources is critical since it contains the essential building blocks for creating applications and any changes to this VPC, subnets, route tables etc. could potentially impact all applications hosted within that VPC. Hence, in order to prevent changes to this stack, Bob applies a “deny all” stack policy that disallows updates to all resources in the stack.</p> 
-<p>Adam, an application developer with stack update permissions attempts to modify the stack. He realizes that the stack cannot be updated due to the “deny all” stack policy, so he attaches a new stack policy (“allow all”) that allows updates to all resources in the stack.</p> 
-<p>You can capture these changes via AWS Config and use them to alert Bob, the cloud administrator. Download the CloudFormation template <a href="https://s3.amazonaws.com/quickstart-reference/enterprise-accelerator/nist/latest/submodules/quickstart-compliance-common/templates/vpc-production.template">VPC-Production</a> for this example. This template configures a secure VPC for a public-facing application that includes subnets, NAT gateways, route tables, and custom network ACL rules. The example uses the AWS Management Console, but you can use the AWS CLI or SDKs as well.</p> 
-<p>In the CloudFormation console, you can see what resources were configured when the stack was launched.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image001.png"><img class="alignleft wp-image-758 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image001.png" alt="" width="1430" height="635" /></a></p> 
-<p>&nbsp;</p> 
-<p>The following stack policy was attached at launch time. This policy denies updates to all resources in this stack.</p> 
-<pre><code class="lang-json">{
-&quot;Statement&quot; : [
-{
-&quot;Effect&quot; : &quot;Deny&quot;,
-&quot;Action&quot; : &quot;Update:*&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Resource&quot; : &quot;*&quot;
-}
-]
-}</code></pre> 
-<p>Now, Adam, the application developer with stack update permissions, wants to modify the management subnet IP address range “pManagement CIDR”. After realizing that the stack has a “deny all” stack policy, he updates the stack policy via CLI as shown below:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image002.png"><img class="alignleft wp-image-759 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image002.png" alt="" width="813" height="80" /></a></p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>This policy basically allows all updates to stack resources:</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-json">{
-&quot;Statement&quot; : [
-{
-&quot;Effect&quot; : &quot;Allow&quot;,
-&quot;Action&quot; : &quot;Update:*&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Resource&quot; : &quot;*&quot;
-}
-]
-}</code></pre> 
-<p>He then updates the stack to change the management subnet IP address range.</p> 
-<p>Check how AWS Config tracked these modifications. First, log in to the AWS Config console. Choose <strong>Resources</strong>. For <strong>Resources</strong>, choose <strong>CloudFormation: Stack</strong>. To see the list of all CloudFormation stacks being recorded in Config, choose <strong>Look up</strong>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image003.png"><img class="alignleft wp-image-760 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image003.png" alt="" width="1868" height="703" /></a>In this example, open the CloudFormation stack named <strong>myProdVPC</strong> to view its <strong>Config timeline</strong>. The following screenshot shows the timeline and configuration details.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image004.png"><img class="alignleft wp-image-761 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image004.png" alt="" width="1867" height="824" /></a></p> 
-<p>At the top, you see a timeline of all changes that have occurred to the stack after creation.</p> 
-<p>You can see the configuration of the stack under <strong>Configuration Details</strong>. This includes the Amazon resource name (ARN), resource ID, rollback settings, and creation time.</p> 
-<p>In this scenario, there were 8 changes on July 10th. You can drill down further to see what those changes were. The stack policy was modified to allow updates to all resources, and then an EC2 network ACL entry was modified. Specifically, the “pManagement CIDR” block was modified from 10.100.10.0/24 to 10.100.96.0/21.</p> 
-<p>AWS Config also sends an SNS notification each time a configuration change is detected, so that you can be alerted of changes to your CloudFormation stacks.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/p2.jpg"><img class="alignleft wp-image-794 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/p2.jpg" alt="" width="1856" height="758" /></a> <a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/p1.jpg"><img class="alignleft size-full wp-image-793" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/p1.jpg" alt="" width="1846" height="651" /></a></p> 
-<p>In addition to reviewing these configuration changes, you can also see the entire list of resources within the stack. View <strong>Relationships</strong> for resource types supported in AWS Config, and view <strong>Unsupported Resources</strong> for resource types not currently supported in AWS Config.</p> 
-<p>You can also view the configuration history of resources currently supported in AWS Config, if you choose to investigate further.</p> 
-<h3><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image007.png"><img class="alignleft size-full wp-image-764" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image007.png" alt="" width="1847" height="841" /></a>Example: AWS Config rules</h3> 
-<p>In addition to tracking the configuration of your CloudFormation stacks, you can use AWS Config rules to check your stacks against best practice rules and internal policies.</p> 
-<p>For example, use the prebuilt rules called <strong>cloudformation-stack-notification-check</strong> to verify whether your CloudFormation stacks are sending event notifications to an SNS topic at all times. The following example shows compliant and noncompliant configuration states.</p> 
-<p>cloudformation-stack-notification-check</p> 
-<p>The CloudFormation stack that you created earlier is showing as noncompliant with this rule, as it does not have any SNS topic configured.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image008.png"><img class="alignleft size-full wp-image-765" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image008.png" alt="" width="1861" height="803" /></a></p> 
-<p>&nbsp;</p> 
-<p>After adding a notification topic to the stack in the CloudFormation console, you can see that the compliance status changes to the compliant state.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image009.png"><img class="alignleft size-full wp-image-766" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/image009.png" alt="" width="1862" height="508" /></a></p> 
-<h3>Summary</h3> 
-<p>With support for CloudFormation stacks in AWS Config, you can now continuously track configuration changes to all stacks, including stack policies and parameter changes. You can use AWS Config rules to verify configuration best practices and compliance with internal policies.</p> 
-<p>&nbsp;</p> 
-<hr /> 
-<p>About the Authors</p> 
-<p><img class="alignleft wp-image-786 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/profile-pic-150x150.png" alt="" width="150" height="150" /></p> 
-<p>Sid Gupta is a Sr. Product Manager for AWS Config. AWS Config is a service that enables you to assess, audit, and evaluate the configurations of your AWS resources. Sid enjoys working with customers and help them implement cloud security best practices. In his spare time, he enjoys hiking, reading and spending time with his kids.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p><img class="alignleft wp-image-787 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/14/shashi.jpg" alt="" width="150" height="150" /></p> 
-<p>Shashi Prabhakar is a Solutions Architect at AWS. He loves working with customers to help design, architect and build variety of workloads. Shashi always gets excited to learn new Technologies and Businesses while working with customers. When not learning, he likes to run, play tennis, travel, spend time with wife and enjoy life.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-config/" rel="tag">AWS Config</a></span> 
 </footer> 
 </article> 
 <p>

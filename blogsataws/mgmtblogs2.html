@@ -191,6 +191,418 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Recover your impaired instances using EC2Rescue and Amazon EC2 Systems Manager Automation</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-10-02T16:07:40+00:00">02 OCT 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/compute/amazon-ec2/" title="View all posts in Amazon EC2"><span property="articleSection">Amazon EC2</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/" title="View all posts in Compute"><span property="articleSection">Compute</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/recover-your-impaired-instances-using-ec2rescue-and-amazon-ec2-systems-manager-automation/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Have you ever had an issue connecting to your <a href="https://aws.amazon.com/ec2">Amazon EC2 </a>Windows instance? This can be caused by any number of different reasons, but is almost always related to how the instance is configured. Unfortunately, if you can’t connect to it, you can’t fix it!</p> 
+<p>Earlier this year, AWS <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/amazon-ec2rescue-is-now-available/">announced EC2Rescue for Windows</a>, a convenient, straightforward, GUI-based troubleshooting tool that can be run on your Windows instances to troubleshoot operating system-level issues and collect advanced logs and configuration files for further analysis.</p> 
+<p>AWS listened to your feedback, and now EC2Rescue is available as a one-click, self-service, scalable automated solution for you to use via&nbsp;<a href="https://aws.amazon.com/ec2/systems-manager/automation/">Systems Manager Automation</a>. Starting today, there’s a new public Systems Manager Automation document, called <strong><em>AWSSupport-ExecuteEC2Rescue</em></strong>. <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-ec2rescue.html">Documentation for EC2Rescue</a> has more details about this Automation document.</p> 
+<p><span id="more-1406"></span></p> 
+<p>In Automation, you can define a sequence of actions to perform: &nbsp;stopping or starting EC2 instances, creating backup AMIs, invoking AWS Lambda functions, creating AWS CloudFormation templates, and more. In this blog we will show you how you can use AWSSupport-ExecuteEC2Rescue Automation document to orchestrate&nbsp;EC2Rescue workflow.</p> 
+<h3>Introducing EC2Rescue powered by Systems Manager Automation</h3> 
+<p>While the symptom is always the same (you can’t remotely access your Windows instance), there could be multiple causes for it. AWS Support regularly publishes the most frequent questions and requests received from AWS customers in <a href="https://aws.amazon.com/premiumsupport/knowledge-center/#ec2">Knowledge Center</a>.<br /> The most common reasons AWS Support has dealt with over the years are:</p> 
+<ul> 
+<li>Network adapter misconfiguration: &nbsp;There is an incorrect static IP address assigned to the network interface, or the DHCP client can’t renew the DHCP lease.</li> 
+<li>RDP service issues: &nbsp;The service is disabled or you are using a non-default configuration, that is, a TCP port other than 3389.</li> 
+<li>Firewall: &nbsp;The Windows firewall is blocking RDP traffic.</li> 
+</ul> 
+<h3>What are your troubleshooting options?</h3> 
+<p>To start, you can take a <a href="https://aws.amazon.com/premiumsupport/knowledge-center/capture-instance-screenshot/">console screenshot</a>. It may show, for example, that Windows is installing updates. In that case, you just need to wait.</p> 
+<p>For issues like RDP and firewall misconfiguration, you can use <a href="https://aws.amazon.com/ec2/run-command/">Systems Manager Run Command</a>, to start your investigation or even fix the problem.</p> 
+<p>After you have exhausted these options, or you don’t know exactly what the issue might be, the next available step is to investigate the Amazon EBS root volume of your instance, by attempting an offline Windows registry analysis. This requires deep understanding of the Windows operating system, and a wrong action could worsen the problem.</p> 
+<p>EC2Rescue for Windows is able to detect and attempt to resolve all the issues listed above directly from an offline EBS volume, reducing troubleshooting and remediation of common Windows issues to a matter of clicks. Download the tool on a helper EC2 instance that has access to the EBS root volume to inspect, and EC2Rescue guides you through the analysis and remediation, with no advanced Windows knowledge required.</p> 
+<p>There are <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html#w2ab1c32c19">multiple preparation steps</a> to execute when using EC2Rescue in offline mode. You need to create a new “helper” EC2 instance in your VPC (or use an existing instance that you can access), detach the EBS root volume from your impaired instance, and attach it to the helper instance. Finally, you need to attach the volume back to its original instance after EC2Rescue completes its work.</p> 
+<p>While the remediation is guided and happens in a matter of minutes, the preparation is prone to human error, and is usually done under the pressure of fixing the problem as soon as possible.</p> 
+<p>All the steps are now automated, from the helper instance setup to the EC2Rescue remediation, thanks to Systems Manager Automation. You can now use EC2Rescue on your Windows instance consistently. Here’s how to use the new public document, <strong>AWSSupport-ExecuteEC2Rescue</strong>.</p> 
+<h3>How to use AWSSupport-ExecuteEC2Rescue</h3> 
+<p>A Windows instance is not passing the instance health check:</p> 
+<p><img class="alignnone size-full wp-image-1418" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/EC2Rescue1.png" alt="" width="1037" height="153" /></p> 
+<p>You can use EC2Rescue with your Windows instances from the AWS Management Console or the AWS CLI. The <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-ec2rescue.html#automation-ec2rescue-begin">documentation has a walkthrough of the console experience</a>, so I’m going through the CLI experience here.</p> 
+<p>You can now use EC2Rescue on this instance with one CLI command. In the following code example, I am passing the instance ID to use with EC2Rescue, and an IAM role with the required permissions to run this Automation document:</p> 
+<pre><code class="lang-json">aws ssm start-automation-execution --document-name &quot;AWSSupport-ExecuteEC2Rescue&quot; --parameters &quot;ImpairedInstanceId=YOURINSTANCEID ,AssumeRole=arn:aws:iam::YOURACCOUNTID:role/YOURSSMAUTOMATIONROLE&quot;
+{
+&quot;AutomationExecutionId&quot;: &quot;ae6b3617-843e-11e7-8f65-57a040263d53&quot;
+}
+</code></pre> 
+<p>You can start the automation from the EC2 console as well, in which case an IAM role is not necessary as Automation can impersonate the current user (make sure to have the required&nbsp;<a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-ec2rescue.html#automation-ec2rescue-begin">permissions</a> though!).</p> 
+<p><img class="alignnone size-full wp-image-1419" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/EC2Rescue2.png" alt="" width="1878" height="842" /></p> 
+<p>You can monitor the execution with the returned ID. The execution is still in progress:</p> 
+<pre><code class="lang-json">aws ssm get-automation-execution --automation-execution-id &quot;ae6b3617-843e-11e7-8f65-57a040263d53”
+{
+&quot;AutomationExecution&quot;: {
+&quot;AutomationExecutionStatus&quot;: &quot;InProgress&quot;,
+&quot;Parameters&quot;: {
+(..)
+},
+&quot;Outputs&quot;: {
+(..)
+},
+&quot;DocumentName&quot;: &quot;AWSSupport-ExecuteEC2Rescue&quot;,
+&quot;AutomationExecutionId&quot;: &quot;ae6b3617-843e-11e7-8f65-57a040263d53&quot;,
+&quot;DocumentVersion&quot;: &quot;1&quot;,
+&quot;ExecutionStartTime&quot;: 1503079041.084,
+&quot;StepExecutions&quot;: [
+{
+(..)
+}
+]
+}
+}</code></pre> 
+<p>After about 25 minutes, the Automation document completed successfully. The instance is passing both health checks now. Check to see what the problem was!</p> 
+<p><img class="alignnone size-full wp-image-1420" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/EC2Rescue3.png" alt="" width="1208" height="147" /></p> 
+<p>You can run this CLI command to review the analysis and changes that EC2Rescue made, or review the execution output from the EC2 console:</p> 
+<pre><code class="lang-json">aws ssm get-automation-execution --automation-execution-id &quot;ae6b3617-843e-11e7-8f65-57a040263d53&quot; --query 'AutomationExecution.Outputs.&quot;runEC2Rescue.Output&quot;' --output text</code></pre> 
+<p>&nbsp;</p> 
+<p>===== System Information =====</p> 
+<p>&nbsp;</p> 
+<p>Operating System: Windows Server 2008 R2 Datacenter</p> 
+<p>&nbsp;</p> 
+<p>Service Pack: Service Pack 1</p> 
+<p>Version: 6.1.7601</p> 
+<p>Computer Name: WIN-0KEEGO57HHS</p> 
+<p>Time Zone: UTC</p> 
+<p>.NET Framework:</p> 
+<p>v4.7 (4.7.02053)</p> 
+<p>EC2Config Version: 4.9.1981</p> 
+<p>===== Analysis =====</p> 
+<p>System Time</p> 
+<p>OK – RealTimeIsUniversal (Enabled): This registry value should be enabled when timezone is not UTC.</p> 
+<p>&nbsp;</p> 
+<p>Windows Firewall</p> 
+<p>Warning – Domain networks (Enabled): Windows Firewall will be disabled.</p> 
+<p>Warning – Private networks (Enabled): Windows Firewall will be disabled.</p> 
+<p>Warning – Guest or public networks (Enabled): Windows Firewall will be disabled.</p> 
+<p>Remote Desktop</p> 
+<p>OK – Service Start (Manual): Sets Remote Desktop service start to automatic.</p> 
+<p>OK – Remote Desktop Connections (Enabled): The RDP listening port will be changed to TCP/3389.</p> 
+<p>OK – TCP Port (3389): The RDP listening port will be changed to TCP/3389.</p> 
+<p>&nbsp;</p> 
+<p>EC2Config</p> 
+<p>OK – Installation (Installed): EC2Config 4.9.1981 is installed.</p> 
+<p>OK – Service Start (Automatic): The service will be set to start automatically.</p> 
+<p>Information – Ec2SetPassword (Disabled): Re-generates Administrator’s password on next boot.</p> 
+<p>Information – Ec2HandleUserData (Disabled): Executes User Data script on next boot.</p> 
+<p>Network Interface</p> 
+<p>OK – DHCP Service Startup (Automatic): The service will be set to start automatically.</p> 
+<p>Information – Local Area Connection detail (N/A): AWS PV Network Device (7.4.6.0)</p> 
+<p><strong>Warning – DHCP on Local Area Connection (Disabled (Static: 169.254.0.1)): DHCP will be enabled.</strong></p> 
+<p><strong>===== Changes =====</strong></p> 
+<p><strong>Windows Firewall</strong></p> 
+<p><strong>OK – Domain networks (Disabled)</strong></p> 
+<p><strong>OK – Private networks (Disabled)</strong></p> 
+<p><strong>OK – Guest or public networks (Disabled)</strong></p> 
+<p><strong>Network Interface</strong></p> 
+<p><strong>OK – DHCP on Local Area Connection (Enabled)</strong></p> 
+<p>EC2Rescue found that the Windows Firewall and a static IP address configured on the network adapter may have caused the connectivity issue, and made some changes in an attempt to resolve them. Update your custom AMI to make sure that you can launch new EC2 instances consistently in your VPC.</p> 
+<h3>Under the hood</h3> 
+<p><strong>AWSSupport-ExecuteEC2Rescue</strong> automates the use of <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html">EC2Rescue for Windows</a> in <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html#w2ab1c32c19">offline mode</a>. This document leverages an AWS CloudFormation template and AWS Lambda functions, orchestrated by Systems Manager Automation, to automate the steps normally required to use EC2Rescue, including:</p> 
+<ul> 
+<li>Creating an instance to assist with recovery in the appropriate Availability Zone</li> 
+<li>Attaching and detaching EBS volumes</li> 
+<li>Running the EC2Rescue tool</li> 
+</ul> 
+<p>This provides a one-click solution to remediate common Windows issues that prevent remote access to the instance.</p> 
+<p><strong>AWSSupport-ExecuteEC2Rescue</strong> creates a VPC where EC2Rescue can run, completely isolated from your environment, and creates a backup AMI of the instance on which to run EC2Rescue before any further action is taken.</p> 
+<p>&nbsp;</p> 
+<p><img class="alignnone wp-image-1438 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/timeline.png" alt="" width="1263" height="595" /></p> 
+<p>After you have detected that your Windows instance is unreachable (1), you can pass its instance ID to <strong>AWSSupport-ExecuteEC2Rescue</strong>, which stages a VPC and a number of Lambda functions (2-3) to rescue it. <strong>AWSSupport-ExecuteEC2Rescue</strong> stops your original instance (5), and creates a backup before taking any action on it (6).</p> 
+<p>The Automation document identifies which subnet to use in the EC2Rescue VPC that was created (it uses one in the same Availability Zone as your instance), and gets the latest Windows Server 2016 AMI to launch an EC2Rescue instance (4). The Automation document uses <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-ssm.html">RunCommand</a> and <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-cli.html">EC2Rescue</a> CLI on this instance, and attempts to fix the issues identified on your instance (7) before the Automation document starts it back up (9). The EC2Rescue instance is terminated as part of the flow (8).</p> 
+<h3>How can this document fix my instance automatically?</h3> 
+<p><strong>AWSSupport-ExecuteEC2Rescue</strong> creates the EC2Rescue instance in the same Availability Zone as your instance (but in an isolated VPC).</p> 
+<p>&nbsp;</p> 
+<p><img class="alignnone size-full wp-image-1439" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step1.png" alt="" width="922" height="526" /></p> 
+<p><strong>AWSSupport-ExecuteEC2Rescue</strong> then attaches the root volume of your instance to the EC2Rescue instance.</p> 
+<p>&nbsp;</p> 
+<p><img class="alignnone size-full wp-image-1440" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step2.png" alt="" width="922" height="526" /></p> 
+<p>At this stage, <strong>AWSSupport-ExecuteEC2Rescue</strong> runs a new Run Command document, called <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-ssm.html">AWSSupport-RunEC2RescueForWindowsTool</a>, against the EC2Rescue instance. The document:</p> 
+<ul> 
+<li>Downloads EC2Rescue.</li> 
+<li>Runs the EC2Rescue for Windows tool CLI to diagnose and attempts to fix all the issues that it can identify in the offline root volume that was just attached.</li> 
+</ul> 
+<p>&nbsp;</p> 
+<p><img class="alignnone size-full wp-image-1441" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step3.png" alt="" width="922" height="526" /></p> 
+<p>The root volume is then automatically reattached to your instance. The Automation document terminates the EC2Rescue instance, and deletes the EC2Rescue VPC.</p> 
+<p>&nbsp;</p> 
+<h3><img class="alignnone size-full wp-image-1442" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step4.png" alt="" width="922" height="526" /></h3> 
+<h3>Summary</h3> 
+<p>AWSSupport-ExecuteEC2Rescue is a new Automation document that automates all the steps required to fix common Windows issues on your unreachable Windows instance using the <a href="https://aws.amazon.com/premiumsupport/knowledge-center/ec2rescue-windows-troubleshoot/">EC2Rescue for Windows tool</a>.</p> 
+<p>The Automation document uses the new <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-cli.html">EC2Rescue </a>for Windows CLI for a fully automated end-to-end fully experience.</p> 
+<p>With the recent integration between CloudWatch Events and Systems Manager Automation, you can run AWSSupport-ExecuteEC2Rescue automatically in response to an event in your infrastructure.</p> 
+<p>You can start using this document today. We are planning to add support for <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Linux-Server-EC2Rescue.html">EC2Rescue for Linux</a> soon.</p> 
+<p>If you have any questions or suggestions, please leave a comment for us. Happy EC2Rescue!</p> 
+<h3>About the Author</h3> 
+<p><img class="size-full wp-image-1432 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/02/AMartini.jpg" alt="" width="119" height="160" /></p> 
+<p>Alessandro Martini is a Senior Cloud Support Engineer in the AWS Support organization.&nbsp;He likes working with customers, understanding and solving problems and loves to write blogs outlining&nbsp;his solutions on multiple AWS products.&nbsp;He also loves pizza, especially when there is no pineapple on it.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/automation/" rel="tag">Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager-automation/" rel="tag">EC2 Systems Manager Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Use AWS CloudFormation Stack Termination Protection and Rollback Triggers to Maintain Infrastructure Availability</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Chuck Meyer</span></span> | on 
+<time property="datePublished" datetime="2017-09-29T16:06:07+00:00">29 SEP 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>Managing your infrastructure as code using <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> provides a consistent way to rapidly deliver AWS environments for your applications. As your pace of delivery increases, it’s important to ensure you have the appropriate guardrails to protect your most critical infrastructure resources.</p> 
+<p>AWS CloudFormation now includes two additional tools to help you ensure the consistent health and stability of your application environments:</p> 
+<ul> 
+<li><strong>Stack Termination Protection</strong> provides a low friction mechanism to quickly protect stacks that contain critical resources.</li> 
+<li><strong>Rollback Triggers</strong> allow you to quickly revert infrastructure changes that are having a negative impact to the performance of your applications.</li> 
+</ul> 
+<p>In this post, I’m going to examine strategies for adding these new features to your infrastructure management tool belt.</p> 
+<p><span id="more-1375"></span></p> 
+<h3>Stack Termination Protection</h3> 
+<p>Take advantage of the new Stack Termination Protection parameter to prevent the accidental deletion of stacks that contain critical resources. You can enable termination protection while creating a new stack, and AWS CloudFormation will deny any delete actions against that stack. This new features gives you an extra layer of protection for stacks containing critical resources such as AWS IAM roles or AWS CloudTrail trails.</p> 
+<p>You can enable termination protection while creating a new stack using the <a href="https://aws.amazon.com/cli/">AWS Command Line Interface </a>(CLI), AWS APIs, or in the AWS Management Console. In this blog, I’m using the CloudFormation console to create a new stack. Under the <strong>Advanced</strong> section, next to<strong> Termination Protection</strong>, I’ve selected the <strong>Enable</strong> check box. This protects my stack that contains a critical application deployment pipeline from deletion.</p> 
+<p><img class="alignnone size-full wp-image-1392" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/Screen-Shot-2017-09-21-at-12.56.54-PM.png" alt="" width="661" height="545" /></p> 
+<p>After you create your stack, you can verify the stack termination protection icon in the <strong>Overview</strong> section of your stack. If you are using nested stacks, termination protection cascades down to in sub-stacks of the parent without the need to individually manage protections on each stack.</p> 
+<p>Here you can see I’ve enabled termination protection for the stack that contains the AWS CodePipeline for deploying my application.</p> 
+<p><img class="alignnone size-full wp-image-1396" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/Screen-Shot-2017-09-20-at-8.16.10-AM.png" alt="" width="377" height="249" /></p> 
+<p>With termination protection enabled, you will see the following message when you attempt to delete the stack:</p> 
+<p><img class="alignnone size-full wp-image-1394" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/Screen-Shot-2017-09-18-at-2.06.42-PM.png" alt="" width="562" height="228" /></p> 
+<p>You can add or remove termination protection from existing stacks using a simple API call. Control access to this API operation using IAM permissions. Make sure protection is removed only when you’re ready to delete the stack.</p> 
+<p><img class="alignnone size-full wp-image-1397" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/Screen-Shot-2017-09-20-at-8.50.38-AM.png" alt="" width="556" height="362" /></p> 
+<p>You can start adding termination protection&nbsp;to your critical stacks right now.</p> 
+<h3>Rollback Triggers</h3> 
+<p>We <a href="https://aws.amazon.com/about-aws/whats-new/2017/08/aws-cloudformation-adds-rollback-triggers-feature/">announced rollback triggers</a> back in August, but I wanted to take a little time to revisit them in this context.</p> 
+<p>The rollback triggers functionality allows you to integrate application- and resource-level alarms from Amazon CloudWatch into the update process for your stacks. If a change to the stack causes any of the registered alarms to fire, CloudFormation immediately stops the update and rolls back to the last good state. You can include a monitoring window after all updates are complete to allow additional time for the change to stabilize. This window happens prior to the CloudFormation cleanup phase, allowing attribute changes and replaced resources to be quickly restored.</p> 
+<p>For an example of rollback triggers in action, this blog starts with the <a href="https://github.com/awslabs/ecs-refarch-batch-processing">reference architecture for containerized batch processing using Amazon ECS</a>.&nbsp;&nbsp;The stack in this reference architecture contains an Amazon EC2 Container Service&nbsp;(ECS) cluster running an image processing service and the Amazon Simple Queue Service (SQS) queue that feeds it. To begin, follow this first three steps in the reference architecture’s instructions.&nbsp;&nbsp;When you come to step four, deploy your ECS service using the following simple CloudFormation template along with the parameter values from the stack that you created in Step 2:</p> 
+<p><strong>batch-service.yml</strong></p> 
+<pre><code class="lang-yaml">AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+TaskDefinition:
+Type: String
+Description: &quot;ARN of an existing ECS Task Definition&quot;
+ECSCluster:
+Type: String
+Description: &quot;Existing ECS Cluster&quot;
+ProcessCount:
+Type: Number
+Default: 1
+Description: &quot;Number of processes to run&quot;
+Resources:
+service:
+Type: AWS::ECS::Service
+Properties:
+Cluster: !Ref 'ECSCluster'
+DesiredCount: !Ref 'ProcessCount'
+TaskDefinition: !Ref 'TaskDefinition'
+Outputs:
+ecsservice:
+Value: !Ref 'service'</code></pre> 
+<p>You can put your parameter values into a JSON document to make it easier to quickly perform stack creation and updates:</p> 
+<p><strong>batch-service-config.jsn</strong></p> 
+<pre><code class="lang-json">[
+{
+&quot;ParameterKey&quot;: &quot;TaskDefinition&quot;,
+&quot;ParameterValue&quot;: &quot;arn:aws:ecs:us-east-2:xxxxxxxxxxxx:task-definition/ecs-batch-processing-TaskDefinition-xxxxxxxxxxxx:1&quot;
+},
+{
+&quot;ParameterKey&quot;: &quot;ProcessCount&quot;,
+&quot;ParameterValue&quot;: &quot;1&quot;
+},
+{
+&quot;ParameterKey&quot;: &quot;ECSCluster&quot;,
+&quot;ParameterValue&quot;: &quot;ecs-batch-processing-ECSCluster-xxxxxxxxxxxxxx&quot;
+}
+]
+</code></pre> 
+<p>Then, you can create your stack from the AWS CLI like this:</p> 
+<pre class="hide-language">aws cloudformation create-stack --region us-east-2 \
+&nbsp;--stack-name ImageProcService \
+&nbsp;--template-body file://batch-service.yml \
+&nbsp;--parameters file://batch-service-config.json</pre> 
+<p>You can skip step five in the reference architecture. We don’t need Auto Scaling for this example. After stack creation is completed, you should have a single batch-processing worker up and running and ready to receive <code class="lang-bash">.jpg</code> files in the input bucket. Upload a few images to make sure it’s working.</p> 
+<p>Now you will make a breaking change to your batch service, but with a rollback trigger in place to protect your processing capabilities. As part of the stack you deployed in step two, CloudFormation created a CloudWatch alarm monitoring the SQS queue that feeds your batch workers. You can build a rollback trigger using this alarm. For example:</p> 
+<p><strong>batch-service-rollbacktrigger.jsn</strong></p> 
+<pre><code class="lang-json">{
+&quot;RollbackTriggers&quot;: [
+{
+&quot;Arn&quot;: &quot;arn:aws:cloudwatch:us-east-2:225704381548:alarm:SQSQueueDepth&quot;,
+&quot;Type&quot;: &quot;AWS::CloudWatch::Alarm&quot;
+}
+],
+&quot;MonitoringTimeInMinutes&quot;: 10
+}
+</code></pre> 
+<p>This trigger will wait 10 minutes after the deployment is completed to see if the queue goes into an alarm state.</p> 
+<p>Reduce the number of processes in your configuration file to 0 by modifying the value in your parameter file:</p> 
+<p><strong>batch-service-config.jsn</strong></p> 
+<pre><code class="lang-json">[
+{
+&quot;ParameterKey&quot;: &quot;TaskDefinition&quot;,
+&quot;ParameterValue&quot;: &quot;arn:aws:ecs:us-east-2:xxxxxxxxxxxx:task-definition/ecs-batch-processing-TaskDefinition-xxxxxxxxxxxx:1&quot;
+},
+{
+&quot;ParameterKey&quot;: &quot;ProcessCount&quot;,
+&quot;ParameterValue&quot;: &quot;0&quot;
+},
+{
+&quot;ParameterKey&quot;: &quot;ECSCluster&quot;,
+&quot;ParameterValue&quot;: &quot;ecs-batch-processing-ECSCluster-xxxxxxxxxxxxxx&quot;
+}
+]</code></pre> 
+<p>Now you can update your stack using the rollback trigger you defined earlier:</p> 
+<pre>aws cloudformation update-stack --region us-east-2 \
+&nbsp;--stack-name ImageProcService \
+&nbsp;--template-body file://batch-service.yml \
+&nbsp;--parameters file://batch-service-config.json \
+&nbsp;--rollback-configuration file://batch-service-rollbacktrigger.json</pre> 
+<p>After you make a change to decrease the number of ECS processes running in your stack, there won’t be&nbsp;any workers to handle the queue. Upload at least five more <code class="lang-bash">.jpg</code> files to the input bucket before the monitoring time ends (you have 10 minutes).&nbsp;&nbsp;Things will continue to run for a little while, but soon the CloudWatch alarm is triggered as queue depth crosses a critical threshold. Since this alarm is registered as a rollback trigger, CloudFormation will automatically begin rolling back the update when the alarm triggers.</p> 
+<p><img class="alignnone size-full wp-image-1398" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/Screen-Shot-2017-09-19-at-11.13.00-AM.png" alt="" width="1129" height="473" /></p> 
+<p>Once the rollback is completed, batch processing is restored and the SQS queue will begin to drain, removing the alarm.</p> 
+<p>Use rollback triggers to monitor the state of your application during the stack creation and update process. You can specify the alarms and the thresholds you want AWS CloudFormation to monitor, and if any of the alarms are breached, CloudFormation rolls back the entire stack operation to the previous deployed state.</p> 
+<p>You can start using rollback triggers to allow CloudFormation to monitor critical metrics for your application in continuous integration/continuous deployment (CI/CD) pipelines and other deployment automation today.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-alarm/" rel="tag">Amazon CloudWatch Alarm</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">Amazon EC2 Systems Manager as a General-Purpose DevOps Tool</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-09-28T12:31:50+00:00">28 SEP 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-as-a-general-purpose-devops-tool/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p><em>This guest post was written by Andrew Rout, Engineer at Riverbed SteelCentral Office of the CTO</em></p> 
+<p>A long time ago, a manufacturer in Cincinnati invented Play-Doh to be used as a wallpaper cleaner. Twenty years later, an even better purpose was found for it, and kids everywhere rejoiced.</p> 
+<p>History repeats itself with Amazon EC2 Systems Manager as we discover new ways to use this service from AWS. The following walk through shows you how Run Command can be used as a DevOps tool for orchestration and for systems introspection.</p> 
+<h3>The need to communicate with EC2 instances</h3> 
+<p>To manage the EC2 instances that power Riverbed Technology’s <a href="https://www.riverbed.com/products/steelcentral/use-as-a-service.html">SteelCentral SaaS</a> offering, Riverbed’s DevOps team built an internal tool that allows them to perform tasks on the EC2 instances and gives them insight into the state of the environment. A UI sits on top of a backend that communicates with the EC2 instances and various other AWS services.</p> 
+<p>This internal DevOps tool allows our operations team to do the following:</p> 
+<ul> 
+<li>See dashboards describing the overall health of all infrastructure components and software components of SteelCentral SaaS</li> 
+<li>Provision new resources as necessary</li> 
+<li>Troubleshoot services running on EC2 instances</li> 
+<li>Manage users and licensing<span id="more-1345"></span></li> 
+</ul> 
+<p><img class="size-full wp-image-1346 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/25/steelcentral_saas.png" alt="" width="1000" height="431" /></p> 
+<p>In addition to a DevOps tool, Riverbed’s SaaS environment includes an event-driven service that also needs to communicate with EC2 instances. The event-driven system is used to provision additional resources on an EC2 instance as the system scales.</p> 
+<p>Each of the tasks executed by the DevOps tool and the event-driven service requires one or more remote shell commands to be executed on an EC2 instance to either fetch information from an application or make a change to it.</p> 
+<p>The Riverbed DevOps tool initially issued these commands via SSH, but the need to maintain an SSH key in multiple places was a headache from a logistics and security point-of-view. We preferred not to manage the key bits or the access control for SSH keys on our own, nor did we not want to develop and run a web service on all EC2 instances to handle our specific use cases.</p> 
+<p><strong>EC2 Systems Manager makes software inventory management easier</strong></p> 
+<p>Enter EC2 Systems Manager…</p> 
+<p>EC2 Systems Manager was initially designed to be a tool for managing the software packages installed on EC2 instances, but it can be used for much more than just that.</p> 
+<p>The original thinking was that if you needed to install or upgrade software on multiple EC2 instances, you could execute the yum, apt-get, Windows PowerShell, or other package manager command via EC2 Systems Manager, and it would do it for you without the user needing to SSH into each EC2 instance individually.</p> 
+<p><strong>No, EC2 Systems Manager makes issuing remote commands easier</strong></p> 
+<p>Really what <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a> did was provide a way to execute ANY command on a remote EC2 instance. Anywhere an SSH command is needed, a Run Command call can take its place.</p> 
+<p>The benefits of using Run Command instead of SSH have been stated in other <a href="https://aws.amazon.com/blogs/aws/manage-instances-at-scale-without-ssh-access-using-ec2-run-command/">blog posts</a>, so I’ll briefly list them here.</p> 
+<ul> 
+<li>No need to store SSH keys anywhere</li> 
+<li>Ability to execute remote shell commands is controlled by IAM policies</li> 
+<li>Commands issued via Run Command are auditable</li> 
+<li>Command output can be stored in Amazon S3 for historical reference</li> 
+</ul> 
+<p>Essentially, EC2 Systems Manager is used as a communication service between a client and your EC2 instances.&nbsp; In Riverbed’s case, the DevOps tool is the client that wants to communicate with our EC2 instances.</p> 
+<p><img class="size-full wp-image-1385 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/riverbed_arch-diagram.png" alt="" width="695" height="443" /></p> 
+<p>Riverbed’s SteelCentral SaaS uses EC2 Systems Manager to issue commands to stop, start, and modify services running on EC2 instances. For example, when a new user signs up, an event is triggered and Run Command sends commands to ensure additional services are provisioned and configured as the system scales.</p> 
+<p>In the Riverbed internal DevOps tool, a human operator can visit a page that displays the overall health of all of the services running on the EC2 instance serving the new user. To get that information, a Run Command is sent to the EC2 instance to query process status, and the output is populated into the DevOps tool’s UI.</p> 
+<p><img class="size-full wp-image-1347 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/25/riverbed_devops.png" alt="" width="1100" height="752" /></p> 
+<p>Using Run Command in place of SSH has allowed Riverbed Technology to save tens of hours of engineering time each year due to no longer needing to manage and maintain SSH keys or troubleshoot SSH keys that aren’t working.</p> 
+<p>More importantly, EC2 Systems Manager makes our security policies simpler to enforce because access controls are moved out of the code and into Amazon IAM. This saves time during compliance reviews and makes it easier for management to get a picture of what access paths are defined.</p> 
+<p><strong>Setting up your AWS account to use the SSM Agent</strong></p> 
+<p>Before you can execute commands on your EC2 instances using the SSM Agent, you need to do the following:</p> 
+<ol> 
+<li><a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html">Install the SSM Agent on your EC2 instances</a>.</li> 
+<li>Update your EC2 instance’s IAM role to include the AWS managed policy named “AmazonEC2RoleforSSM”. Or, you can <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-access.html">create a custom policy</a> for SSM as an alternative to using a managed policy.</li> 
+<li>Grant permission to your user’s IAM role to allow it to execute SSM commands. This simple policy grants access to all of SSM:<code class="lang-json"></code></li> 
+</ol> 
+<pre><code class="lang-json">{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ssm:*”
+],
+&quot;Resource&quot;: &quot;*&quot;
+}
+</code></pre> 
+<p><strong>Here’s an example of how to execute a command using Run Command<br /> </strong></p> 
+<p>As a simple test, let’s execute “whoami” on an EC2 instance via SSM.</p> 
+<p>Note: This example is written in Python using the <a href="https://aws.amazon.com/sdk-for-python/">AWS SDK for Python (boto3)</a> to communicate with AWS services, but you can use any SDK of your choice, including the AWS CLI.</p> 
+<p>First, send your command to SSM, and note the returned CommandId:</p> 
+<pre><code class="lang-python">import boto3
+import time
+instance_id = 'i-abcdef123456'
+cmd = 'whoami'
+ssm = boto3.client('ssm', region_name='us-east-1')
+response = ssm.send_command(
+InstanceIds=[instance_id],
+DocumentName='AWS-RunShellScript',
+Parameters={&quot;commands&quot;:[cmd]}
+)
+command_id = response.get('Command', {}).get(&quot;CommandId&quot;, None)</code></pre> 
+<p>Second, wait for the command to finish (use the CommandId from the previous step):</p> 
+<pre><code class="lang-python">while True:
+response = ssm.list_command_invocations(CommandId=command_id, Details=True)
+# If the command hasn't started to run yet, keep waiting
+#
+if len(response['CommandInvocations']) == 0:
+time.sleep(1)
+continue
+# There could be &gt;1 CommandInvocation if the command was sent to multiple
+# EC2 instances, but in this example, we just sent the command to one.
+#
+invocation = response['CommandInvocations'][0]
+# Once we detect the command is done, exit the while loop
+if invocation['Status'] not in ('Pending', 'InProgress', 'Cancelling'):
+break
+time.sleep(1)</code></pre> 
+<p>Last, grab the command output:</p> 
+<pre><code class="lang-python">command_plugin = invocation['CommandPlugins'][-1]
+output = command_plugin['Output']
+status = command_plugin['ResponseCode']
+print &quot;Output =&quot;, output
+print &quot;Status =&quot;, status</code></pre> 
+<p>If the SSM command succeeded, you should see output that looks like the following:</p> 
+<p>Output = root</p> 
+<p>Status = 0</p> 
+<p>It’s important to note that the command output returned in the SSM response is truncated at 2,500 characters. If you expect your command output to be more than 2,500 characters, you can store the full command output in Amazon S3 and fetch it from there.</p> 
+<p>To store the command output in Amazon S3, add the parameter “OutputS3BucketName” when running “send_command”:</p> 
+<pre><code class="lang-python">response = ssm.send_command(
+InstanceIds=[instance_id],
+DocumentName='AWS-RunShellScript',
+Parameters={&quot;commands&quot;:[cmd]},
+OutputS3BucketName='&lt;bucket-name&gt;'
+)</code></pre> 
+<h3><strong>Summary</strong></h3> 
+<p>Run Command is an ideal service to use inside an application that needs to communicate with EC2 instances. It provides a way to execute any remote command on any of your EC2 instances. With a little bit of IAM configuration, you can throw away your SSH keys forever and let Run Command handle executing your remote shell commands.</p> 
+<p>The use cases for using Run Command are as expansive as the use cases for using SSH. Whether it be controlling the applications running on your EC2 instances or fetching system and application level information, AWS has given users a reliable and easy way to manage EC2 instances and the software running on them.</p> 
+<h3>About Riverbed Technology</h3> 
+<p><img class="alignleft size-full wp-image-1413" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/riverbed-logo.png" alt="" width="165" height="49" />Riverbed’s <a href="https://www.riverbed.com/products/steelcentral/use-as-a-service.html">SteelCentral SaaS</a> provides full-Stack Application Performance Monitoring with real-time visibility into the end-user experience, network, infrastructure and applications for applications hosted on or off the cloud. Users can diagnose application performance problems down to the offending code, SQL, web service, network, or system resource.</p> 
+<h3>About the Author</h3> 
+<p><a href="http://www.linkedin.com/in/andrew-r-a425162">Andrew Rout</a> joined Riverbed Technology in 2013. As an engineer in Riverbed’s SteelCentral Office of the CTO, he evaluates new technologies for product integration and has recently spent time leveraging AWS and Docker. He currently builds and manages the tools and AWS infrastructure that power <a href="https://www.riverbed.com/products/steelcentral/use-as-a-service.html">SteelCentral SaaS</a>. He has a strong interest in using Python to drive DevOps activities.</p> 
+<p><code class="lang-json"></code><br /> <code class="lang-json"></code></p> 
+<p><code class="lang-json"><br /> </code></p> 
+<p>&nbsp;</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">Automate remediation actions for Amazon EC2 notifications and beyond using EC2 Systems Manager Automation and AWS Health</b> 
 <footer class="meta">
 by 
@@ -1073,631 +1485,6 @@ environment       = &quot;${var.environment}&quot;
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/configuration-secrets/" rel="tag">Configuration Secrets</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/parameter-store/" rel="tag">Parameter Store</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Multi-Account Strategy: Using AWS CloudFormation Custom Resources to Create Amazon Route 53 Resources in Another Account</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Brian Beach</span></span> | on 
-<time property="datePublished" datetime="2017-08-24T16:06:05+00:00">24 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/multi-account-strategy-using-aws-cloudformation-custom-resources-to-create-amazon-route-53-resources-in-another-account/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Today, most customers have more than one AWS account. While a multi-account strategy brings many benefits―simplified billing, security isolation, decentralized control, etc., it also introduces new challenges. One challenge is that the users in one account occasionally need to create resources in another.</p> 
-<p>In this post, I will show you how to use a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html">custom resource</a> from <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> to create <a href="https://aws.amazon.com/route53">Amazon Route 53</a> resource records in another account.</p> 
-<p><span id="more-976"></span></p> 
-<b>Multi-account scenario</b> 
-<p>A common driver for adopting a multi-account strategy is to give autonomy and agility to individual business units.</p> 
-<p>Imagine that you work for a company that has adopted this strategy. There is a centralized IT team that manages consolidated billing and shared resources such as AWS Direct Connect connections. In addition, they manage the Domain Name System (DNS) for the company. They have chosen to host DNS in Amazon Route 53. Various business units have their own accounts and operate with relatively little oversight.</p> 
-<p>The marketing team regularly creates short-lived websites for various marketing campaigns. They use CloudFormation to launch and manage these sites, but CloudFormation cannot create resources in other accounts. Therefore, the marketing team has to submit a request to central IT to update DNS. This often takes hours or even days to complete. They want a simple way to create a CNAME record in the central account from a CloudFormation template in their own account.</p> 
-<b>CloudFormation custom resources</b> 
-<p>One way to create resources in another account is to use a CloudFormation custom resource, which allows you to execute custom code from a CloudFormation template. CloudFormation supports two types of custom resources:</p> 
-<ul> 
-<li>The first invokes an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function, allowing you to execute custom code.</li> 
-<li>The second sends a message to an <a href="https://aws.amazon.com/sns">Amazon SNS</a> topic to which you have subscribed.</li> 
-</ul> 
-<p>Here’s an example. The Figure below outlines a solution to the problem scenario described earlier. Marketing is launching a CloudFormation stack and wants to create a CNAME in Amazon Route 53 hosted in another account.</p> 
-<p>The high-level workflow goes like this:</p> 
-<ol> 
-<li>CloudFormation sends a message to an SNS topic in the central account.</li> 
-<li>A Lambda function is invoked in response to the message.</li> 
-<li>Lambda creates the Amazon Route 53 CNAME record.</li> 
-<li>Lambda calls an Amazon S3 presigned URL, indicating that it completed successfully.</li> 
-<li>CloudFormation marks the custom resource complete.</li> 
-</ol> 
-<p><img class="alignnone size-full wp-image-982" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/27/cfn-r53-cross-account.png" alt="" width="795" height="761" /><br /> <i>You might be asking yourself why I used SNS when CloudFormation custom resources can invoke Lambda directly. I could have invoked Lambda directly, but SNS simplifies cross account permissions and makes the configuration easier.</i></p> 
-<b>Configuring the custom resource</b> 
-<p>Begin by configuring the services in the central account. I will assume that Amazon Route 53 is already configured, so you need to configure SNS and Lambda.</p> 
-<p>I have included a <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ConfigCentralAccount.yaml">CloudFormation template to configure these services in the central account</a> for you. The template requires two inputs:</p> 
-<ul> 
-<li>The ID of the Amazon Route 53 <a href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingHostedZone.html">hosted zone</a> in which to allow the business units to create records.</li> 
-<li>A list of the account IDs that are authorized to create resource records in Amazon Route 53.</li> 
-</ul> 
-<p>This restricts access so that only the accounts that you specify can create resource records in the hosted zone that you specify. Obviously, you don’t want to allow everyone to create―or worse, change―records anywhere in your DNS system.</p> 
-<p>After the CloudFormation template completes, it outputs the ARN of the SNS topic used to request new resources. Make note of this, as you use it to configure the custom resource later in this post.</p> 
-<p>In the Lambda console, you see a new function called CreateRoute53CNAME. This is the logic for the custom resource. The primary method, lambda_handler, is shown in the code below.</p> 
-<p><strong>Example: Lambda function snippet</strong></p> 
-<pre><code class="lang-python">def lambda_handler(event, context):
-#SNS events contain a wrapper around the Lambda event. Unpack the
-#Lambda event from SNS. Not needed if you’re calling Lambda directly.
-print(&quot;SNS Event: &quot; + json.dumps(event))
-event = json.loads(event['Records'][0]['Sns']['Message'])            
-print(&quot;Lambda Event: &quot; + json.dumps(event))
-try: 
-hostedzone = 'ZXAOMNFL85JIZ'
-type = event['RequestType']
-source = event['ResourceProperties']['Source']
-target = event['ResourceProperties']['Target']
-if type == 'Create':
-print &quot;Creating CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
-change_resource_record_sets('UPSERT', hostedzone, source, target)
-elif type == 'Update':
-oldsource = event['OldResourceProperties']['Source']
-oldtarget = event['OldResourceProperties']['Target']
-print &quot;Deleting old CNAME &quot; + oldsource + &quot;-&gt;&quot; + oldtarget + &quot; in &quot; + hostedzone
-change_resource_record_sets('DELETE', hostedzone, oldsource, oldtarget)
-print &quot;Creating new CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
-change_resource_record_sets('UPSERT', hostedzone, source, target)
-elif type == 'Delete':
-print &quot;Deleting CNAME &quot; + source + &quot;-&gt;&quot; + target + &quot; in &quot; + hostedzone
-change_resource_record_sets('DELETE', hostedzone, source, target)
-else:
-print &quot;Unexpected Request Type&quot;
-raise Exception(&quot;Unexpected Request Type&quot;)
-print &quot;Completed successfully&quot;
-responseStatus = 'SUCCESS'
-responseData = {}
-sendResponse(event, context, responseStatus, responseData)
-except: 
-print(&quot;Error:&quot;, sys.exc_info()[0])
-responseStatus = 'FAILED'
-responseData = {}
-sendResponse(event, context, responseStatus, responseData)
-</code></pre> 
-<p>As you can see, the first thing the Lambda function does is unpack the SNS event to get the properties that were passed from CloudFormation. In this example, you pass in a source (for example, www.example.com) and a target (for example, my-loadbalancer-1234567890.us-east-1.elb.amazonaws.com) for a CNAME record.</p> 
-<p>In addition, the event always includes a RequestType value of Create, Update, or Delete. The code below is an example of an Update event. In the case of an Update, you get an additional set of OldResourceProperties values that are not included in Create and Delete events.</p> 
-<p><strong>Example: Sample update event in SNS</strong></p> 
-<pre><code class="lang-json">{ &quot;Records&quot;: [ 
-{ &quot;EventVersion&quot;: &quot;1.0&quot;, 
-&quot;EventSubscriptionArn&quot;: &quot;arn:aws:sns:us-east-1:…:RequestRoute53CNAME:…&quot;, 
-&quot;EventSource&quot;: &quot;aws:sns&quot;, 
-&quot;Sns&quot;: { 
-&quot;MessageId&quot;: &quot;6ae3f7a1-2772-568c-9175-a603bc40bf03&quot;, 
-&quot;Message&quot;: {
-&quot;RequestType&quot;:“Update&quot;,
-&quot;ResponseURL&quot;:&quot; https://cloudformation-custom-resource-response-useast1...&quot;,
-&quot;ResourceType&quot;:&quot;Custom::CNAME&quot;,
-&quot;OldResourceProperties&quot;:{
-“Target&quot;:&quot;my-first-loadbalancer.us-east-1.elb.amazonaws.com&quot;,
-“Source&quot;:&quot;test.example.com“
-},
-&quot;ResourceProperties&quot;:{
-“Target&quot;:&quot;my-second-loadbalancer.us-east-1.elb.amazonaws.com&quot;,
-“Source&quot;:&quot;test.example.com“
-}
-}
-} 
-} 
-} 
-]}
-</code></pre> 
-<p>Depending on the type of event received, call the Amazon Route 53 <a href="http://boto3.readthedocs.io/en/latest/reference/services/route53.html#Route53.Client.change_resource_record_sets">change_resource_record_sets</a> API operation to create or delete the appropriate records. Finally, you must send the result of the operation to CloudFormation so it can mark the resource complete. The code below reports status.</p> 
-<p><strong>Example: Reporting results to CloudFormation</strong></p> 
-<pre><code class="lang-python">def sendResponse(event, context, responseStatus, responseData):
-data = json.dumps({
-'Status': responseStatus,
-'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
-'PhysicalResourceId': context.log_stream_name,
-'StackId': event['StackId'],
-'RequestId': event['RequestId'],
-'LogicalResourceId': event['LogicalResourceId'],
-'Data': responseData
-})
-opener = urllib2.build_opener(urllib2.HTTPHandler)
-request = urllib2.Request(url=event['ResponseURL'], data=data)
-request.add_header('Content-Type', '')
-request.get_method = lambda: 'PUT'
-url = opener.open(request)
-</code></pre> 
-<p>As you can see, CloudFormation expects the Lambda function to provide a JSON document. This document must include a status of either SUCCESS or FAILED. The original request (such as the SNS update event) included a response URL, an <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/PresignedUrlUploadObject.html">S3 presigned URL</a>. I use the urllib2 module to PUT the JSON document to the presigned URL.</p> 
-<b>Using the custom resource</b> 
-<p>Now that you have your Lambda function created in the central account, you can invoke it from a custom resource in one of the accounts owned by your authorized business units. The code below shows a simple example stack that uses the custom resource.</p> 
-<p>Pass three things to your custom resource. First, pass the ARN of the SNS topic used to initiate the custom resource. The ARN was an output from the template used earlier to create the custom resource in the central account. Second and third, pass the source and target values for the CNAME.</p> 
-<p><strong>Example: Using the custom resource</strong></p> 
-<pre><code class="lang-yaml">Parameters:
-Queue: 
-ServiceToken: The ARN of the SNS topic used to request a CNAME record. 
-Type: String
-Default: arn:aws:sns:us-east-1:999999999999:RequestRoute53CNAME
-Source: 
-Description: The pretty name for the CNAME record.
-Type: String
-Default: www.example.com 
-Target: 
-Description: The target of the CNAME record.
-Type: String
-Default: my-loadbalancer-1234567890.us-east-1.elb.amazonaws.com
-Resources: 
-CNAME: 
-Type: Custom::CNAME
-Properties: 
-ServiceToken: !Ref Queue
-Source: !Ref Source
-Target: !Ref Target
-</code></pre> 
-<p>As you can see, the custom resource is easy to use but not valuable on its own. Here’s how to incorporate this into a larger solution. In the code below, I create an Elastic Beanstalk stack (using the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/quickref-elasticbeanstalk.html">PHP sample application stack</a>) and use the custom resource to create a CNAME record (for example, beanstalk.example.com) and a friendly name for the stack.</p> 
-<p><strong>Example: Using the custom resource in a larger solution</strong></p> 
-<pre><code class="lang-yaml">Resources: 
-sampleApplication:
-Type: AWS::ElasticBeanstalk::Application
-Properties:
-Description: AWS Elastic Beanstalk Sample Application
-sampleApplicationVersion:
-Type: AWS::ElasticBeanstalk::ApplicationVersion
-Properties:
-ApplicationName:
-Ref: sampleApplication
-Description: AWS Elastic Beanstalk Sample Application Version
-SourceBundle:
-S3Bucket: !Sub &quot;elasticbeanstalk-samples-${AWS::Region}&quot;
-S3Key: php-sample.zip
-sampleConfigurationTemplate:
-Type: AWS::ElasticBeanstalk::ConfigurationTemplate
-Properties:
-ApplicationName:
-Ref: sampleApplication
-Description: AWS Elastic Beanstalk Sample Configuration Template
-OptionSettings:
-- Namespace: aws:autoscaling:asg
-OptionName: MinSize
-Value: '2'
-- Namespace: aws:autoscaling:asg
-OptionName: MaxSize
-Value: '6'
-- Namespace: aws:elasticbeanstalk:environment
-OptionName: EnvironmentType
-Value: LoadBalanced
-SolutionStackName: 64bit Amazon Linux running PHP 5.3
-sampleEnvironment:
-Type: AWS::ElasticBeanstalk::Environment
-Properties:
-ApplicationName:
-Ref: sampleApplication
-Description: AWS Elastic Beanstalk Sample Environment
-TemplateName:
-Ref: sampleConfigurationTemplate
-VersionLabel:
-Ref: sampleApplicationVersion
-CNAME: 
-Type: Custom::CNAME
-Properties: 
-ServiceToken: arn:aws:sns:us-east-1:999999999999:RequestRoute53CNAME
-Source: beanstalk.example.com
-Target: !GetAtt sampleEnvironment.EndpointURL
-</code></pre> 
-<p>This CloudFormation stack waits for the Elastic Beanstalk environment to launch and then creates a CNAME record in the central IT account.</p> 
-<b>Conclusion</b> 
-<p>In this post, you learned how to create a CloudFormation custom resource, which allows you to execute custom logic in a CloudFormation template. You also learned how to invoke custom code in one AWS account, from a CloudFormation stack in another account.</p> 
-<p><strong>About the Author</strong></p> 
-<p><img class="size-full wp-image-1180 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/24/beabrian.jpg" alt="" width="119" height="160" /><a href="https://www.linkedin.com/in/brianjbeach/">Brian Beach</a> is a Solutions Architect on the World Wide Public Sector team&nbsp;where he focuses on higher education. Brian is excited by the growth of cloud computing and enjoys&nbsp;teaching others about technology. He is a frequent author and speaker. In his free time, Brian can be found playing with his three children in Raleigh, NC.</p> 
-<footer> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Amazon EC2 Systems Manager Automation is now a Amazon CloudWatch Events Target</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
-<time property="datePublished" datetime="2017-08-21T11:42:35+00:00">21 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-automation-is-now-a-amazon-cloudwatch-events-target/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Today&nbsp;we are excited to announce a new target for Amazon CloudWatch Events: Amazon EC2 Systems Manager Automation. Through this integration, Automation workflows can be triggered by a schedule, or when specific AWS system events occur.</p> 
-<ul> 
-<li><a href="https://aws.amazon.com/ec2/systems-manager/automation/">Automation </a>is part of <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a>.&nbsp; Using Automation you can build workflows that are streamlined, repeatable and auditable. For example, you can create workflows to patch, update agents, or bake applications into an Amazon Machine Image (AMI). You can also avoid the time and effort associated with updating your images manually, and instead build AMIs that meet your IT standards and make the approved AMIs available to you teams.</li> 
-<li>Amazon&nbsp;<a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">CloudWatch Events</a> allows you to create rules that trigger based on AWS events, or on a periodic schedule. &nbsp;CloudWatch Events can be setup to respond to Amazon EC2 Service state changes, Amazon Simple Storage Service (S3) bucket operations, and other events automatically. Supported targets include <a href="https://aws.amazon.com/lambda/">AWS Lambda</a>, Amazon SNS, Amazon EC2 Systems Manager Run Command, and now Amazon EC2 Systems Manager Automation.</li> 
-</ul> 
-<p>With Automation as a supported CloudWatch Events target, you can take advantage of some interesting use cases. You can perform routine tasks better when you schedule tasks for specific days and times or after specific event patterns. In this blog, we are going to show examples of how you can use CloudWatch Events and Automation to automate repetitive tasks, such as periodically starting and stopping instances.</p> 
-<p><span id="more-825"></span></p> 
-<h3>Automatically stop and start instances on weekends</h3> 
-<p>Identifying and automatically stopping unused non-production instances in your account can save costs and improve efficiency of how you use your resources. Suppose you would like to automatically stop an instance every Friday evening and start it back on Monday morning. You can easily accomplish this using two CloudWatch Events that triggers an Automation Document for stopping and starting instances.</p> 
-<h3>Create an Automation Document</h3> 
-<p>For this example, follow the steps to <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-createdoc.html">create an Automation Document</a>. The following code can be used to quickly create the Document.</p> 
-<pre><code class="lang-json">{
-&quot;description&quot;:&quot;Systems Manager Automation Demo - Start Instances via CWE&quot;,
-&quot;schemaVersion&quot;:&quot;0.3&quot;,
-&quot;parameters&quot;:{
-&quot;automationRoleArn&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;(Required) The ARN of the role that allows Automation to perform the actions on your behalf.&quot;
-},
-&quot;instanceIds&quot;:{
-&quot;type&quot;:&quot;StringList&quot;,
-&quot;description&quot;:&quot;(Required) The Instance ID(s) to Stop or Start.&quot;
-},
-&quot;state&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;(Required) The state you would like the Instance(s) placed in. Options are: running | stopped&quot;
-}
-},
-&quot;assumeRole&quot;:&quot;{{automationRoleArn}}&quot;,
-&quot;mainSteps&quot;:[
-{
-&quot;name&quot;:&quot;startStopInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:2,
-&quot;timeoutSeconds&quot;:120,
-&quot;onFailure&quot;:&quot;Continue&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[&quot;{{instanceIds}}&quot;],
-&quot;DesiredState&quot;:&quot;{{state}}&quot;
-}
-}
-]
-}</code></pre> 
-<h3>Steps to create CloudWatch event rules to trigger Automation</h3> 
-<p>After you have created the Document and saved it, you can create two CloudWatch event rules that automatically trigger at specific times.</p> 
-<p><strong>Step 1</strong>. In the AWS Management Console, choose CloudWatch, Events, Rules and Create rule.</p> 
-<p><img class="alignnone size-full wp-image-854" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/CWERules.png" alt="" width="1152" height="603" /></p> 
-<p><strong>Step 2:&nbsp;</strong>&nbsp;Under <strong>Event Source</strong>, choose <strong>Schedule</strong>, <strong>Cron expression</strong>. To stop specified instances automatically at 6 PM every Friday, enter the following cron expression to trigger the rule:</p> 
-<p><em>0 18 ? * FRI *</em></p> 
-<p><img class="alignnone size-full wp-image-945" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/CR1-1.png" alt="" width="1021" height="636" /></p> 
-<p>&nbsp;</p> 
-<p><strong>Step 3:</strong> Under Targets, choose <strong>Add target</strong>, <strong>SSM Automation</strong>.</p> 
-<p><strong>Step 4:</strong>&nbsp;For Document, select the Automation Document you saved for stopping and starting specified instances.</p> 
-<p><strong>Step 5:</strong>&nbsp;For Configure document version, choose Default or a particular version number.</p> 
-<p><strong>Step 6:</strong>&nbsp;Choose <strong>‘Constant’</strong> automation &nbsp;and enter the enter instance ID that you would like to be stopped automatically per the rule that you are creating. You can also choose&nbsp;<strong>‘Input Transformer’</strong> to provide custom inputs based on a template.</p> 
-<p><img class="alignnone size-full wp-image-861" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/Targets.png" alt="" width="785" height="822" /></p> 
-<p><strong>Step 7:</strong>&nbsp;Provide permission for CloudWatch event to call SSM Start Automation Execution. You can either create an existing role that you previously created or create a new role.</p> 
-<p><strong>Step 8:</strong>&nbsp;Choose <strong>Configure details</strong>, and enter a name and description for your rule. Ensure that Enabled is selected.</p> 
-<p><strong>Step 9:</strong>&nbsp;Choose <strong>Create rule</strong>.</p> 
-<p>Your rule is now created and automatically executes every Friday at 6 PM to stop your specified instance. To start the instance back up say on Monday morning, repeat the steps to create another CloudWatch event rule, set your cron expression to Monday AM at your desired time, and target the same Automation Document. Make sure you provide “running” as your desired state.</p> 
-<p>With this setup you can now automatically stop and start your instances, thus using your resources optimally.</p> 
-<h3>Additional methods to trigger Automation</h3> 
-<p>Outside of setting up an Automation workflow to be triggered on a schedule, you can also trigger executions based on event patterns. For example, you can setup a CloudWatch event on a&nbsp;<a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-paramstore.html">Parameter Store</a> value. Based on changes to the value you can trigger an Automation workflow. You can create&nbsp;a Parameter Store key/value to store AMI Ids which you typically use to create golden images for your organization. Every time you change the value of the key to a new AMI ID, you can setup a CloudWatch event rule on that parameter and target Automation. The target can point either to your custom Document or the <em>AWS-UpdateWindowsAMI</em> Document published by AWS. This automatically creates a new image with the latest updates that you can provide as inputs to your CI/CD pipeline or to Auto Scaling groups. For your reference, here is a blog that talks about how you can <a href="https://aws.amazon.com/blogs/mt/windows-ami-patching-and-maintenance-with-amazon-ec2-systems-manager-2/">update and patch your Windows AMIs</a>&nbsp;using Automation.</p> 
-<p><img class="alignnone size-full wp-image-857" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/24/PS.png" alt="" width="1009" height="852" /></p> 
-<p>&nbsp;</p> 
-<h3>Conclusion</h3> 
-<p>Automation simplifies common system maintenance and deployment tasks. By using CloudWatch Events, you can orchestrate task execution based on any events relating to AWS services. You can also trigger your predefined workflows on a schedule. Using this integration, you can easily orchestrate management of your resources and expect your workflows to perform tasks at scale automatically.</p> 
-<p><strong>About the author</strong></p> 
-<p><a href="https://www.linkedin.com/in/venkatkr/"><img class="size-full wp-image-831 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/KRVenkt.jpg" alt="" width="119" height="160" /></a></p> 
-<p><a href="https://www.linkedin.com/in/venkatkr/">Venkat Krishnamachari</a> is a Product Manager in the Amazon EC2 Systems Manager team. Venkat is excited by the opportunities presented by cloud computing, and loves helping customers benefit from the value of efficient infrastructure and management. In his personal time Venkat volunteers with NGOs and loves producing live theater and music shows.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-codedeploy/" rel="tag">AWS CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/documents/" rel="tag">Documents</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-complaince/" rel="tag">Patch Complaince</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-manager/" rel="tag">Patch Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Maintenance Windows: Support for New Task Types Using Amazon EC2 Systems Manager</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Lavanya Krishnan</span></span> | on 
-<time property="datePublished" datetime="2017-08-16T10:50:46+00:00">16 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/maintenance-windows-support-for-new-task-types-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>In <a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager</a>, the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-maintenance.html">Maintenance Windows</a> service allows you to define a set of tasks, along with the instances where those tasks should be run and a run schedule. In this post, I talk about a new feature for Maintenance Windows—support for New Task types.</p> 
-<p>Maintenance Windows now supports Systems Manager Automation documents, AWS Step Functions tasks, and AWS Lambda functions as tasks, including support for Parameter Store (when using Step Functions and Lambda).&nbsp;This allows you to perform complex workflows on your instances, such as patching a server running SQL Server using an Automation document.</p> 
-<p>In this post, I show you the steps for executing this example and walk through the required configuration steps one-by-one.</p> 
-<p><span id="more-1127"></span></p> 
-<h4>Walkthrough</h4> 
-<p>In this walkthrough, you learn how to create a maintenance window with an Automation task type. This task stops an instance, creates snapshots of attached EBS volumes using a Lambda function, restarts the instance, checks for missing Windows updates using another Lambda function, and installs the missing updates. The walkthrough includes the following steps:</p> 
-<ul> 
-<li>Set up IAM users and roles.</li> 
-<li>Create Lambda functions.</li> 
-<li>Create an Automation document.</li> 
-<li>Create an EC2 instance.</li> 
-<li>Create a maintenance window.</li> 
-<li>Register an Automation task with the maintenance window.</li> 
-</ul> 
-<h4>Set up IAM users and roles</h4> 
-<p>Because maintenance windows run on a schedule without a user taking specific actions, you need to create a role that grants the maintenance window the appropriate permissions to run the Automation document you’re creating. Similarly, a role needs to be created for the Automation document that grants the permissions to perform the actions in the document. Finally, create a role for the Lambda function so the function can take EBS snapshots.</p> 
-<ol> 
-<li>Create a user with Systems Manager full access as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-access-user">Create a User Account for Systems Manager</a>.</li> 
-<li>Create an instance role for Systems Manager as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-configuring-access-role">Create a Role for Systems Manager Managed Instances</a>.</li> 
-<li>Create a role for Systems Manager Automation to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-role">Create an IAM Role for Automation</a> and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-trust2">Add a Trust Relationship for Automation</a>.</li> 
-<li>Create a role for the Systems Manager to allow Lambda functions to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-simpatch.html#automation-pet2">Create an IAM Role for AWS Lambda</a> 
-<ul> 
-<li>Attach a policy: <strong>AmazonEC2FullAccess.</strong></li> 
-<li>Add a <strong>lambda.amazonaws.com</strong> trust relationship (similar to what was done in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-trust2">Add a Trust Relationship for Automation</a> but replacing ssm.amazonaws.com with lambda.amazonaws.com).</li> 
-</ul> </li> 
-<li>Create a role for the Systems Manager maintenance window to perform actions as defined in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-permissions.html#sysman-maintenance-perm-console">Controlling Access to Maintenance Windows Using the AWS Console</a>. 
-<ul> 
-<li>Attach the iam:PassRole policy to this role for passing the Automation role created earlier (similar to what was defined for the Automation role in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-passpolicy">Attach the iam:PassRole Policy</a>).</li> 
-</ul> </li> 
-</ol> 
-<h4>Create Lambda functions</h4> 
-<p>Create two Lambda functions:</p> 
-<ul> 
-<li>One to initiate the creation of an EBS snapshot.</li> 
-<li>One to check the status of the snapshot creation so you can wait for the snapshot to be created.</li> 
-</ul> 
-<p>Here are the steps to create these functions.</p> 
-<ol> 
-<li>Open the AWS Lambda console at <a href="https://console.aws.amazon.com/lambda/">https://console.aws.amazon.com/lambda/</a>.</li> 
-<li>Choose <strong>Create a Lambda function</strong>.</li> 
-<li>On the <strong>Select blueprint</strong> page, choose <strong>Author from scratch</strong>.</li> 
-<li>On the <strong>Configure triggers</strong> page, choose <strong>Next</strong>.</li> 
-<li>On the <strong>Configure function</strong> page, for Name, type SSM-Automation-CreateSnapshots, and type an optional description.</li> 
-<li>For <strong>Runtime</strong>, choose <strong>Python 2.7</strong>.</li> 
-<li>In the <strong>Lambda function code</strong> section, delete the pre-populated code and paste the code in Table 1.</li> 
-<li>In the <strong>Lambda function handler and role</strong> section, for <strong>Role</strong>, choose the service role for Lambda that you created earlier.</li> 
-<li>Choose <strong>Next</strong>, <strong>Create function</strong>.</li> 
-</ol> 
-<p>Table 1.</p> 
-<pre><code class="lang-python">from __future__ import print_function
-import json
-import boto3
-print('Loading function')
-#Expects instanceIds
-def lambda_handler(event, context):
-print(&quot;Received event: &quot; + json.dumps(event, indent=2))
-# get EC2 client
-ec2 = boto3.client('ec2')
-# find volumes for given instances
-response = ec2.describe_volumes(
-Filters=[
-{
-'Name': 'attachment.instance-id',
-'Values': [ event['instanceIds'] ],
-},
-]
-)
-# hold list of snapshot ids
-snapshotIdList = []
-# create snapshot of each volume id
-for ids in response['Volumes']:
-print('Creating snapshot for volumeId : %s' % ids['VolumeId'])
-# create snapshot
-response = ec2.create_snapshot(
-Description='New snapshot for test',
-VolumeId=ids['VolumeId'],
-DryRun=False
-)
-print('Created snapshotId : %s' % response['SnapshotId'])
-# add snapshot id to be returned
-snapshotIdList.append(response['SnapshotId'])
-returnString = &quot;,&quot;.join(str(id) for id in snapshotIdList)
-return returnString</code></pre> 
-<ol> 
-<li>Repeat steps 1–4 from the first Lambda function.</li> 
-<li>On the <strong>Configure function</strong> page, for <strong>Name</strong>, type SSM-Automation-CheckSnapshots and type an optional description.</li> 
-<li>For <strong>Runtime</strong>, choose <strong>Python 2.7</strong>.</li> 
-<li>In the <strong>Lambda function code</strong> section, delete the pre-populated code and paste the code in Table 2.</li> 
-<li>In the <strong>Lambda function handler and role</strong> section, for <strong>Role</strong>, choose the service role for Lambda that you created earlier.</li> 
-<li>Choose <strong>Next</strong>, <strong>Create function</strong>.</li> 
-</ol> 
-<p>Table 2.<code class="lang-python"><br /> </code></p> 
-<pre><code class="lang-python">from __future__ import print_function
-import json
-import boto3
-print('Loading function')
-#Expects snapshotIds
-def lambda_handler(event, context):
-print(&quot;Received event: &quot; + json.dumps(event, indent=2))
-# get EC2 client
-ec2 = boto3.client('ec2')
-# get the snapshotIds passed
-snapshotIds = event['snapshotIds'].split(',')
-# check the state of each snapshot
-for id in snapshotIds:
-response = ec2.describe_snapshots(
-SnapshotIds=[
-id,
-],
-DryRun=False
-)
-# if the state is not completed then it can't continue, so throw an error
-for state in response['Snapshots']:
-print('SnapshotId ' + id + ' in state : %s' % state['State'])
-if state['State'] != 'completed':
-errorString = 'Unable to proceed, snapshot in ' + state['State'] + ' state for: ' + id
-raise Exception(errorString)
-return &quot;Snapshots completed.&quot;</code></pre> 
-<h4>Create an Automation document</h4> 
-<p>An Automation document allows you to create your own custom workflow using a series of steps. Automation has several predefined actions that when stitched together can create complex and robust workflows.</p> 
-<p>In this example, you use a few of these actions to build a custom workflow, such as <strong>aws:changeInstanceState</strong>, <strong>aws:invokeLambdaFunction</strong>, <strong>aws:sleep</strong> and <strong>aws:runCommand</strong>.&nbsp; The steps in this Automation document perform the following actions:</p> 
-<ul> 
-<li>Stop an EC2 instance</li> 
-<li>Initiate the creation of volume snapshots with a Lambda function</li> 
-<li>Wait a specified time while the snapshots are created</li> 
-<li>Use another Lambda function to check if the snapshots have been successfully created</li> 
-<li>Restart the EC2 instance</li> 
-<li>Use a Run Command document to install updates on to the EC2 instance.</li> 
-</ul> 
-<p>Here are the steps to create the document.</p> 
-<ol> 
-<li>Open the Amazon EC2 console at https://console.aws.amazon.com/ec2/v2/home.</li> 
-<li>In the navigation pane, choose <strong>Documents</strong>, <strong>Create Document</strong>.</li> 
-<li>For <strong>Name</strong>, type CreateVolumeSnapshots.</li> 
-<li>For <strong>Document Type</strong>, choose <strong>Automation</strong>.</li> 
-<li>Delete the brackets in the <strong>Content</strong> box, and then paste the following JSON document.</li> 
-<li>Choose <strong>Create Document</strong>.</li> 
-</ol> 
-<pre><code class="lang-json">{
-&quot;schemaVersion&quot;:&quot;0.3&quot;,
-&quot;description&quot;:&quot;Create EBS snapshots and update a Windows instance.&quot;,
-&quot;assumeRole&quot;:&quot;{{AutomationAssumeRole}}&quot;,
-&quot;parameters&quot;:{
-&quot;instanceId&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;(Required) Id of the instance&quot;
-},
-&quot;AutomationAssumeRole&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;(Required) Role under which to execute this automation.&quot;
-},
-&quot;SnapshotTimeout&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;(Required) Timeout for checking for snapshot completion.&quot;,
-&quot;default&quot;: &quot;PT20M&quot;
-}
-},
-&quot;mainSteps&quot;:[
-{
-&quot;name&quot;:&quot;stopInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:1,
-&quot;timeoutSeconds&quot;:300,
-&quot;onFailure&quot;:&quot;Abort&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[
-&quot;{{ instanceId }}&quot;
-],
-&quot;DesiredState&quot;:&quot;stopped&quot;
-}
-},
-{
-&quot;name&quot;:&quot;createVolumeSnapshots&quot;,
-&quot;action&quot;:&quot;aws:invokeLambdaFunction&quot;,
-&quot;timeoutSeconds&quot;:120,
-&quot;maxAttempts&quot;:1,
-&quot;onFailure&quot;:&quot;Abort&quot;,
-&quot;inputs&quot;:{
-&quot;FunctionName&quot;:&quot;Automation-CreateSnapshots&quot;,
-&quot;Payload&quot;:&quot;{\&quot;instanceIds\&quot;:\&quot;{{instanceId}}\&quot;}&quot;
-}
-},
-{
-&quot;name&quot;:&quot;waitForSnapshotsToCreate&quot;,
-&quot;action&quot;:&quot;aws:sleep&quot;,
-&quot;inputs&quot;:{
-&quot;Duration&quot;:&quot;{{ SnapshotTimeout }}&quot;
-}
-},
-{
-&quot;name&quot;:&quot;checkVolumeSnapshots&quot;,
-&quot;action&quot;:&quot;aws:invokeLambdaFunction&quot;,
-&quot;timeoutSeconds&quot;:120,
-&quot;maxAttempts&quot;:1,
-&quot;onFailure&quot;:&quot;Abort&quot;,
-&quot;inputs&quot;:{
-&quot;FunctionName&quot;:&quot;Automation-CheckSnapshots&quot;,
-&quot;Payload&quot;:&quot;{\&quot;snapshotIds\&quot;:\&quot;{{createVolumeSnapshots.Payload}}\&quot;}&quot;
-}
-},
-{
-&quot;name&quot;:&quot;startInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:1,
-&quot;timeoutSeconds&quot;:600,
-&quot;onFailure&quot;:&quot;Abort&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[
-&quot;{{ instanceId }}&quot;
-],
-&quot;DesiredState&quot;:&quot;running&quot;
-}
-},
-{
-&quot;name&quot;:&quot;installMissingWindowsUpdates&quot;,
-&quot;action&quot;:&quot;aws:runCommand&quot;,
-&quot;maxAttempts&quot;:1,
-&quot;timeoutSeconds&quot;:14400,
-&quot;onFailure&quot;:&quot;Continue&quot;,
-&quot;inputs&quot;:{
-&quot;DocumentName&quot;:&quot;AWS-InstallWindowsUpdates&quot;,
-&quot;InstanceIds&quot;:[
-&quot;{{ instanceId }}&quot;
-],
-&quot;Parameters&quot;:{}
-}
-}
-]
-}</code></pre> 
-<h4>Create an EC2 instance</h4> 
-<p>To try out the Automation document, you need to have an instance running and managed by Systems Manager.&nbsp; For this example, use a Windows instance.</p> 
-<p>Create an EC2 instance that uses the Systems Manager instance role created earlier. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html#sysman-create-instance-with-role">Create an Amazon EC2 Instance that Uses the Systems Manager Role</a>.</p> 
-<h4>Create a maintenance window</h4> 
-<p>Maintenance Windows let customers set up recurring schedules to perform defined actions on their instances.&nbsp; Each maintenance window has a schedule, duration, set of registered targets, and set of registered tasks to be performed against the targets. In this example, you create a maintenance window so it can be the initiator of the Automation task created earlier.</p> 
-<p>Create a maintenance window and assign the new instance as a target. For more information, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-console.html">Maintenance Window Console Walkthrough</a>.</p> 
-<h4>Register an Automation task with the maintenance window</h4> 
-<p>With the maintenance window created, you can now register an Automation task to run the Automation document and pass it the necessary parameters.</p> 
-<ol> 
-<li>Open the Amazon EC2 console at <a href="https://console.aws.amazon.com/ec2/v2/home">https://console.aws.amazon.com/ec2/v2/home</a>.</li> 
-<li>In the navigation pane, choose <strong>Maintenance Windows</strong> and select the new maintenance window. Enter the following values: 
-<ul> 
-<li>For <strong>Actions</strong>, choose <strong>Register automation task</strong>.</li> 
-<li>For <strong>Document</strong>, choose the CreateVolumeSnapshots document.</li> 
-<li>For <strong>Task Priority</strong>, specify a priority for this task. 1 is the highest priority. Tasks in a maintenance window are scheduled in priority order with tasks that have the same priority scheduled in parallel.</li> 
-<li>In the <strong>Target by</strong> section, choose <strong>Selecting registered target groups</strong> and select the target that you created earlier.</li> 
-<li>In the <strong>Parameters</strong> section, for <strong>Execute</strong> <strong>on</strong>, specify 1. For <strong>Stop after</strong>, specify 1.</li> 
-<li>For <strong>Role</strong>, specify the maintenance window role ARN created earlier.</li> 
-<li>In the <strong>Input Parameters</strong> section, for <strong>AutomationAssumeRole</strong>, specify the Automation role ARN. Enter a timeout for waiting for the snapshots to complete. For InstanceId, type the instance ID of the instance created earlier.</li> 
-</ul> </li> 
-<li>Choose <strong>Register automation task</strong>.</li> 
-</ol> 
-<p>Most of the steps for registering a task in the AWS Management Console can be executed using AWS CLI commands instead.&nbsp; Furthermore, these steps could as easily be executed using the AWS SDK with Java, SDK for Python (Boto), or any of the other languages supported. This gives you many options when working with an AWS service. The following code examples use the AWS CLI for creating a maintenance window, registering a target with that maintenance window, and registering an Automation task using the Automation document created earlier.</p> 
-<ol> 
-<li>If needed, follow the steps to get started on creating a maintenance window with the AWS CLI in <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-maintenance-cli.html">Maintenance Window CLI Walkthrough</a>.</li> 
-<li>Run the following CLI command and find the WindowId value for the maintenance window created earlier.<br /> <strong><em>aws ssm describe-maintenance-windows</em></strong><br /> This command returns the following, noting that the values for WindowId, name, description, and other fields below are fictional examples:<p></p> <pre><code class="lang-json">{
-&quot;WindowIdentities&quot;: [
-{
-&quot;WindowId&quot;: &quot;mw-abc1234e3ddc9e286&quot;,
-&quot;Name&quot;: &quot;MW1&quot;,
-&quot;Description&quot;: &quot;MW1 description&quot;,
-&quot;Enabled&quot;: true,
-&quot;Duration&quot;: 2,
-&quot;Cutoff&quot;: 1
-}
-]
-}</code></pre> </li> 
-<li>Run the following CLI command and find the WindowTargetId value for the instance that was assigned when you created the maintenance window.</li> 
-</ol> 
-<p><em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>aws ssm describe-maintenance-window-targets –window-id “mw-abc1234e3ddc9e286”</strong> </em></p> 
-<p>This command returns the following:</p> 
-<pre><code class="lang-json">{
-&quot;Targets&quot;: [
-{
-&quot;WindowId&quot;: &quot;mw-abc1234e3ddc9e286&quot;,
-&quot;WindowTargetId&quot;: &quot;2ecce06f-130c-41a3-870c-d36deff6cbba&quot;,
-&quot;ResourceType&quot;: &quot;INSTANCE&quot;,
-&quot;Targets&quot;: [
-{
-&quot;Key&quot;: &quot;InstanceIds&quot;,
-&quot;Values&quot;: [
-&quot;i-000a0a0ca4caf9861&quot;
-]
-}
-],
-&quot;OwnerInformation&quot;: &quot;test&quot;,
-&quot;Name&quot;: &quot;test&quot;,
-&quot;Description&quot;: &quot;test description&quot;
-}
-]
-}</code></pre> 
-<p>4. Run the following CLI command to register the Automation task to the maintenance window.<code class="lang-json"><br /> </code></p> 
-<p><strong><em>aws ssm register-task-with-maintenance-window –window-id “mw-abc1234e3ddc9e286” –targets “Key=WindowTargetIds,Values=2ecce06f-130c-41a3-870c-d36deff6cbba” –task-arn “CreateVolumeSnapshots” –service-role-arn “arn:aws:iam::111111111111:role/MaintenanceWindowRole” –task-type “AUTOMATION” –task-invocation-parameters “Automation={Parameters={instanceId=i-000a0a0ca4caf9861,AutomationAssumeRole=arn:aws:iam::111111111111:role/AutomationRole,SnapshotTimeout=PT20M}}” –priority 1 –max-concurrency 1 –max-errors 1 –name “Automation_Task1” –description “Automation_Task1 description”</em></strong></p> 
-<p>This command returns the following:</p> 
-<pre><code class="lang-json">{
-&quot;WindowTaskId&quot;: &quot;563e10e1-7b9c-4285-8c0c-cb94912b2839&quot;
-}</code></pre> 
-<h4>View the maintenance window execution</h4> 
-<p>A maintenance window is executed based on the schedule that was specified.&nbsp; After the maintenance window execution, results can be viewed in the History tab on the selected maintenance window landing page.</p> 
-<h4>Conclusion</h4> 
-<p>In this post, I showed you how to use the newly launched task types in Maintenance Windows to schedule and automate the execution of many common systems administration tasks. Using the maintenance window, you can now create different types of tasks, run your tasks when needed on specified targets, and get notified about any problems running these tasks. This helps you get the status on scheduled tasks, with details of the errors, enabling you to take appropriate action.</p> 
-<hr /> 
-<h4>About the Authors</h4> 
-<p><img class="size-full wp-image-1146 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/16/Profile-pic.jpeg" alt="" width="120" height="120" />Lavanya Krishnan is a Technical Product Manager in the EC2 Systems Manager team responsible for Patch Manager and Maintenance Window capabilities. Lavanya is passionate about building Enterprise and Cloud Products and Services. When not working, she loves to spend time with family, travel, read books and play board games.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p><img class="size-full wp-image-1149 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/16/Tracy.jpeg" alt="" width="119" height="160" />Tracy Williams is a Software Development Manager in the EC2 Systems Manager team and is responsible for Maintenance Window Capabilities. In his free time Tracy enjoys hiking, movies and sports cars.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a></span> 
 </footer> 
 </article> 
 <p>
