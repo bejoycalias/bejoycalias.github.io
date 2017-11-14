@@ -191,6 +191,171 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="b post-title" property="name headline">How to Export EC2 Instance Execution Logs to an S3 Bucket Using CloudWatch Logs, Lambda, and CloudFormation</b> 
+<footer class="meta">
+by 
+<span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
+<time property="datePublished" datetime="2017-11-13T11:12:07+00:00">13 NOV 2017</time> | in 
+<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/how-to-export-ec2-instance-execution-logs-to-an-s3-bucket-using-cloudwatch-logs-lambda-and-cloudformation/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<ul> 
+</ul> 
+</footer> 
+<p>“We want to get execution logs from our EC2 instances into S3,” my customer said. “Then we can store them and process them later, for optimization, audit, and security review, and so on. We’d like to do it in our CloudFormation stacks, as that’s our execution standard. Can you help us?”</p> 
+<p>This blog post shows you how to build a solution for this problem. We’ll build it using Amazon CloudWatch Logs, AWS Lambda, and some useful capabilities in AWS CloudFormation for customizing EC2 instances.</p> 
+<p><span id="more-1466"></span></p> 
+<b>How it works</b> 
+<p>To export the logs, we add some components to the CloudFormation stack that builds the EC2 instance. The following diagram and code samples show how this solution works in a stand-alone fashion. Later, we’ll discuss other ways to integrate these components into your production infrastructure.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/13/cwexport-arch.png" alt="Architecture diagram" /></p> 
+<p>We use a CloudFormation stack (1) to create the components shown. When everything is up and running, we have an EC2 instance running a CloudWatch Logs agent (2). The agent routes the configured logs to a CloudWatch Logs log group (3). A Lambda function (4) that’s subscribed to the log group picks up each log and writes it to an existing Amazon S3 bucket (5). Note that there’s some delay from the time a log message is created on the EC2 instance to the time it appears in the S3 bucket.</p> 
+<p>To configure the EC2 instance, we use a neat feature in CloudFormation, the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html" target="_blank" rel="noopener noreferrer">CloudFormation helper functions</a>. These helper functions can be combined to install and update a variety of software packages, configure them, start services, and more. We’ll show you how in this blog.</p> 
+<p>If you’d like to skip ahead and see the code in action, go to “Running the Solution.”</p> 
+<b>The implementation</b> 
+<p>The implementation consists of the following four files, which we’ll discuss later:</p> 
+<p>1.&nbsp;<code>Cwexport-master-template.yaml</code>: This template creates a security group and IAM role for our EC2 instance, and calls two embedded CloudFormation templates to do the real work.</p> 
+<p>2.&nbsp;<code>Cloudwatchlogsexport.yaml</code>: This template creates the CloudWatch log group the logs will be sent to, and defines the Lambda function that will perform the export from the log group to S3. It then creates a CloudWatch Log subscription to automatically send the CloudWatch log streams to the Lambda function.</p> 
+<p>3.&nbsp;<code>Cloudwatch-log-lambda.zip</code>: This zip file contains the code for the Lambda function, packaged along with its prerequisites.</p> 
+<p>4.&nbsp;<code>Run-ec2-instance.yaml</code>: This template creates the EC2 instance, installs the <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AgentReference.html" target="_blank" rel="noopener noreferrer">CloudWatch Log Agent</a>, &nbsp;configures it to export the desired logs, and performs a specified task on startup (in this case, calculating digits of Pi).</p> 
+<p>In practice we first set up the CloudWatch log group and export to Amazon S3, and then set up and configure the EC2 instance.</p> 
+<b>Exporting logs from CloudWatch Logs to S3</b> 
+<p>In Cloudwatchlogsexport.yaml, we first set up the CloudWatch Logs log group itself (<a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-loggroup.html" target="_blank" rel="noopener noreferrer"><code>&quot;AWS::Logs::LogGroup&quot;</code></a>).</p> 
+<p>Next, we define the Lambda function that will perform the actual export. We’ve packaged our Python code into a Lambda deployment package for uploading and deployment by CloudFormation. The function (cloudwatch-log-lambda.py) requires two environment variables, s3BucketName and s3KeyPrefix, to tell it where the log files should be exported to. We specify these variables as inputs to the master CloudFormation script, which passes them to the Lambda function at execution time.</p> 
+<p>The Lambda function receives logs from CloudWatch. For each invocation it unzips the received log file, converts it from JSON into a dictionary, then writes it out to S3 with our naming convention (&lt;s3KeyPrefix&gt;/&lt;logGroup&gt;/&lt;logStream&gt;/&lt;timestamp&gt;). You can see the source code of the Lambda <a title="Lambda code" href="https://management-tools-blog-cf-template-storage.s3.amazonaws.com/cloudwatchlogsexport2s3/cloudwatch-exportlogs2s3-lambda.py" target="_blank" rel="noopener noreferrer">here</a>.</p> 
+<p>Then, we associate the Lambda function and the CloudWatch log group via an <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-subscriptionfilter.html" target="_blank" rel="noopener noreferrer"><code>“AWS::Logs::SubscriptionFilter”</code></a> tag, specifying the Lambda function and the log group it’s subscribing to. This subscription will trigger the Lambda function when new logs are written to the CloudWatch log group, and pass the new log to it.</p> 
+<b>Customizing your EC2 instance</b> 
+<p>The last CloudFormation template, Run-ec2-instance.yaml, starts our EC2 instance. We use CloudFormation tags to customize the properties of the EC2 instance: specifying the EC2 instance type, AMI, the IAM role, VPC, and so on.</p> 
+<p>In our case, we also want to automatically install some software packages (notably, the CloudWatch Logs agent); configure some files; and then start some services – all before the actual processing specified in our UserData section is triggered. We can do so by using some capabilities that CloudFormation provides.</p> 
+<p>First, we use an <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html" target="_blank" rel="noopener noreferrer"><code>AWS::CloudFormation::Init</code></a> tag in the metadata section of our EC2 definition to define customizations. Then we call a <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html" target="_blank" rel="noopener noreferrer">set of provided CloudFormation helper scripts</a> from our EC2 instances’s UserData to implement the definitions before we move on to doing the work we’ve set up the EC2 instance to do. We describe the tag and definitions next.</p> 
+<b>The AWS::CloudFormation::Init tag</b> 
+<p>We use the <code>AWS::CloudFormation::Init</code> type to include metadata for our Amazon EC2 instance. The metadata can later be accessed by the helper scripts. When we execute the helper scripts from our EC2 instance’s UserData, the script looks for resource metadata specified in the AWS::CloudFormation::Init metadata key and uses that information to customize the instance. Here’s the beginning of our definition:</p> 
+<pre><code class="lang-yaml">&nbsp; EC2Instance:
+&nbsp;&nbsp;&nbsp; Type: 'AWS::EC2::Instance'
+&nbsp;&nbsp;&nbsp; Metadata:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 'AWS::CloudFormation::Init':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; configSets:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; default:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [config]
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; config:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; …</code></pre> 
+<p>The CloudFormation Init tag supports a wide variety of capabilities, which we encourage you to explore. For this EC2 instance we’ll use three: packages, files, and services.</p> 
+<h4>Using CloudFormation::Init to install software</h4> 
+<p>We can use the packages tag to download and install pre-packaged applications and components. For this blog post, we want to install one yum package: awslogs, the AWS CloudWatch Logs agent. Because the software is installed by the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-init.html" target="_blank" rel="noopener noreferrer">cfn-init</a> helper script, we’re limited to the package formats it supports. Currently, on Linux the package formats are apt, msi, python, rpm, rubygems, and yum. We specify the package manager, then each package’s name, and a list of (possibly empty) versions. Because we aren’t sensitive to the version here, we’ll leave the version tag blank. In this case, cfn-init installs the latest version if the package isn’t already installed, or leaves it at the current version if the package is installed.</p> 
+<pre><code class="lang-yaml">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; config:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; packages:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; yum:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; awslogs: []
+...</code></pre> 
+<h4>Configuring files</h4> 
+<p>Next, we want to use CloudFormation to <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/EC2NewInstanceCWL.html" target="_blank" rel="noopener noreferrer">create or modify the CloudWatch Log agent configuration files on the EC2 instance</a>. We can do this by using the “files” key of our <code>AWS::CloudFormation::Init</code>. There are several options for creating the files. Here, we include the desired content for the files directly in the CloudFormation template. We create two <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AgentReference.html" target="_blank" rel="noopener noreferrer">CloudWatch agent configuration files</a> and two CloudFormation helper configuration files:</p> 
+<p><strong>/etc/awslogs/awscli.conf:</strong> This short example shows how an entire file is specified within this tag. The file will contain the default Region, and a plugin setting:</p> 
+<pre><code class="lang-yaml">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; files:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '/etc/awslogs/awscli.conf':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; content: !Sub |
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [default]
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; region = ${AWS::Region}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [plugins]
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cwlogs = cwlogs
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mode: '000644'
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; owner: root
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; group: root</code></pre> 
+<p><strong>/etc/awslogs/awslogs.conf:</strong> We specify the local files we want to send to CloudWatch Logs, along with the log stream name to send them to, and other characteristics. The list being exported includes the CloudFormation execution logs. We encourage you to extend the list to include logs for your application or other logs of interest.</p> 
+<p>We’ve configured each selected EC2 instance local log file to go to a log stream that consists of the stack name, followed by the EC2 instance ID, followed by the name of the file. This way, the files associated with one instance are grouped together and are easily findable in CloudWatch. This naming convention can easily be changed.</p> 
+<p>The CloudWatch Logs agent lets us specify the size of the batches, the time stamp formats, the encoding, and more. By default, the logs are sent using enable gzip http content encoding to send compressed payloads to CloudWatch Logs. This decreases CPU usage, lowers Network Out, and decreases put latency. Our Lambda function unzips the files before writing them out.</p> 
+<p><strong>/etc/cfn/cfn-hup.conf and /etc/cfn/hooks.d/cfn-auto-reloader.conf:</strong> These two configuration files are used to configure the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-hup.html" target="_blank" rel="noopener noreferrer">cfn-hup daemon</a>. This daemon detects changes in the EC2 resource metadata and runs user-specified actions when a change is detected. This allows you to make configuration updates on your running Amazon EC2 instances through the UpdateStack API action.</p> 
+<h4>Starting and restarting services</h4> 
+<p>The third section in the metadata that we specify is the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html#aws-resource-init-services" target="_blank" rel="noopener noreferrer">services</a> key. This key defines which services should be enabled or disabled when the instance is launched. The services key also allows you to specify dependencies on sources, packages and files. If a restart is needed after files have been installed, cfn-init will take care of the service restart. In our example, we use this key to restart two services after we’ve created the config files for awslogs and cfn-hup.</p> 
+<pre><code class="lang-yaml">          services:
+sysvinit:
+awslogs:
+enabled: true
+ensureRunning: true
+packages:
+yum:
+- awslogs
+files:
+- '/etc/awslogs/awslogs.conf'
+- '/etc/awslogs/awscli.conf'
+cfn-hup:
+enabled: true
+ensureRunning: true
+files:
+- '/etc/cfn/cfn-hup.conf'
+- '/etc/cfn/hooks.d/cfn-auto-reloader.conf'</code></pre> 
+<h4>Finally: Executing the definitions</h4> 
+<p>Having specified the files to install, config files to set up, and services to be started, we need to ensure that the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-init.html" target="null">cfn-init</a> helper function is run to implement these specifications. In the EC2 instance’s UserData section, we first update the helper scripts and ensure that other yum packages are up-to-date. Then, we execute cfn-init, telling it which resource and CloudFormation stack to use as parameters.</p> 
+<p>Lastly, we call the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-signal.html" target="null">cfn-signal</a> helper function to let CloudFormation know that our EC2 instance is up and ready. We pass it the name of the stack, the Region, and the resource we’re sending a signal for. This signal causes CloudFormation to switch the EC2 instance to “Complete”.</p> 
+<pre><code class="lang-yaml">&nbsp; UserData:
+&nbsp;&nbsp;&nbsp; 'Fn::Base64': !Sub |
+&nbsp;&nbsp;&nbsp; #!/bin/bash -x
+&nbsp;&nbsp;&nbsp; # Use the line below to ensure the CloudFormation helper scripts are updated to the latest version
+&nbsp;&nbsp;&nbsp; # Per: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html
+&nbsp;&nbsp;&nbsp; yum install -y aws-cfn-bootstrap
+&nbsp;&nbsp;&nbsp; yum update -y&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp; /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2Instance --configsets default --region ${AWS::Region}
+&nbsp;&nbsp;&nbsp; /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --region ${AWS::Region} --resource=EC2Instance</code></pre> 
+<p>Now, we’re ready to actually perform the work of this EC2 instance. In our example, it’s a dummy job that calculates digits of Pi. We’re actually more interested in the log files created.</p> 
+<h3>Running the solution</h3> 
+<p>To see this solution in operation in us-west-2, choose the “Launch Stack” button&nbsp;below.</p> 
+<p>&nbsp;</p> 
+<p>Choose “Next”, then update the parameters shown below for your environment: TheLogsBucketName, VPCId, VPC Subnet and s3BucketForResults (leave the Template Locations as is).</p> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/Cloudwatchloggroup-stackparms.png" width="763" height="559" /></p> 
+<p>Click “Next” twice, acknowledge that AWS CloudFormation might create IAM resources with custom names, and click “Create”. Then wait for the CloudFormation master stack and its two nested stacks to reach a status of “CREATE_COMPLETE”.</p> 
+<p>After our EC2 instance is up and running, the files we specified in our CloudWatch Logs agent configuration are exported to CloudWatch. Here’s an example of our log group, as seen in the CloudWatch Logs console:</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/Cloudwatch-loggroup-capprechng.png" alt="" /></p> 
+<p>The Lambda function receives each log from CloudWatch and unzips it. It then writes the event file out to Amazon S3, giving it an S3 key that consists of the given S3 key prefix, followed by the log group, the log stream name (i.e., the filename), and a timestamp.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/13/cwexport-s3-output.png" alt="" /></p> 
+<p>If the logs don’t appear in Amazon S3 as expected, check the Lambda function’s CloudWatch Logs log group for execution errors. The CloudWatch logs for the Lambda function can be found in a log group named: <code>/aws/lambda/&lt;mainstackname&gt;-CWExportStack-CWEc2LogsLambdaFunction-&lt;id&gt;</code>.</p> 
+<h4>The power of change sets</h4> 
+<p>Earlier, we configured a cfn-hup daemon. The cfn-hup helper is a daemon that detects changes in resource metadata and runs user-specified actions when a change is detected. This allows you to make configuration updates on your running Amazon EC2 instances through the UpdateStack API action.</p> 
+<p>Let’s demonstrate the power of the cfn-hup configuration that’s in our CloudFormation stack. In our files definition, we provided the following configuration:</p> 
+<pre><code class="lang-yaml">'/etc/cfn/hooks.d/cfn-auto-reloader.conf':  
+content: !Sub |
+[cfn-auto-reloader-hook]
+triggers=post.update
+path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
+action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=EC2Instance
+runas=root 
+</code></pre> 
+<p>This configuration tells cfn-hup to re-run cfn-init after the stack has been updated.</p> 
+<p>In our case, we’ll make two changes to our EC2 instance. First, we’ll add an additional software package to install: jq. Imagine that there’s a part of our software stack that’s only invoked rarely, and we’re either missing a package or wish to upgrade a version in our running system. Secondly, we’ll add an additional log file export, cloud to our CloudWatch Logs configuration.</p> 
+<p>These changes have been made for you, in another CloudFormation template: &nbsp;run-ec2-instance-changed.yaml. To execute this change through the console, do the following steps.</p> 
+<ol> 
+<li>In the CloudFormation console, select your nested “EC2InstanceStack”.</li> 
+<li>Choose Actions&nbsp;&nbsp;-&gt; Update Stack.</li> 
+<li>You’ll receive a warning that “Performing operations directly on a nested stack may result in an unstable state where it is out-of-sync with the root stack to which it belongs.” But we’ll be very careful here, so select the option “Yes, Update.”</li> 
+<li>Next, select the revised template. Enter the following URL: <code>https://management-tools-blog-cf-template-storage.s3.amazonaws.com/cloudwatchlogsexport2s3/run-ec2-instance-changed.yaml</code>, and choose Next.</li> 
+<li>Click through the next two pages that show the existing template parameters. &nbsp;We won’t be modifying any of them.</li> 
+<li>On the next page, CloudFormation shows the results of analyzing the differences between the new CloudFormation template and the currently running one. The following screenshot shows the differences. We are modifying the EC2 instance only. The changes we’ve made result in “Replacement: False”, telling us that the existing EC2 instance will be modified. Other results there are “True,” which causes the resource to be replaced; or, “Conditional,” which means the resource property will be dynamically evaluated at execution time to determine if it requires replacement or not.</li> 
+</ol> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/cwmod-1.png" width="1036" height="178" /><br /> 7. Choose “Update”.</p> 
+<p>Then, in the CloudFormation console, you can see the update actions as they occur, and their results, as in the screenshot below.</p> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/Cwconsoleduringupdate-1.png" width="1151" height="449" /></p> 
+<p>After waiting a little while for the changes and logs to propagate, you can check the CloudWatch log group. You’ll see a new log stream there, for the cloud-init.log definition we added.</p> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/Cloudwatch-loggroup-cappostchng.png" width="961" height="400" /></p> 
+<p>In our CloudWatch log group (or in S3), you can review cfn-hup.log and see the moment it’s notified of the CloudFormation template change, and starts the cfn-auto-reloader-hook action.</p> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/cfn-hup-log.png" width="894" height="195" /></p> 
+<p>Then, in cfn-init.log, you can see the installation of the jq software package, and the rewriting of the other files specified in our CloudFormation template.</p> 
+<p><img class="alignnone size-medium" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/cfn-init-log-1.png" width="943" height="368" /></p> 
+<p>Now we’ve successfully updated our running EC2 instance, with additional software and changed configurations. All through our CloudFormation stack. And, we know that the CloudFormation template we now have reflects our running environment. Sweet!</p> 
+<p>Remember to delete the CloudFormation stack when you’re done, to stop incurring fees. If you delete the stack right way, testing the solution will cost only a few cents.</p> 
+<h4>Adapting for production use</h4> 
+<p>To implement, copy the files from s3://management-tools-blog-cf-template-storage.s3.amazonaws.com/cwexportlogs2s3/, and modify as needed for your environment.</p> 
+<p>This implementation demonstrates useful capabilities. However, you should consider modifying some details for production use.</p> 
+<p>In <code>cloudwatchlogsexport.yaml</code>, we’ve created a new log group. Since for demo purposes we’ll be deleting the log group when the CloudFormation stack is removed, we’ve added a commented out line <code>“#DeletionPolicy: Retain”</code> at the end of the definition. Because we’re writing the logs to S3, we don’t need to retain the log group. However, you may also choose to retain the group for some time after the run before expiring it, for additional validation. Also, because there is a delay in writing out the logs created, if you aggressively delete &nbsp;the CloudFormation stack as soon as the EC2 instance is terminated you might remove the Lambda function before the last logs have made it to the S3 bucket. We recommend that you wait a few minutes before deleting the CloudFormation stack.</p> 
+<p>You can also choose to use one log group for many CloudFormation stacks and EC2 instance executions. Using that approach, you would create the CloudWatch Log group and Lambda function once (run <code>Cloudwatchlogsexport.yaml</code> alone), and leave them in place for the long term. As each EC2 instance gets created (<code>run-ec2-instance.yaml</code>), pass it the name of the log group to use. Since we are using the instance ID in the log stream ID, the different executions will still be clearly identified in CloudWatch and in Amazon S3.</p> 
+<h3>Conclusion</h3> 
+<p>By integrating the CloudWatch Logs agent into our CloudFormation stack, your EC2 instance logs can easily be exported to an S3 bucket. After the logs are in S3, you have a myriad of additional options. You can make the EC2 instance logs part of your data lake. You can process them using some analytics tools, such as <a title="undefined" href="https://quicksight.aws/" target="_blank" rel="noopener noreferrer">Amazon QuickSight</a>. You can set up S3 lifecycle rules to automatically archive them for audit purposes, using <a title="undefined" href="https://aws.amazon.com/glacier/" target="_blank" rel="noopener noreferrer">Amazon Glacier</a>. Because all the components are automated using a CloudFormation stack, you can ensure that the logs are being exported and stored consistently. For example, you can integrate this solution into <a title="undefined" href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" target="null">requests to provision infrastructure</a>, to ensure that audit trails for all such requests are created in a consistent fashion.</p> 
+<p>The same CloudFormation components can be used to install, configure, and customize many other combinations of software.You’re limited only by your imagination. We hope this blog inspires you to extend your use to other use cases beyond the ones we’ve described here.</p> 
+<h4>About the Author</h4> 
+<p><strong>Veronika Megler, PhD, is a Senior Consultant, Big Data, Analytics &amp; Data Science, for AWS Professional Services.</strong> She enjoys helping customers adopt new technologies to solve new problems and to solve old problems more efficiently and effectively. In her spare time she is passionate about conservation, travel to interesting, beautiful or historic places, expanding her knowledge of arcane subjects, and searching for ultimate expression in Argentine tango.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
+</footer> 
+</article> 
+<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="b post-title" property="name headline">The Virtues of YAML CloudFormation and Using CloudFormation Designer to Convert JSON to YAML</b> 
 <footer class="meta">
 by 
@@ -1295,123 +1460,6 @@ cleanup_cli_role</code></pre>
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/chef-automate/" rel="tag">Chef Automate</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">AWS CloudFormation Feature Updates: Support for Amazon Athena and Coverage Updates for Amazon S3, Amazon RDS, Amazon Kinesis and Amazon CloudWatch</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
-<time property="datePublished" datetime="2017-10-18T18:46:07+00:00">18 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-athena/" title="View all posts in Amazon Athena*"><span property="articleSection">Amazon Athena*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-features-update-support-for-amazon-athena-coverage-updates-for-s3-rds-kinesis-and-cloudwatch/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>As one of the most widely-used services in AWS, CloudFormation continues to expand its feature set&nbsp;by including adding support for Amazon Athena, two new features to protect stacks and control rollback processes, plus several new coverage updates.</p> 
-<p>CloudFormation now supports the creation of an <a href="https://aws.amazon.com/athena/">Amazon Athena</a> named query as a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-athena-namedquery.html">resource</a>. Amazon Athena is a query service that makes it easy to analyze data directly from files stored in S3 using standard SQL statements. Named queries can then be executed manually from the AWS Management Console, CLI or programmatically&nbsp;using API calls.</p> 
-<p>You can now create a standard set of named queries&nbsp;using CloudFormation templates. To try it out, you can use some of the sample data provided by Athena, as covered in Jeff Barr’s blog post <a href="https://aws.amazon.com/blogs/aws/amazon-athena-interactive-sql-queries-for-data-in-amazon-s3/">here</a>.</p> 
-<p><span id="more-1532"></span></p> 
-<p>After&nbsp;you’ve verified that your query properly runs on Athena, use CloudFormation to create a query using the <strong>AWS::Athena::NamedQuery</strong> resource type:</p> 
-<pre><code class="lang-yaml">---
-#===============================================================================
-# Template: athena-named-query.yaml
-#
-# Purpose:  Creates an Athena Named Query via AWS CloudFormation, using the
-#           default data set provided by Athena.
-#===============================================================================
-AWSTemplateFormatVersion: &quot;2010-09-09&quot;
-Description: |
-Uses the default data set in Amazon Athena, with a sample elb logs table,
-to demonstrate how to create a named query via a CloudFormation template.
-This query checks for HTTP response codes and counts each code's occurrence
-Resources:
-AthenaNamedQuery:
-Type: AWS::Athena::NamedQuery
-Properties:
-Database: &quot;default&quot;
-Description: &quot;Select and count HTTP response codes&quot;
-Name: &quot;HTTPResponseCodeCount&quot;
-QueryString: &gt;
-SELECT backend_response_code, count(*)
-FROM default.&quot;elb_logs&quot;
-GROUP BY backend_response_code;</code></pre> 
-<p>This YAML template above executes&nbsp;using a Create Stack call in under a minute. Then, go to the Athena console and find&nbsp;the query you created using CloudFormation under the Saved Queries menu:</p> 
-<p>&nbsp;</p> 
-<p><img class="wp-image-1534 size-large aligncenter" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/SavedQueries-1024x397.png" alt="" width="640" height="248" /></p> 
-<p>&nbsp;</p> 
-<p>Note our new query, HTTPResponseCodeCount, its description, and the first portion of the SQL query shows in our list, which is alphabetically sorted by name (it is the fourth item on the preceding image).&nbsp;Choose&nbsp;the name of your new query, and then&nbsp;choose the <strong>Run Query</strong> button to execute it:</p> 
-<p>&nbsp;</p> 
-<p><img class="wp-image-1535 size-large aligncenter" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/QueryResults-1024x545.png" alt="" width="640" height="341" /></p> 
-<p>&nbsp;</p> 
-<p>The <strong>Results</strong> pane shows that most pages return a HTTP 200 response code, which is good (OK). You can inspect the other error codes, like 404 (Not Found), 302 (Redirect) or 500 (Server Error).</p> 
-<p>Beyond the new Athena support, two new features have been released within the last few weeks:</p> 
-<ul> 
-<li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-protect-stacks.html">Stack termination protection</a></strong> prevents a stack from being accidentally deleted. It’s a property that can be enabled on new or existing stacks, and it provides yet another level of protection for stacks and their resources. This setting is disabled by default, so you have to explicitly enable it when you create new stacks. For existing, non-nested stacks, you can change termination protection&nbsp;using the console or CLI.</li> 
-<li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_RollbackConfiguration.html">Rollback triggers</a></strong> allow you to have CloudFormation monitor the state of your application while the stack is being created or updated, and to roll back that create or update operation if the application triggers any alarms you have configured. Chuck Meyer’s blog post <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">here</a> demonstrates the use of rollback triggers.</li> 
-</ul> 
-<p>CloudFormation has also introduced the following resource coverage updates:</p> 
-<ul> 
-<li><strong>Amazon Simple Storage Service (S3)</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html">Configure</a> the transfer acceleration state.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>Amazon Relational Database Service (RDS)</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-rds-database-instance.html">Update</a> engine property from Oracle-SE or Oracle SE1&nbsp;to Oracle&nbsp;SE2 without the database instance being replaced.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>AWS Elastic Load Balancing (ELB)</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html">Specify</a> the IDs of the subnets to attach to a load balancer, and specify the type of load balancer to create.</li> 
-<li>For target groups, <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html">specify</a> the Availability Zone where the IP address is to be registered,&nbsp;and also specify the registration type of the targets in a given target group.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>AWS Elastic Beanstalk</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk.html">Define</a> lifecycle settings for resources that belong to the application, as well as the service role that Elastic Beanstalk assumes in order to apply lifecycle settings.</li> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk-environment.html">Specify</a> a custom platform for Elastic Beanstalk.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>Amazon&nbsp;Elastic Compute Cloud (EC2)</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-natgateway.html">Specify</a> resource tags for a Network Address Translation (NAT) gateway.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>Amazon&nbsp;Kinesis Firehose</strong> 
-<ul> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html">Specify</a> the stream type, as well as stream and role ARNs for a Kinesis stream used as a source for a delivery stream.</li> 
-</ul> </li> 
-</ul> 
-<ul> 
-<li><strong>Amazon CloudWatch</strong> 
-<ul> 
-<li>Support new <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-events-rule.html">properties</a> for input transformation of events, as well as setting Amazon ECS tasks and Kinesis stream targets.</li> 
-</ul> </li> 
-</ul> 
-<p>Visit our <a href="https://aws.amazon.com/cloudformation/">product</a> and <a href="https://aws.amazon.com/documentation/cloudformation/">documentation</a> pages for more information, as well as our list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported AWS resources</a>.</p> 
-<hr /> 
-<p><strong>About the Author</strong></p> 
-<table class=" alignleft" style="height: 90px" width="900"> 
-<tbody> 
-<tr> 
-<td width="63"><img class="alignnone wp-image-1533" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" alt="" width="80" height="106" /></td> 
-<td width="408"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.&nbsp;</strong>He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
-</tr> 
-</tbody> 
-</table> 
-<p>&nbsp;</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a></span> 
 </footer> 
 </article> 
 <p>
