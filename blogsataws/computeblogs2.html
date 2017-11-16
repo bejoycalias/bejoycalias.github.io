@@ -189,14 +189,431 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a</p>
 <br>
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b><a href="https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" property="url" rel="bookmark"><span property="name headline">Automate Your IT Operations Using AWS Step Functions and Amazon CloudWatch Events</span></a></b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Creating a Cost-Efficient Amazon ECS Cluster for Scheduled Tasks</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-09-28T10:44:39+00:00">28 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/creating-a-cost-efficient-amazon-ecs-cluster-for-scheduled-tasks/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2947" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2947&amp;disqus_title=Creating+a+Cost-Efficient+Amazon+ECS+Cluster+for+Scheduled+Tasks&amp;disqus_url=https://aws.amazon.com/blogs/compute/creating-a-cost-efficient-amazon-ecs-cluster-for-scheduled-tasks/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2947');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<table> 
+<tbody> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2959 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/28/mperi_profile.jpeg" alt="" width="120" height="160" /></td> 
+</tr> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><b>Madhuri Peri</b><br /> Sr. DevOps Consultant</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>When you use Amazon Relational Database Service (<a href="https://aws.amazon.com/rds/">Amazon RDS</a>), depending on the logging levels on the RDS instances and the volume of transactions, you could generate a lot of log data. To ensure that everything is running smoothly, many customers search for log error patterns using different log aggregation and visualization systems, such as Amazon Elasticsearch Service, Splunk, or other tool of their choice. A module needs to periodically retrieve the RDS logs using the SDK, and then send them to Amazon S3. From there, you can stream them to your log aggregation tool.</p> 
+<p>One option is writing an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function to retrieve the log files. However, because of the time that this function needs to execute, depending on the volume of log files retrieved and transferred, it is possible that Lambda could time out on many instances.&nbsp; Another approach is launching an Amazon EC2 instance that runs this job periodically. However, this would require you to run an EC2 instance continuously, not an optimal use of time or money.</p> 
+<p>Using&nbsp;the new Amazon CloudWatch integration with Amazon EC2 Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>), you&nbsp;can&nbsp;trigger this job to run in a container on an existing Amazon ECS cluster. Additionally, this would allow you to improve costs by running containers on a fleet of Spot Instances.</p> 
+<p>In this post, I will show you how to use the new scheduled tasks (<a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/scheduled_tasks.html">cron</a>) feature in Amazon ECS and launch tasks&nbsp;using CloudWatch events, while leveraging Spot Fleet to maximize availability and cost optimization for containerized workloads.</p> 
+<p><span id="more-2947"></span></p> 
+<b>Architecture</b> 
+<p>The following diagram shows how the various components described schedule a task that retrieves log files from&nbsp;Amazon RDS database instances, and deposits the logs into an S3 bucket.</p> 
+<p>Amazon ECS cluster container instances are using Spot Fleet, which is a perfect match for the workload that needs to run when it can. This improves cluster costs.</p> 
+<p>The task definition defines which Docker image to retrieve from the Amazon&nbsp;EC2 Container Registry (Amazon ECR)&nbsp;repository and run on the Amazon ECS cluster.</p> 
+<p><img class="alignnone size-large wp-image-2949" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-arch-1024x790.png" alt="" width="640" height="494" /></p> 
+<p>The container image has Python code functions to make AWS API calls using boto3. It iterates over the RDS database instances, retrieves the logs, and deposits them in the S3 bucket. Many customers choose these logs to be delivered to their centralized log-store. CloudWatch Events defines the schedule for when the container task has to be launched.</p> 
+<b>Walkthrough</b> 
+<p>To provide the basic framework, we have built an AWS CloudFormation <a href="https://github.com/awslabs/aws-ecs-scheduled-tasks/blob/master/cloudformation/ecs-spot-fleet.yaml">template</a> that creates the following resources:</p> 
+<li>Amazon ECR repository for storing the Docker image to be used in the task definition</li> 
+<li>S3 bucket that holds the transferred logs</li> 
+<li>Task definition, with image name and S3 bucket as environment variables provided via input parameter</li> 
+<li>CloudWatch Events rule</li> 
+<li>Amazon ECS cluster</li> 
+<li>Amazon ECS container instances using Spot Fleet</li> 
+<li>IAM roles required for the container instance profiles</li> 
+<h3>Before you begin</h3> 
+<p>Ensure that <a href="https://git-scm.com/book/en/v2/Getting-Started-Installing-Git">Git</a>, <a href="https://docs.docker.com/engine/installation/">Docker</a>, and the <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">AWS CLI</a> are installed on your computer.</p> 
+<p>In your AWS account, instantiate one Amazon Aurora instance using the console. For more information, see <a href="http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Aurora.CreateInstance.html">Creating an Amazon Aurora DB Cluster</a>.</p> 
+<h3>Implementation Steps</h3> 
+<ol> 
+<li>Clone the code from GitHub that performs RDS API calls to retrieve the log files.<br /> <code>git clone https://github.com/awslabs/aws-ecs-scheduled-tasks.git</code></li> 
+<li>Build and tag the image.<br /> <code>cd aws-ecs-scheduled-tasks/container-code/src &amp;&amp; ls</code><p></p> <pre><code class="lang-bash">Dockerfile		rdslogsshipper.py	requirements.txt</code></pre> <p><code>docker build -t rdslogsshipper .</code></p> <pre><code class="lang-bash">Sending build context to Docker daemon 9.728 kB
+Step 1 : FROM python:3
+---&gt; 41397f4f2887
+Step 2 : WORKDIR /usr/src/app
+---&gt; Using cache
+---&gt; 59299c020e7e
+Step 3 : COPY requirements.txt ./
+---&gt; 8c017e931c3b
+Removing intermediate container df09e1bed9f2
+Step 4 : COPY rdslogsshipper.py /usr/src/app
+---&gt; 099a49ca4325
+Removing intermediate container 1b1da24a6699
+Step 5 : RUN pip install --no-cache-dir -r requirements.txt
+---&gt; Running in 3ed98b30901d
+Collecting boto3 (from -r requirements.txt (line 1))
+Downloading boto3-1.4.6-py2.py3-none-any.whl (128kB)
+Collecting botocore (from -r requirements.txt (line 2))
+Downloading botocore-1.6.7-py2.py3-none-any.whl (3.6MB)
+Collecting s3transfer&lt;0.2.0,&gt;=0.1.10 (from boto3-&gt;-r requirements.txt (line 1))
+Downloading s3transfer-0.1.10-py2.py3-none-any.whl (54kB)
+Collecting jmespath&lt;1.0.0,&gt;=0.7.1 (from boto3-&gt;-r requirements.txt (line 1))
+Downloading jmespath-0.9.3-py2.py3-none-any.whl
+Collecting python-dateutil&lt;3.0.0,&gt;=2.1 (from botocore-&gt;-r requirements.txt (line 2))
+Downloading python_dateutil-2.6.1-py2.py3-none-any.whl (194kB)
+Collecting docutils&gt;=0.10 (from botocore-&gt;-r requirements.txt (line 2))
+Downloading docutils-0.14-py3-none-any.whl (543kB)
+Collecting six&gt;=1.5 (from python-dateutil&lt;3.0.0,&gt;=2.1-&gt;botocore-&gt;-r requirements.txt (line 2))
+Downloading six-1.10.0-py2.py3-none-any.whl
+Installing collected packages: six, python-dateutil, docutils, jmespath, botocore, s3transfer, boto3
+Successfully installed boto3-1.4.6 botocore-1.6.7 docutils-0.14 jmespath-0.9.3 python-dateutil-2.6.1 s3transfer-0.1.10 six-1.10.0
+---&gt; f892d3cb7383
+Removing intermediate container 3ed98b30901d
+Step 6 : COPY . .
+---&gt; ea7550c04fea
+Removing intermediate container b558b3ebd406
+Successfully built ea7550c04fea</code></pre> </li> 
+<li>Run the <a href="https://github.com/awslabs/aws-ecs-scheduled-tasks.git">CloudFormation stack</a> and get the names for the Amazon ECR repo and S3 bucket. In the stack, choose <b>Outputs</b>.<br /> <img class="alignnone size-full wp-image-2950" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-cf.png" alt="" width="890" height="359" /></li> 
+<li>Open the ECS console and choose <b>Repositories</b>. The rdslogs repo has been created. Choose <b>View Push Commands</b> and follow the instructions to connect to the repository and push the image for the code that you built in Step 2. The screenshot shows the final result:<br /> <img class="alignnone size-full wp-image-2952" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-cf2.png" alt="" width="975" height="373" /></li> 
+<li>Associate the CloudWatch scheduled task with the created Amazon ECS Task Definition, using a new CloudWatch event rule that is scheduled to run at intervals. The following rule is scheduled to run every 15 minutes:<br /> <code>aws --profile default --region us-west-2 events put-rule --name demo-ecs-task-rule&nbsp; --schedule-expression &quot;rate(15 minutes)&quot;</code><p></p> <pre><code class="lang-bash">{
+&nbsp; &nbsp; &quot;RuleArn&quot;: &quot;arn:aws:events:us-west-2:12345678901:rule/demo-ecs-task-rule&quot;
+}</code></pre> </li> 
+<li>CloudWatch requires IAM permissions to place a task on the Amazon ECS cluster when the CloudWatch event rule is executed, in addition to an IAM role that can be assumed by CloudWatch Events. This is done in three steps: 
+<ol> 
+<li>Create the IAM role to be assumed by CloudWatch.<br /> <code>aws --profile default --region us-west-2 iam create-role --role-name Test-Role --assume-role-policy-document file://event-role.json</code><p></p> <pre><code class="lang-bash">{
+&nbsp; &nbsp; &quot;Role&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;AssumeRolePolicyDocument&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Statement&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Action&quot;: &quot;sts:AssumeRole&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Effect&quot;: &quot;Allow&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Principal&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Service&quot;: &quot;events.amazonaws.com&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;RoleId&quot;: &quot;AROAIRYYLDCVZCUACT7FS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;CreateDate&quot;: &quot;2017-07-14T22:44:52.627Z&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;RoleName&quot;: &quot;Test-Role&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;Path&quot;: &quot;/&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;Arn&quot;: &quot;arn:aws:iam::12345678901:role/Test-Role&quot;
+&nbsp; &nbsp; }
+}</code></pre> <p>The following is an example of the event-role.json&nbsp;file used earlier:</p> <pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;events.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}</code></pre> </li> 
+<li>Create the IAM policy defining the ECS cluster and task definition. You need to get these values from the CloudFormation outputs and resources.<br /> <code>aws --profile default --region us-west-2 iam create-policy --policy-name test-policy --policy-document file://event-policy.json</code><p></p> <pre><code class="lang-bash">{
+&nbsp; &nbsp; &quot;Policy&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;PolicyName&quot;: &quot;test-policy&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;CreateDate&quot;: &quot;2017-07-14T22:51:20.293Z&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;AttachmentCount&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;IsAttachable&quot;: true,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;PolicyId&quot;: &quot;ANPAI7XDIQOLTBUMDWGJW&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;DefaultVersionId&quot;: &quot;v1&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;Path&quot;: &quot;/&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;Arn&quot;: &quot;arn:aws:iam::123455678901:policy/test-policy&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;UpdateDate&quot;: &quot;2017-07-14T22:51:20.293Z&quot;
+&nbsp; &nbsp; }
+}</code></pre> <p>The following is an example of the event-policy.json&nbsp;file used earlier:</p> <pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ecs:RunTask&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:ecs:*::task-definition/&quot;
+],
+&quot;Condition&quot;: {
+&quot;ArnLike&quot;: {
+&quot;ecs:cluster&quot;: &quot;arn:aws:ecs:*::cluster/&quot;
+}
+}
+}
+]
+}</code></pre> </li> 
+<li>Attach the IAM policy to the role.<br /> <code>aws --profile default --region us-west-2 iam attach-role-policy --role-name Test-Role --policy-arn arn:aws:iam::1234567890:policy/test-policy</code></li> 
+</ol> </li> 
+<li>Associate the CloudWatch rule created earlier to place the task on the ECS cluster. The following command shows an example. Replace the AWS account ID and region with your settings.<br /> <code>aws events put-targets --rule demo-ecs-task-rule --targets &quot;Id&quot;=&quot;1&quot;,&quot;Arn&quot;=&quot;arn:aws:ecs:us-west-2:12345678901:cluster/test-cwe-blog-ecsCluster-15HJFWCH4SP67&quot;,&quot;EcsParameters&quot;={&quot;TaskDefinitionArn&quot;=&quot;arn:aws:ecs:us-west-2:12345678901:task-definition/test-cwe-blog-taskdef:8&quot;},&quot;RoleArn&quot;=&quot;arn:aws:iam::12345678901:role/Test-Role&quot;</code><p></p> <pre><code class="lang-bash">{
+&nbsp; &nbsp; &quot;FailedEntries&quot;: [],&nbsp;
+&nbsp; &nbsp; &quot;FailedEntryCount&quot;: 0
+}</code></pre> </li> 
+</ol> 
+<p>That’s it. The logs now run based on the defined schedule.</p> 
+<p>To test this, open the Amazon ECS console, select the Amazon ECS cluster that you created, and then choose <b>Tasks, Run New Task</b>. Select the task definition created by the CloudFormation template, and the cluster should be selected automatically. As this runs, the S3 bucket should be populated with the RDS logs for the instance.</p> 
+<b>Conclusion</b> 
+<p>In this post, you’ve seen that the choices for workloads that need to run at a scheduled time include Lambda with CloudWatch events or EC2 with cron. However, sometimes the job could run outside of Lambda execution time limits or be not cost-effective for an EC2 instance.</p> 
+<p>In such cases, you can schedule the tasks on an ECS cluster using CloudWatch rules. In addition, you can use a Spot Fleet cluster with Amazon ECS for cost-conscious workloads that do not have hard requirements on execution time or instance availability in the Spot Fleet. For more information, see <a href="https://aws.amazon.com/blogs/compute/powering-your-amazon-ecs-cluster-with-amazon-ec2-spot-instances/">Powering your Amazon ECS Cluster with Amazon EC2 Spot Instances and Scheduled Events</a>.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<p>— Madhuri</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/aurora/" rel="tag">Aurora</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecs/" rel="tag">ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/spot/" rel="tag">spot</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2947');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using Enhanced Request Authorizers in Amazon API Gateway</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Stefano Buliani</span></span> | on 
+<time property="datePublished" datetime="2017-09-27T10:05:56+00:00">27 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/using-enhanced-request-authorizers-in-amazon-api-gateway/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2917" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2917&amp;disqus_title=Using+Enhanced+Request+Authorizers+in+Amazon+API+Gateway&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-enhanced-request-authorizers-in-amazon-api-gateway/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2917');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Recently, AWS introduced a new type of authorizer in <a href="https://aws.amazon.com/api-gateway/" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a>, <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-api-gateway-now-supports-enhanced-request-authorizers/" target="_blank" rel="noopener noreferrer">enhanced request authorizers</a>. Previously, custom authorizers received only the bearer token included in the request and the ARN of the API Gateway method being called. Enhanced request authorizers receive all of the headers, query string, and path parameters as well as the request context. This enables you to make more sophisticated authorization decisions based on parameters such as the client IP address, user agent, or a query string parameter alongside the client bearer token.</p> 
+<h3>Enhanced request authorizer configuration</h3> 
+<p>From the API Gateway console, you can declare a new enhanced request authorizer by selecting the <strong>Request</strong> option as the AWS Lambda event payload:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-10.13.18-AM.png"><img class="size-medium wp-image-2924 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-10.13.18-AM-215x300.png" alt="Create enhanced request authorizer" width="215" height="300" /></a></p> 
+<p>&nbsp;</p> 
+<p>Just like normal custom authorizers, API Gateway can cache the policy returned by your Lambda function. With enhanced request authorizers, however, you can also specify the values that form the unique key of a policy in the cache. For example, if your authorization decision is based on both the bearer token and the IP address of the client, both values should be part of the unique key in the policy cache. The identity source parameter lets you specify these values as <a href="http://docs.aws.amazon.com/apigateway/latest/developerguide/request-response-data-mappings.html" target="_blank" rel="noopener noreferrer">mapping expressions</a>:</p> 
+<li>The bearer token appears in the Authorization header</li> 
+<li>The client IP address is stored in the sourceIp parameter of the request context.</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-1.54.04-PM.png"><img class="size-medium wp-image-2925 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-1.54.04-PM-300x163.png" alt="Configure identity sources" width="300" height="163" /></a></p> 
+<p>&nbsp;</p> 
+<h3>Using enhanced request authorizers with Swagger</h3> 
+<p>You can also define enhanced request authorizers in your Swagger (<a href="https://www.openapis.org" target="_blank" rel="noopener noreferrer">Open API</a>) definitions. In the following example, you can see that all of the options configured in the API Gateway console are available as custom extensions in the API definition. For example, the <i>identitySource</i> field is a comma-separated list of mapping expressions.</p> 
+<pre><code class="lang-yaml">securityDefinitions:
+IpAuthorizer:
+type: &quot;apiKey&quot;
+name: &quot;IpAuthorizer&quot;
+in: &quot;header&quot;
+x-amazon-apigateway-authtype: &quot;custom&quot;
+x-amazon-apigateway-authorizer:
+authorizerResultTtlInSeconds: 300
+identitySource: &quot;method.request.header.Authorization, context.identity.sourceIp&quot;
+authorizerUri: &quot;arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:XXXXXXXXXX:function:py-ip-authorizer/invocations&quot;
+type: &quot;request&quot;
+</code></pre> 
+<p>After you have declared your authorizer in the security definitions section, you can use it in your API methods:</p> 
+<pre><code class="lang-yaml">---
+swagger: &quot;2.0&quot;
+info:
+title: &quot;request-authorizer-demo&quot;
+basePath: &quot;/dev&quot;
+paths:
+/hello:
+get:
+security:
+- IpAuthorizer: []
+...
+</code></pre> 
+<h3>Enhanced request authorizer Lambda functions</h3> 
+<p>Enhanced request authorizer <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">Lambda</a> functions receive an event object that is similar to proxy integrations. It contains all of the information about a request, excluding the body.</p> 
+<pre><code class="lang-json">{
+&quot;methodArn&quot;: &quot;arn:aws:execute-api:us-east-1:XXXXXXXXXX:xxxxxx/dev/GET/hello&quot;,
+&quot;resource&quot;: &quot;/hello&quot;,
+&quot;requestContext&quot;: {
+&quot;resourceId&quot;: &quot;xxxx&quot;,
+&quot;apiId&quot;: &quot;xxxxxxxxx&quot;,
+&quot;resourcePath&quot;: &quot;/hello&quot;,
+&quot;httpMethod&quot;: &quot;GET&quot;,
+&quot;requestId&quot;: &quot;9e04ff18-98a6-11e7-9311-ef19ba18fc8a&quot;,
+&quot;path&quot;: &quot;/dev/hello&quot;,
+&quot;accountId&quot;: &quot;XXXXXXXXXXX&quot;,
+&quot;identity&quot;: {
+&quot;apiKey&quot;: &quot;&quot;,
+&quot;sourceIp&quot;: &quot;58.240.196.186&quot;
+},
+&quot;stage&quot;: &quot;dev&quot;
+},
+&quot;queryStringParameters&quot;: {},
+&quot;httpMethod&quot;: &quot;GET&quot;,
+&quot;pathParameters&quot;: {},
+&quot;headers&quot;: {
+&quot;cache-control&quot;: &quot;no-cache&quot;,
+&quot;x-amzn-ssl-client-hello&quot;: &quot;AQACJAMDAAAAAAAAAAAAAAAAAAAAAAAAAAAA…&quot;,
+&quot;Accept-Encoding&quot;: &quot;gzip, deflate&quot;,
+&quot;X-Forwarded-For&quot;: &quot;54.240.196.186, 54.182.214.90&quot;,
+&quot;Accept&quot;: &quot;*/*&quot;,
+&quot;User-Agent&quot;: &quot;PostmanRuntime/6.2.5&quot;,
+&quot;Authorization&quot;: &quot;hello&quot;
+},
+&quot;stageVariables&quot;: {},
+&quot;path&quot;: &quot;/hello&quot;,
+&quot;type&quot;: &quot;REQUEST&quot;
+}
+</code></pre> 
+<p>The following enhanced request authorizer snippet is written in Python and compares the source IP address against a list of valid IP addresses. The comments in the code explain what happens in each step.</p> 
+<pre><code class="lang-python">...
+VALID_IPS = [&quot;58.240.195.186&quot;, &quot;201.246.162.38&quot;]
+def lambda_handler(event, context):
+# Read the client’s bearer token.
+jwtToken = event[&quot;headers&quot;][&quot;Authorization&quot;]
+# Read the source IP address for the request form 
+# for the API Gateway context object.
+clientIp = event[&quot;requestContext&quot;][&quot;identity&quot;][&quot;sourceIp&quot;]
+# Verify that the client IP address is allowed.
+# If it’s not valid, raise an exception to make sure
+# that API Gateway returns a 401 status code.
+if clientIp not in VALID_IPS:
+raise Exception('Unauthorized')
+# Only allow hello users in!
+if not validate_jwt(userId):
+raise Exception('Unauthorized')
+# Use the values from the event object to populate the 
+# required parameters in the policy object.
+policy = AuthPolicy(userId, event[&quot;requestContext&quot;][&quot;accountId&quot;])
+policy.restApiId = event[&quot;requestContext&quot;][&quot;apiId&quot;]
+policy.region = event[&quot;methodArn&quot;].split(&quot;:&quot;)[3]
+policy.stage = event[&quot;requestContext&quot;][&quot;stage&quot;]
+# Use the scopes from the bearer token to make a 
+# decision on which methods to allow in the API.
+policy.allowMethod(HttpVerb.GET, '/hello')
+# Finally, build the policy.
+authResponse = policy.build()
+return authResponse
+...
+</code></pre> 
+<h3>Conclusion</h3> 
+<p>API Gateway customers build complex APIs, and authorization decisions often go beyond the simple properties in a JWT token. For example, users may be allowed to call the “list cars” endpoint but only with a specific subset of filter parameters. With enhanced request authorizers, you have access to all request parameters. You can centralize all of your application’s access control decisions in a Lambda function, making it easier to manage your application security.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/api-gateway/" rel="tag">api gateway</a>, <a href="https://aws.amazon.com/blogs/compute/tag/authorization/" rel="tag">authorization</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/request/" rel="tag">request</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2917');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Automating Amazon EBS Snapshot Management with AWS Step Functions and Amazon CloudWatch Events</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-09-18T13:06:35+00:00">18 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2753" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2753&amp;disqus_title=Automating+Amazon+EBS+Snapshot+Management+with+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2753');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg" alt="" width="119" height="160" class="alignnone size-full wp-image-2754" /></a></p> 
+<p><strong>Brittany Doncaster, Solutions Architect</strong></p> 
+<p>Business continuity is important for building mission-critical workloads on AWS. As an AWS customer, you might define recovery point objectives (RPO) and recovery time objectives (RTO) for different tier applications in your business. After the RPO and RTO requirements are defined, it is up to your architects to determine how to meet those requirements.</p> 
+<p>You probably store persistent data in <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> volumes, which live within a single Availability Zone. And, following best practices, you take snapshots of your EBS volumes to back up the data on <a href="https://aws.amazon.com/s3">Amazon S3</a>, which provides 11 9's of durability. If you are following these best practices, then you've probably recognized the need to manage the number of snapshots you keep for a particular EBS volume and delete older, unneeded snapshots. Doing this cleanup helps save on storage costs.</p> 
+<p>Some customers also have policies stating that backups need to be stored a certain number of miles away as part of a disaster recovery (DR) plan. To meet these requirements, customers copy their EBS snapshots to the DR region. Then, the same snapshot management and cleanup has to also be done in the DR region.</p> 
+<p>All of this snapshot management logic consists of different components. You would first tag your snapshots so you could manage them. Then, determine how many snapshots you currently have for a particular EBS volume and assess that value against a retention rule. If the number of snapshots was greater than your retention value, then you would clean up old snapshots. And finally, you might copy the latest snapshot to your DR region. All these steps are just an example of a simple snapshot management workflow. But how do you automate something like this in AWS? How do you do it without servers?</p> 
+<p>One of the most powerful AWS services released in 2016 was <a href="http://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a>. It enables you to build event-driven IT automation, based on events happening within your AWS infrastructure. CloudWatch Events integrates with <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to let you execute your custom code when one of those events occurs. However, the actions to take based on those events aren't always composed of a single Lambda function. Instead, your business logic may consist of multiple steps (like in the case of the example snapshot management flow described earlier). And you may want to run those steps in sequence or in parallel. You may also want to have retry logic or exception handling for each step.</p> 
+<p><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> serves just this purpose―to help you coordinate your functions and microservices. Step Functions enables you to simplify your effort and pull the error handling, retry logic, and workflow logic out of your Lambda code. Step Functions integrates with Lambda to provide a mechanism for building complex serverless applications. Now, you can kick off a Step Functions state machine based on a CloudWatch event.</p> 
+<p>In this post, I discuss how you can target Step Functions in a CloudWatch Events rule. This allows you to have event-driven snapshot management based on snapshot completion events firing in CloudWatch Event rules.</p> 
+<p>As an example of what you could do with Step Functions and CloudWatch Events, we've developed a <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">reference architecture</a> that performs management of your EBS snapshots.</p> 
+<b id="toc_1">Automating EBS Snapshot Management with Step Functions</b> 
+<p>This architecture assumes that you have already <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/TakeScheduledSnapshot.html">set up CloudWatch Events to create the snapshots on a schedule</a> or that you are using some other means of creating snapshots according to your needs.</p> 
+<p>This architecture covers the pieces of the workflow that need to happen after a snapshot has been created.</p> 
+<li>It <a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-for-ebs-snapshots/">creates a CloudWatch Events rule</a> to invoke a Step Functions state machine execution when an EBS snapshot is created.</li> 
+<li>The state machine then tags the snapshot, cleans up the oldest snapshots if the number of snapshots is greater than the defined number to retain, and copies the snapshot to a DR region.</li> 
+<li>When the DR region snapshot copy is completed, another state machine kicks off in the DR region. The new state machine has a similar flow and uses some of the same Lambda code to clean up the oldest snapshots that are greater than the defined number to retain.</li> 
+<li>Also, both state machines demonstrate how you can use Step Functions to handle errors within your workflow. Any errors that are caught during execution result in the execution of a Lambda function that writes a message to an SNS topic. Therefore, if any errors occur, you can subscribe to the SNS topic and get notified.</li> 
+<p>The following is an architecture diagram of the reference architecture:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png" alt="" width="975" height="753" class="aligncenter size-full wp-image-2763" /></a></p> 
+<b id="toc_2">Creating the Lambda functions and Step Functions state machines</b> 
+<p>First, pull the code from GitHub and use the <a href="https://aws.amazon.com/cli">AWS CLI</a> to create S3 buckets for the Lambda code in the primary and DR regions. For this example, assume that the primary region is us-west-2 and the DR region is us-east-2. Run the following commands, replacing the italicized text in &lt;&gt; with your own unique bucket names.</p> 
+<pre><code class="language-none">git clone https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt.git
+cd aws-step-functions-ebs-snapshot-mgmt/
+aws s3 mb s3://<i>&lt;primary region bucket name&gt;</i> --region us-west-2
+aws s3 mb s3://<i>&lt;DR region bucket name&gt;</i> --region us-east-2</code></pre> 
+<p>Next, use the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a> (SAM), which uses AWS CloudFormation to deploy the Lambda functions and Step Functions state machines in the primary and DR regions. Replace the italicized text in &lt;&gt; with the S3 bucket names that you created earlier.</p> 
+<pre><code class="language-none">aws cloudformation package --template-file PrimaryRegionTemplate.yaml --s3-bucket <i>&lt;primary region bucket name&gt;</i>  --output-template-file tempPrimary.yaml --region us-west-2
+aws cloudformation deploy --template-file tempPrimary.yaml --stack-name ebsSnapshotMgmtPrimary --capabilities CAPABILITY_IAM --region us-west-2
+aws cloudformation package --template-file DR_RegionTemplate.yaml --s3-bucket <i>&lt;DR region bucket name&gt;</i> --output-template-file tempDR.yaml  --region us-east-2
+aws cloudformation deploy --template-file tempDR.yaml --stack-name ebsSnapshotMgmtDR --capabilities CAPABILITY_IAM --region us-east-2</code></pre> 
+<b id="toc_3">CloudWatch event rule verification</b> 
+<p>The CloudFormation templates deploy the following resources:</p> 
+<li>The Lambda functions that are coordinated by Step Functions</li> 
+<li>The Step Functions state machine</li> 
+<li>The SNS topic</li> 
+<li>The CloudWatch Events rules that trigger the state machine execution</li> 
+<p>So, all of the CloudWatch event rules have been created for you by performing the preceding commands. The next section demonstrates how you could create the CloudWatch event rule manually. To jump straight to testing the workflow, see the “Testing in your Account” section. Otherwise, you begin by setting up the CloudWatch event rule in the primary region for the createSnapshot event and also the CloudWatch event rule in the DR region for the copySnapshot command.</p> 
+<p>First, open the CloudWatch console in the primary region.</p> 
+<p>Choose <strong>Create Rule</strong> and create a rule for the createSnapshot command, with your newly created Step Function state machine as the target.</p> 
+<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
+<li><strong>Service Name</strong>: EC2</li> 
+<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
+<li><strong>Specific Event</strong>: createSnapshot</li> 
+<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then choose the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like the following:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png" alt="" width="975" height="772" class="aligncenter size-full wp-image-2764" /></a></p> 
+<p>Choose <strong>Configure Details</strong> and give the rule a name and description.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png" alt="" width="975" height="310" class="aligncenter size-full wp-image-2765" /></a></p> 
+<p>Choose <strong>Create Rule</strong>. You now have a CloudWatch Events rule that triggers a Step Functions state machine execution when the EBS snapshot creation is complete.</p> 
+<p>Now, set up the CloudWatch Events rule in the DR region as well. This looks almost same, but is based off the copySnapshot event instead of createSnapshot.</p> 
+<p>In the upper right corner in the console, switch to your DR region. Choose <strong>CloudWatch</strong>, <strong>Create Rule</strong>.</p> 
+<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
+<li><strong>Service Name</strong>: EC2</li> 
+<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
+<li><strong>Specific Event</strong>: copySnapshot</li> 
+<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then select the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like in the following:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png" alt="" width="975" height="649" class="aligncenter size-full wp-image-2766" /></a></p> 
+<p>As in the primary region, choose <strong>Configure Details</strong> and then give this rule a name and description. Complete the creation of the rule.</p> 
+<b id="toc_4">Testing in your account</b> 
+<p>To test this setup, open the EC2 console and choose <strong>Volumes</strong>. Select a volume to snapshot. Choose <strong>Actions</strong>, <strong>Create Snapshot</strong>, and then create a snapshot.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png" alt="" width="589" height="264" class="aligncenter size-full wp-image-2767" /></a></p> 
+<p>This results in a new execution of your state machine in the primary and DR regions. You can view these executions by going to the Step Functions console and selecting your state machine.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png" alt="" width="975" height="191" class="aligncenter size-full wp-image-2768" /></a></p> 
+<p>From there, you can see the execution of the state machine.</p> 
+<p>Primary region state machine:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png" alt="" width="975" height="420" class="aligncenter size-full wp-image-2769" /></a></p> 
+<p>DR region state machine:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png" alt="" width="975" height="499" class="aligncenter size-full wp-image-2770" /></a></p> 
+<p>I've also provided CloudFormation templates that perform all the earlier setup without using git clone and running the CloudFormation commands. Choose the <strong>Launch Stack</strong> buttons below to launch the primary and DR region stacks in Dublin and Ohio, respectively. From there, you can pick up at the Testing in Your Account section above to finish the example. All of the code for this example architecture is located in the <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">aws-step-functions-ebs-snapshot-mgmt</a> AWSLabs repo.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=step-functions-ebs-mgmt-primary&amp;templateURL=https://s3-eu-west-1.amazonaws.com/step-functions-ref-archs-eu-west-1/PrimaryRegionTemplateV2.json"><img src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" alt="Launch EBS Snapshot Management into Ireland with CloudFormation" style="max-width:100%" /></a><br /> <strong>Primary Region eu-west-1 (Ireland) </strong><br /> <br /> <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/new?stackName=step-functions-ebs-mgmt-dr&amp;templateURL=https://s3.us-east-2.amazonaws.com/step-functions-ref-archs-east-2/DRRegionTemplateV2.json"><img src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" alt="Launch EBS Snapshot Management into Ohio with CloudFormation" style="max-width:100%" /></a><br /> <strong>DR Region us-east-2 (Ohio) </strong></p> 
+<b id="toc_5">Summary</b> 
+<p>This reference architecture is just an example of how you can use Step Functions and CloudWatch Events to build event-driven IT automation. The possibilities are endless:</p> 
+<li>Use this pattern to perform other common cleanup type jobs such as managing Amazon RDS snapshots, old versions of Lambda functions, or old Amazon ECR images—all triggered by scheduled events.</li> 
+<li>Use Trusted Advisor events to identify unused EC2 instances or EBS volumes, then coordinate actions on them, such as alerting owners, stopping, or snapshotting.</li> 
+<p>Happy coding and please let me know what useful state machines you build!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ebs/" rel="tag">ebs</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ec2/" rel="tag">EC2</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2753');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Automate Your IT Operations Using AWS Step Functions and Amazon CloudWatch Events</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
 <time property="datePublished" datetime="2017-09-14T11:29:33+00:00">14 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-personal-health-dashboard/" title="View all posts in AWS Personal Health Dashboard*"><span property="articleSection">AWS Personal Health Dashboard*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-personal-health-dashboard/" title="View all posts in AWS Personal Health Dashboard*"><span property="articleSection">AWS Personal Health Dashboard*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2832" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2832&amp;disqus_title=Automate+Your+IT+Operations+Using+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -204,9 +621,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2832');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg" alt="" width="119" height="160" class="alignnone size-full wp-image-2834" /></a><br /> <strong>Rob Percival, Associate Solutions Architect</strong></p> 
 <p>Are you interested in reducing the operational overhead of your AWS Cloud infrastructure? One way to achieve this is to automate the response to operational events for resources in your AWS account.</p> 
@@ -266,24 +681,31 @@ AWS.Blog.commenting('#aws-comment-trigger-2832');
 <p>If the <em>catch</em> configuration of the <em>task</em> state in Step 1 was triggered, then the security notification email instead directs your security team to log in to the console and navigate to the <a href="http://docs.aws.amazon.com/health/latest/ug/getting-started-phd.html">Personal Health Dashboard</a> to view more details on the incident.</p> 
 <b id="toc_6">Lessons learned</b> 
 <p>When implementing this use case with Step Functions and Lambda, consider the following:</p> 
-<ul> 
 <li>One of the most important parts of implementing automation in response to operational events is to ensure visibility into the response and resolution actions is retained. Step Functions and Lambda enable you to orchestrate your granular response and resolution actions that provides direct visibility into the state of the automation workflow.</li> 
 <li>This basic workflow currently executes these steps serially with a <em>catch</em> configuration for error handling. More sophisticated workflows can leverage the <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-parallel-state.html">parallel execution</a>, <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html">branching logic</a>, and <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-wait-state.html">time delay</a> functionality provided by Step Functions.</li> 
 <li>Catch and retry configurations for task states allow for orchestrating reliable workflows while maintaining the granularity of each Lambda function. Without leveraging a catch configuration in Step 1, you would have had to duplicate code from the function in Step 3 to ensure that your security team was notified on failure to delete the access key.</li> 
 <li>Step Functions and Lambda are serverless services, so there is no cost for these services when they are not running. Because this IT automation workflow only runs when an IAM access key is exposed for this account (which is hopefully rare!), the total monthly cost for this workflow is essentially $0.</li> 
-</ul> 
 <b id="toc_7">Conclusion</b> 
 <p>Automating the response to operational events for resources in your AWS account can free up the valuable time of your engineers. Step Functions and Lambda enable granular IT automation workflows to achieve this result while gaining direct visibility into the orchestration and state of the automation.</p> 
 <p>For more examples of how to use Step Functions to automate the operations of your AWS resources, or if you'd like to see how Step Functions can be used to build and orchestrate serverless applications, visit <a href="https://aws.amazon.com/step-functions/getting-started/">Getting Started</a> on the <a href="https://aws.amazon.com/step-functions">Step Functions</a> website.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a>, <a href="https://aws.amazon.com/blogs/compute/tag/iam/" rel="tag">IAM</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2832');
+});
+</script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b><a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-coreos-tectonic/" property="url" rel="bookmark"><span property="name headline">Manage Kubernetes Clusters on AWS Using CoreOS Tectonic</span></a></b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Manage Kubernetes Clusters on AWS Using CoreOS Tectonic</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Arun Gupta</span></span> | on 
 <time property="datePublished" datetime="2017-09-13T12:44:55+00:00">13 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-coreos-tectonic/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2819" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2819&amp;disqus_title=Manage+Kubernetes+Clusters+on+AWS+Using+CoreOS+Tectonic&amp;disqus_url=https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-coreos-tectonic/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -291,34 +713,28 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2819');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>There are multiple ways to run a&nbsp;<a href="https://github.com/kubernetes/community/blob/master/sig-aws/kubernetes-on-aws.md">Kubernetes cluster on Amazon Web Services</a> (AWS).&nbsp;The <a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/">first post</a> in this series explained how to manage a Kubernetes cluster on AWS using <a href="https://github.com/kubernetes/kops">kops</a>. This second post explains how to manage a Kubernetes cluster on AWS using <a href="https://coreos.com/tectonic/">CoreOS Tectonic</a>.</p> 
 <b>Tectonic overview</b> 
 <p>Tectonic delivers the most current upstream version of Kubernetes with additional features. It is a commercial offering from CoreOS and adds the following features over the upstream:</p> 
-<ul> 
 <li><strong>Installer</strong><br /> Comes with a graphical installer that installs a highly available Kubernetes cluster. Alternatively, the cluster can be installed using AWS CloudFormation templates or Terraform scripts.</li> 
 <li><strong>Operators</strong><br /> An <a href="https://coreos.com/operators">operator</a> is an application-specific controller that extends the Kubernetes API to create, configure, and manage instances of complex stateful applications on behalf of a Kubernetes user. This release includes an <a href="https://coreos.com/blog/introducing-the-etcd-operator.html">etcd operator</a> for rolling upgrades and a Prometheus operator for monitoring capabilities.</li> 
 <li><strong>Console</strong><br /> A web console provides a full view of applications running in the cluster. It also allows you to deploy applications to the cluster and start the rolling upgrade of the cluster.</li> 
 <li><strong>Monitoring</strong><br /> Node CPU and memory metrics are powered by the Prometheus operator. The graphs are available in the console. A large set of preconfigured Prometheus alerts are also available.</li> 
 <li><strong>Security</strong><br /> Tectonic ensures that cluster is always up to date with the most recent patches/fixes. Tectonic clusters also enable role-based access control (RBAC). Different roles can be mapped to an LDAP service.</li> 
 <li><strong>Support</strong><br /> CoreOS provides commercial support for clusters created using Tectonic.</li> 
-</ul> 
 <p>Tectonic can be installed on AWS using a <a href="https://coreos.com/tectonic/docs/latest/install/aws/index.html">GUI installer</a>&nbsp;or <a href="https://coreos.com/tectonic/docs/latest/install/aws/aws-terraform.html">Terraform</a> scripts. The installer prompts you for the information needed to boot the Kubernetes cluster, such as AWS access and secret key, number of master and worker nodes, and instance size for the master and worker nodes. The cluster can be created after all the options are specified. Alternatively, Terraform assets can be downloaded and the cluster can be created later. This post shows using the installer.</p> 
 <b>CoreOS License and Pull Secret</b> 
 <p>Even though Tectonic is a commercial offering, a cluster for up to 10 nodes can be created by creating a free account at <a href="https://account.coreos.com/signup/summary/tectonic-2016-12">Get Tectonic for Kubernetes</a>. After signup, a CoreOS License and Pull Secret files are provided on your <a href="http://account.coreos.com/">CoreOS account page</a>. Download these files as they are needed by the installer to boot the cluster.</p> 
 <b>IAM user permission</b> 
 <p>The IAM user to create the Kubernetes cluster must have access to the following services and features:</p> 
-<ul> 
 <li>Amazon Route 53</li> 
 <li>Amazon EC2</li> 
 <li>Elastic Load Balancing</li> 
 <li>Amazon S3</li> 
 <li>Amazon VPC</li> 
 <li>Security groups</li> 
-</ul> 
 <p>Use the <a href="https://coreos.com/tectonic/docs/latest/files/aws-policy.json">aws-policy</a> policy to grant the required permissions for the IAM user.</p> 
 <b>DNS configuration</b> 
 <p>A subdomain is required to create the cluster, and it must be registered as a public Route 53 hosted zone. The zone is used to host and expose the console web application. It is also used as the static namespace for the Kubernetes API server. This allows <code>kubectl</code> to be able to talk directly with the master.</p> 
@@ -356,11 +772,9 @@ aws route53 create-hosted-zone \
 <p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-2.png"><img class="alignnone wp-image-2822" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-2.png" alt="" width="612" height="512" /></a></p> 
 <p>Define the number and instance type of master and worker nodes. In this case, create a 6 nodes cluster. Make sure that the worker nodes have enough processing power and memory to run the containers.</p> 
 <p>An etcd cluster is used as persistent storage for all of Kubernetes API objects. This cluster is required for the Kubernetes cluster to operate. There are three ways to use the etcd cluster as part of the Tectonic installer:</p> 
-<ul> 
 <li>(Default) Provision the cluster using EC2 instances. Additional EC2 instances are used in this case.</li> 
 <li>Use an alpha support for cluster provisioning using the etcd operator. The etcd operator is used for automated operations of the etcd master nodes for the cluster itself, in addition to for etcd instances that are created for application usage. The etcd cluster is provisioned within the Tectonic installer.</li> 
 <li>Bring your own pre-provisioned etcd cluster.</li> 
-</ul> 
 <p>Use the first option in this case.</p> 
 <p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-3.png"><img class="alignnone wp-image-2823" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-3.png" alt="" width="550" height="645" /></a></p> 
 <p>For more information about choosing the appropriate instance type, see the <a href="https://coreos.com/etcd/docs/latest/op-guide/hardware.html">etcd hardware recommendation</a>. Choose <strong>Next Step</strong>.</p> 
@@ -427,16 +841,25 @@ tectonic-system   tectonic-stats-emitter                  1         1         1 
 <p>This post explained how to manage Kubernetes clusters using the CoreOS Tectonic graphical installer. &nbsp;For more details, see <a href="https://coreos.com/tectonic/docs/latest/install/aws/index.html">Graphical Installer with AWS</a>. If the installation does not succeed, see the helpful <a href="https://coreos.com/tectonic/docs/latest/install/aws/troubleshooting.html">Troubleshooting tips</a>. After the cluster is created, see the <a href="https://coreos.com/tectonic/docs/latest/tutorials/index.html">Tectonic tutorials</a> to learn how to deploy, scale, version, and delete an application.</p> 
 <p>Future posts in this series will explain other ways of creating and running a Kubernetes cluster on AWS.</p> 
 <p>—<a href="https://twitter.com/arungupta">Arun</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/coreos/" rel="tag">coreos</a>, <a href="https://aws.amazon.com/blogs/compute/tag/kubernetes/" rel="tag">Kubernetes</a>, <a href="https://aws.amazon.com/blogs/compute/tag/tectonic/" rel="tag">tectonic</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2819');
+});
+</script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" /> 
-<b><a href="https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" property="url" rel="bookmark"><span property="name headline">Delivering Graphics Apps with Amazon AppStream 2.0</span></a></b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Delivering Graphics Apps with Amazon AppStream 2.0</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Deepak Suryanarayanan</span></span> | on 
 <time property="datePublished" datetime="2017-09-12T10:02:21+00:00">12 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming*"><span property="articleSection">Desktop &amp; App Streaming*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming*"><span property="articleSection">Desktop &amp; App Streaming*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2792" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2792&amp;disqus_title=Delivering+Graphics+Apps+with+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -444,9 +867,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2792');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><strong>Sahil Bahri, Sr. Product Manager, Amazon AppStream 2.0</strong></p> 
 <p><strong><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6.png"><img class="alignright wp-image-2811 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6-300x207.png" alt="" width="300" height="207" /></a></strong></p> 
@@ -454,10 +875,8 @@ AWS.Blog.commenting('#aws-comment-trigger-2792');
 <p>In this post, I discuss the Graphics Design instance type in detail, and how you can use it to deliver a graphics application such as Siemens NX―a popular CAD/CAM application that we have been testing on AppStream 2.0 with engineers from Siemens PLM.</p> 
 <h3>Graphics Instance Types on AppStream 2.0</h3> 
 <p>First, a quick recap on the GPU&nbsp;instance types available with AppStream 2.0. In July, 2017, we launched graphics support for AppStream 2.0 with <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-graphics-applications/">two new instance types</a> that Jeff Barr discussed on the <a href="https://aws.amazon.com/blogs/aws/new-gpu-powered-streaming-instances-for-amazon-appstream-2-0/">AWS Blog</a>:</p> 
-<ul> 
 <li>Graphics Desktop</li> 
 <li>Graphics Pro</li> 
-</ul> 
 <p>Many customers in industries such as engineering, media, entertainment, and oil and gas are using these instances to deliver high-performance graphics applications to their users. These instance types are based on dedicated NVIDIA GPUs and can run the most demanding graphics applications, including those that rely on CUDA graphics API libraries.</p> 
 <p>Last week, we added a new lower-cost instance type: <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/introducing-amazon-appstream-2-graphics-design-a-new-lower-cost-instance-type-for-streaming-graphics-applications/">Graphics Design</a>. This instance type is a great fit for engineers, 3D modelers, and designers who use graphics applications that rely on the hardware acceleration of DirectX, OpenGL, or OpenCL APIs, such as Siemens NX, Autodesk AutoCAD, or Adobe Photoshop. The Graphics Design instance is based on AMD’s FirePro S7150x2 Server GPUs and equipped with AMD Multiuser GPU technology. The instance type uses virtualized GPUs to achieve lower costs, and is available in four instance sizes to scale and match the requirements of your applications.</p> 
 <table style="border: 2px solid black;border-collapse: collapse;margin-left: auto;margin-right: auto"> 
@@ -596,12 +1015,10 @@ AWS.Blog.commenting('#aws-comment-trigger-2792');
 <ol> 
 <li>Open services.msc and check the following services:</li> 
 </ol> 
-<ul> 
 <li>DNS Client</li> 
 <li>Function Discovery Resource Publication</li> 
 <li>SSDP Discovery</li> 
 <li>UPnP Device H</li> 
-</ul> 
 <ol start="2"> 
 <li>If any of the preceding services have <strong>Startup Type</strong> set to <strong>Manual</strong>, open the context (right-click) menu on the service and choose <strong>Start</strong>. Otherwise, open the context (right-click) menu on the service and choose <strong>Properties</strong>. For <strong>Startup Type</strong>, choose <strong>Manual</strong>, <strong>Apply</strong>. To start the service, choose <strong>Start</strong>.</li> 
 <li>From the Windows control panel, enable network discovery.</li> 
@@ -656,17 +1073,24 @@ AWS.Blog.commenting('#aws-comment-trigger-2792');
 <h3>Summary</h3> 
 <p>In this post, I discussed the GPU instances available for delivering rich graphics applications to users in a web browser. While I demonstrated a simple setup, you can scale this out to launch a production environment with users signing in using <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-microsoft-active-directory-domains/">Active Directory credentials,&nbsp;</a> accessing <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/amazon-appstream-2-0-now-offers-persistent-storage-for-end-users-files-backed-by-amazon-s3/">persistent storage with Amazon S3</a>, and using other commonly requested features reviewed in the <a href="https://aws.amazon.com/blogs/aws/amazon-appstream-2-0-launch-recap-domain-join-simple-network-setup-and-lots-more/">Amazon AppStream 2.0 Launch Recap – Domain Join, Simple Network Setup, and Lots More</a> post.</p> 
 <p>To learn more about AppStream 2.0 and capabilities added this year, see <a href="https://aws.amazon.com/appstream2/resources/">Amazon AppStream 2.0 Resources</a>.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2792');
+});
+</script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /> 
-<b class="b post-title" property="name headline">How to Provision Complex, On-Demand Infrastructures by Using Amazon API Gateway and AWS Lambda</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">How to Provision Complex, On-Demand Infrastructures by Using Amazon API Gateway and AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Ben Eichorst</span></span> and 
 <span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
 <time property="datePublished" datetime="2017-09-12T07:11:20+00:00">12 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway"><span property="articleSection">Amazon API Gateway</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/devops/" title="View all posts in DevOps"><span property="articleSection">DevOps</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2714" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2714&amp;disqus_title=How+to+Provision+Complex%2C+On-Demand+Infrastructures+by+Using+Amazon+API+Gateway+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -674,9 +1098,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2714');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>Many AWS customers are using the power of AWS CloudFormation to customize complex infrastructures. At the same time, they are moving towards self-service for their expanding customer bases. How can complex infrastructure be provisioned on-demand while minimizing customer use of the AWS Management Console?</p> 
 <p>Let’s say AnyCompany uses AWS services to process sensitive datasets owned by its customers. These customers need to be able to provision their own processing infrastructure on demand. However, AnyCompany doesn’t want the customers to access <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> directly, or see how customer data is processed. How can AnyCompany create resources with CloudFormation templates without exposing proprietary processing methods?</p> 
@@ -685,19 +1107,15 @@ AWS.Blog.commenting('#aws-comment-trigger-2714');
 <b>Solution architecture</b> 
 <p>API Gateway simplifies the creation, management, and deployment of APIs. Integration of API Gateway with Lambda, the AWS serverless compute service, allows for further interaction with the larger family of AWS services. In this post, the Lambda function provisions on-demand CloudFormation infrastructure stacks for our example service’s primary business function: &nbsp;the calculation of pi.</p> 
 <p>Two CloudFormation templates are used to provision infrastructure stacks:</p> 
-<ul> 
 <li>The <em>primary</em> template</li> 
 <li>The <em>business-function</em> template</li> 
-</ul> 
 <p>The primary CloudFormation template creates the base infrastructure that is shown in the following diagram.</p> 
 <p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png"><img class="alignnone wp-image-2718 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" alt="Architecture Diagram" width="890" height="302" /></a></p> 
 <p>The primary template creates a stack of resources:</p> 
-<ul> 
 <li>API Gateway resources</li> 
 <li>The associated AWS Identity and Access Management (IAM) security roles</li> 
 <li>An <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket for the results of the data processed by the business-function template</li> 
 <li>A Lambda function specifically for the purpose of creating multiple iterations of a second <em>repeatable infrastructure</em>. This repeatable infrastructure, contained within the second CloudFormation template, is referred to as the business-function template.</li> 
-</ul> 
 <p>The API created by the primary template allows system users to pass selected parameters to the business-function template, such as cost-center tags, a unique name, and data-processing parameters. The ability to pass parameters allows the business-function infrastructure to adapt to the specific needs of each request. In this post’s example—calculating the first 15,000 digits of pi—the number of digits calculated can be specified in the request initiated by the customer. For your own business function templates, this could be the location of input data or an email address to which results are sent.</p> 
 <p>In the example business-function template, the template provisions an immutable EC2 instance that calculates a specified number of digits of pi and uploads the results to the S3 bucket. The business-function stack then self-terminates, reducing any potential extra costs.</p> 
 <p>This architecture allows you, at multiple points, to control access, processing parameters, and workflow.</p> 
@@ -706,13 +1124,11 @@ AWS.Blog.commenting('#aws-comment-trigger-2714');
 <p>The use of an intermediate Lambda function here allows for heavy customization and filtering of the input requests from the customer-facing API Gateway.</p> 
 <b>Solution Features</b> 
 <p>By using this API Gateway–based solution, you can benefit in a number of ways:</p> 
-<ul> 
 <li> <h4>User requests are decoupled from the infrastructure that fulfills those requests.</h4> <p>This post’s solution removes the need for users to have access to the AWS Management Console. Users can accomplish their infrastructure-backed requests on demand without having any direct access to the console. Additionally, processing methods and infrastructure can be switched in and out without any change to the external appearance of your service. For example, in this post, I could have a containerized solution such as <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Services (Amazon ECS) </a>process my pi-calculation service without any visibility to users.</p></li> 
 <li> <h4>Proprietary processing methods and infrastructure are obscured from users.</h4> <p>The solution in this post can protect the proprietary secrets of your company’s data processing service by obscuring which processing methods you are using and which infrastructure performs the processing. The solution also isolates users from viewing each other’s operations. Without having console access, users cannot determine which running processing stacks are initiated by other users.</p></li> 
 <li> <h4>On-demand infrastructure in specific configurations is created without allowing users to provision arbitrary infrastructure.</h4> <p>The solution in this post complements the functionality of the <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a>. Beyond allowing only preapproved infrastructure and preventing unapproved resources from executing outside your company’s policies, this API Gateway–driven method delivers a specific, processed result. For ease of troubleshooting and integration with DevOps workflows, you can standardize, version, and deploy complicated CloudFormation stacks for networking, compute, storage, and big data processing.</p></li> 
 <li> <h4>Simplification of the user experience.</h4> <p>This solution also simplifies the user experience. Commands that request a specific result are limited to a single, familiar REST API interface call that delivers only that result.</p></li> 
 <li> <h4>Cost savings through self-terminating infrastructure.</h4> <p>The architecture of this solution is augmented through the use of self-terminating CloudFormation stacks. Stacks can spin up expensive infrastructure to perform data processing on demand, and self-terminate as soon as the task has completed. This can save you infrastructure costs associated with idle resources.</p></li> 
-</ul> 
 <b>Walkthrough: Deploy the solution</b> 
 <p>This post’s example templates create the base infrastructure and a business-function process. The business-function process can instantiate a single EC2 instance to calculate a specified number of digits of pi and deposit the results in an S3 bucket. As noted previously, this example includes built-in logic to automatically self-terminate the business-function template’s CloudFormation stacks after instantiation.</p> 
 <p>The following steps walk through how to provision this solution for creating on-demand business-function CloudFormation stacks through API Gateway. You can modify the business-function template code for your specialized infrastructure needs. However, you must upload the modified template to your own S3 bucket before completing Step 1 because the business-function template location is required for the primary template’s parameters.</p> 
@@ -792,14 +1208,14 @@ AWS.Blog.commenting('#aws-comment-trigger-2714');
 });
 </script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b><a href="https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" property="url" rel="bookmark"><span property="name headline">Parallel Processing in Python with&nbsp;AWS Lambda</span></a></b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Parallel Processing in Python with&nbsp;AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Oz Akan</span></span> | on 
 <time property="datePublished" datetime="2017-09-11T07:29:32+00:00">11 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2746" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2746&amp;disqus_title=Parallel+Processing+in+Python+with%C2%A0AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -807,9 +1223,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2746');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>If you develop an AWS Lambda function with Node.js, you can call multiple web services without waiting for a response due to its asynchronous nature. &nbsp;All requests are initiated almost in parallel, so you can get results much faster than a series of sequential calls to each web service. Considering the maximum execution duration for Lambda, it is beneficial for I/O bound tasks to run in parallel.</p> 
 <p>If you develop a Lambda function with Python, parallelism doesn’t come by default. Lambda supports Python 2.7 and Python 3.6, both of which have multiprocessing and threading modules. The multiprocessing module supports multiple cores so it is a better choice, especially for CPU intensive workloads. With the threading module, all threads are going to run on a single core though performance difference is negligible for network-bound tasks.</p> 
@@ -817,19 +1231,15 @@ AWS.Blog.commenting('#aws-comment-trigger-2746');
 <b>Example use case</b> 
 <p>In this example, you call Amazon EC2 and Amazon EBS API operations to find the total EBS volume size for all your EC2 instances in a region.</p> 
 <p>This is a two-step process:</p> 
-<ul> 
 <li>The Lambda function calls EC2 to list all EC2 instances</li> 
 <li>The function calls EBS for each instance to find attached EBS volumes</li> 
-</ul> 
 <h3>Sequential Execution</h3> 
 <p>If you make these calls sequentially, during the second step, your code has to loop over all the instances and wait for each response before moving to the next request.</p> 
 <p>The class named VolumesSequential has the following methods:</p> 
-<ul> 
 <li>__init__ creates an EC2 resource.</li> 
 <li>total_size returns all EC2 instances and passes these to the instance_volumes method.</li> 
 <li>instance_volumes finds the total size of EBS volumes for the instance.</li> 
 <li>total_size adds all sizes from all instances to find total size for the EBS volumes.</li> 
-</ul> 
 <h4>Source Code for Sequential Execution</h4> 
 <pre><code class="lang-python">import time
 import boto3
@@ -873,11 +1283,9 @@ OSError: [Errno 38] Function not implemented
 </code></pre> 
 <p>On the other hand, you can use multiprocessing.Pipe instead of multiprocessing.Queue to accomplish what you need without getting any errors during the execution of the Lambda function.</p> 
 <p>The class named VolumeParallel has the following methods:</p> 
-<ul> 
 <li>__init__ creates an EC2 resource</li> 
 <li>instance_volumes finds the total size of EBS volumes attached to an instance</li> 
 <li>total_size finds all instances and runs instance_volumes for each to find the total size of all EBS volumes attached to all EC2 instances.</li> 
-</ul> 
 <h4>Source Code for Parallel Execution</h4> 
 <pre><code class="lang-python">import time
 from multiprocessing import Process, Pipe
@@ -955,15 +1363,22 @@ REPORT RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d Duration: 2069.33 ms Bill
 </code></pre> 
 <h3>Summary</h3> 
 <p>In this post, I demonstrated how to run multiple I/O bound tasks in parallel by developing a Lambda function with the Python multiprocessing module. With the help of this module, you freed the CPU from waiting for I/O and fired up several tasks to fit more I/O bound operations into a given time frame. This might be the trick to reduce the overall runtime of a Lambda function especially when you have to run so many and don’t want to split the work into smaller chunks.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2746');
+});
+</script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Disabling Intel Hyper-Threading Technology on Amazon EC2 Windows Instances</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Disabling Intel Hyper-Threading Technology on Amazon EC2 Windows Instances</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Brian Beach</span></span> | on 
 <time property="datePublished" datetime="2017-09-06T13:18:39+00:00">06 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2"><span property="articleSection">Amazon EC2</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2352" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2352&amp;disqus_title=Disabling+Intel+Hyper-Threading+Technology+on+Amazon+EC2+Windows+Instances&amp;disqus_url=https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -971,9 +1386,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2352');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>In a prior post, <a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-linux/">Disabling Intel Hyper-Threading on Amazon Linux</a>, I investigated how the Linux kernel enumerates CPUs. I also discussed the options to disable Intel Hyper-Threading (HT Technology) in Amazon Linux running on <a href="https://aws.amazon.com/ec2">Amazon EC2</a>.</p> 
 <p>In this post, I do the same for Microsoft Windows Server 2016 running on EC2 instances. I begin with a quick review of HT Technology and the reasons you might want to disable it. I also recommend that you take a moment to review the prior post for a more thorough foundation.</p> 
@@ -1043,15 +1456,15 @@ AWS.Blog.commenting('#aws-comment-trigger-2352');
 });
 </script> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Messaging Fanout Pattern for Serverless Architectures Using Amazon SNS</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Messaging Fanout Pattern for Serverless Architectures Using Amazon SNS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> and 
 <span property="author" typeof="Person"><span property="name">Sam Dengler</span></span> | on 
 <time property="datePublished" datetime="2017-08-22T15:52:19+00:00">22 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2554" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2554&amp;disqus_title=Messaging+Fanout+Pattern+for+Serverless+Architectures+Using+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -1059,9 +1472,7 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2554');
 });
 </script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <table> 
 <tbody> 
@@ -1157,15 +1568,12 @@ return event</code></pre>
 <p>In this post, I reviewed the fanout messaging pattern and options for its inclusion in a serverless architectures using Lambda application code and SNS. Using the PlayOn! Sports serverless video processing pipeline use case, I demonstrated how easy it is to refactor an existing application to use the SNS fanout approach.</p> 
 <p>I also provided a sample architecture in CloudFormation that you can run in your own account. Try it out and expand the sample architecture by adding other Lambda functions to the SNS topic, to demonstrate the flexibility of the fanout messaging pattern!</p> 
 <p>You can get started with SNS using the <a href="https://us-west-2.console.aws.amazon.com/sns/v2/">AWS Management Console</a>, or the SDK of your choice. For more information about how to use SNS fanout messaging, see the following resources:</p> 
-<ul> 
 <li>10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">How to Send Fanout Event Notifications</a></li> 
 <li>Amazon SNS Developer Guide: 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messaging to Amazon SQS Queues</a></li> 
 <li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToHttp.html">Sending Amazon SNS Messaging to HTTP/HTTPS Endpoints</a></li> 
 </ul> </li> 
 <li>AWS Compute Blog: &nbsp;<a href="https://aws.amazon.com/blogs/compute/fanout-s3-event-notifications-to-multiple-endpoints/">Fanout S3 Event Notifications to Multiple Endpoints</a></li> 
-</ul> 
 <p>If you have questions or suggestions, please comment below.</p> 
 <footer> 
 TAGS: 
@@ -1174,758 +1582,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2554');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Enabling Identity Federation with AD FS 3.0 and Amazon AppStream 2.0</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Matt Guanti</span></span> | on 
-<time property="datePublished" datetime="2017-08-17T14:39:35+00:00">17 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0"><span property="articleSection">Amazon AppStream 2.0</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming"><span property="articleSection">Desktop &amp; App Streaming</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2619" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2619&amp;disqus_title=Enabling+Identity+Federation+with+AD+FS+3.0+and+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2619');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Want to provide users with single sign-on access to AppStream 2.0 using existing enterprise credentials? Active Directory Federation Services (AD FS) 3.0 can be used to provide single sign-on for <a href="https://aws.amazon.com/appstream2">Amazon AppStream 2.0</a> using SAML 2.0.</p> 
-<p>You can use your existing Active Directory or any SAML 2.0–compliant identity service to set up single sign-on access of AppStream 2.0 applications for your users. Identity federation using SAML 2.0 is currently available in all AppStream 2.0 regions.</p> 
-<p>This post explains how to configure federated identities for AppStream 2.0 using AD FS 3.0.</p> 
-<b>Walkthrough</b> 
-<p>After setting up SAML 2.0 federation for AppStream 2.0, users can browse to a specially crafted (AD FS RelayState) URL and be taken directly to their AppStream 2.0 applications.<span id="more-2619"></span></p> 
-<p>When users sign in with this URL, they are authenticated against Active Directory. After they are authenticated, the browser receives a SAML assertion as an authentication response from AD FS, which is then posted by the browser to the AWS sign-in SAML endpoint. Temporary security credentials are issued after the assertion and the embedded attributes are validated. The temporary credentials are then used to create the sign-in URL. The user is redirected to the AppStream 2.0 streaming session. The following <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers.html">diagram</a> shows the process.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/16/Diagram.jpg"><img class="aligncenter wp-image-2651 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/16/Diagram.jpg" alt="" width="908" height="433" /></a></p> 
-<ol> 
-<li>The user browses to https://applications.exampleco.com. The sign-on page requests authentication for the user.</li> 
-<li>The federation service requests authentication from the organization’s identity store.</li> 
-<li>The identity store authenticates the user and returns the authentication response to the federation service.</li> 
-<li>On successful authentication, the federation service posts the SAML assertion to the user’s browser.</li> 
-<li>The user’s browser posts the SAML assertion to the AWS Sign-In SAML endpoint (https://signin.aws.amazon.com/saml). AWS Sign-In receives the SAML request, processes the request, authenticates the user, and forwards the authentication token to the AppStream 2.0 service.</li> 
-<li>Using the authentication token from AWS, AppStream 2.0 authorizes the user and presents applications to the browser.</li> 
-</ol> 
-<p>In this post, use domain.local as the name of the Active Directory domain. Here are the steps in this walkthrough:</p> 
-<ol> 
-<li>Configure AppStream 2.0 identity federation.</li> 
-<li>Configure the relying trust.</li> 
-<li>Create claim rules.</li> 
-<li>Enable RelayState and forms authentication.</li> 
-<li>Create the AppStream 2.0 RelayState URL and access the stack.</li> 
-<li>Test the configuration.</li> 
-</ol> 
-<b>Prerequisites</b> 
-<p>This walkthrough assumes that you have the following prerequisites:</p> 
-<ul> 
-<li>An existing <a href="https://social.technet.microsoft.com/wiki/contents/articles/22622.building-your-first-domain-controller-on-2012-r2.aspx">Active Directory forest</a></li> 
-<li>An instance joined to a domain with the “Active Directory Federation Services” <a href="https://docs.microsoft.com/en-us/windows-server/identity/ad-fs/deployment/install-the-ad-fs-role-service">role installed</a> and post-deployment configuration completed</li> 
-<li>Familiarity with AppStream 2.0 resources</li> 
-</ul> 
-<b>Configure AppStream 2.0 identity federation</b> 
-<p>First, <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/set-up-stacks-fleets.html">create an AppStream 2.0 stack</a>, as you reference the stack in upcoming steps. Name the stack ExampleStack. For this walkthrough, it doesn’t matter which underlying fleet you associate with the stack. You can create a fleet using one of the example Amazon-AppStream2-Sample-Image images available, or associate an existing fleet to the stack.</p> 
-<h3>Get the AD FS metadata file</h3> 
-<p>The first thing you need is the metadata file from your AD FS server. The metadata file is a signed document that is used later in this guide to establish the relying party trust. Don’t edit or reformat this file.</p> 
-<p>To download and save this file, navigate to the following location, replacing &lt;FQDN_ADFS_SERVER&gt; with your AD FS s fully qualified server name.</p> 
-<pre>https://&lt;FQDN_ADFS_SERVER&gt;/FederationMetadata/2007-06/FederationMetadata.xml</pre> 
-<p><code class="lang-aspnet"></code>Save the file to a local location that you can access from the AWS Management Console later.</p> 
-<h3>Create the SAML provider</h3> 
-<p>Next, create the SAML provider in IAM, using the console. You could also <a href="http://docs.aws.amazon.com/cli/latest/reference/iam/create-saml-provider.html">create it using the AWS CLI</a>.</p> 
-<p>In the IAM console, choose <strong>Identity providers</strong>, <strong>Create provider</strong>.</p> 
-<p>On the <strong>Configure Provider</strong> page, for <strong>Provider Type</strong>, choose <strong>SAML</strong>. For <strong>Provider Name</strong>, type ADFS01 or similar name. Choose <strong>Choose File</strong> to upload the metadata document previously downloaded. Choose <strong>Next Step</strong>.</p> 
-<p>Verify the provider information and choose <strong>Create</strong>.</p> 
-<p>You need the Amazon Resource Name (ARN) of the identity provider (IdP) to configure claims rules later in this walkthrough. To get this, select the IdP that you just created. On the summary page, copy the value for <strong>Provider ARN</strong>. The ARN is in the following format:</p> 
-<pre>arn:aws:iam::&lt;AccountID&gt;:saml-provider/&lt;Provider Name&gt;</pre> 
-<h3>Configure an IAM Policy</h3> 
-<p>Next, configure a policy with permissions to the AppStream 2.0 stack. This is the level of permissions that federated users have within AWS.</p> 
-<p>In the IAM console, choose <strong>Policies</strong>, <strong>Create Policy</strong>, <strong>Create Your Own Policy</strong>.</p> 
-<p>For <strong>Policy Name</strong>, enter a descriptive name. For <strong>Description</strong>, enter the level of permissions. For <strong>Policy Document</strong>, you customize the <strong>Region-Code</strong>, <strong>AccountID</strong> (without hyphens), and case-sensitive <strong>Stack-Name</strong> values.</p> 
-<p>The following screenshot shows how to create a policy that gives users permissions to only a single AppStream 2.0 stack, named ExampleStack. For more information, see the <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-grantperms">Step 2: Configure Permissions in AWS for Your Federated Users topic</a>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-2.png"><img class="alignnone wp-image-2623 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-2.png" alt="" width="1332" height="899" /></a></p> 
-<p>&nbsp;</p> 
-<p>For <strong>Region Codes</strong>, use one of the following values based on the region you are using AppStream 2.0 (the available regions for AppStream 2.0):</p> 
-<ul> 
-<li><strong>us-east-1</strong></li> 
-<li><strong>us-west-2</strong></li> 
-<li><strong>eu-west-1</strong></li> 
-<li><strong>ap-northeast-1</strong></li> 
-</ul> 
-<p>Choose <strong>Create Policy</strong> and you should see the following notification:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-3.png"><img class="alignnone wp-image-2624 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-3.png" alt="" width="1470" height="95" /></a></p> 
-<p>&nbsp;</p> 
-<h3>Create an IAM role</h3> 
-<p>Here, you create a role that relates to an Active Directory group assigned to your AppStream 2.0 federated users. For this configuration, Active Directory groups and AWS roles are case-sensitive. Here you create an IAM Role named “ExampleStack” and an Active Directory group named in the format AWS-AccountNumber-RoleName, for example AWS-012345678910-ExampleStack.</p> 
-<p>In the IAM console, choose <strong>Roles</strong>, <strong>Create </strong>new<strong> role</strong>.</p> 
-<p>On the <strong>Select Role type</strong> page, choose <strong>Role for identity provider access</strong>. Choose <strong>Select</strong> next to <strong>Grant Web Single Sign-On (WebSSO) access to SAML providers</strong>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-4.png"><img class="alignnone wp-image-2625 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-4.png" alt="" width="1667" height="424" /></a></p> 
-<p>&nbsp;</p> 
-<p>On the <strong>Establish Trust</strong> page, make sure that the SAML provider that you just created (such as ADFS01) is selected. For <strong>Attribute</strong> and <strong>Value</strong>, keep the default values.</p> 
-<p>On the <strong>Verify Role Trust</strong> page, the <strong>Federated</strong> value matches the ARN noted previously for the principal IdP created earlier. The <strong>SAML: aud</strong> value equals https://signin.aws.amazon.com/saml, as shown below. This is prepopulated and does not require any change. Choose <strong>Next Step</strong>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-5.png"><img class="alignnone wp-image-2626 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-5.png" alt="" width="1319" height="589" /></a></p> 
-<p>&nbsp;</p> 
-<p>On the <strong>Attach policy</strong> page, attach the policy that you created earlier granting federated users access only to the AppStream 2.0 stack. In this walkthrough, the policy was named <strong>AppStream2_ExampleStack</strong>.</p> 
-<p>After selecting the correct policy, choose <strong>Next Step</strong>.</p> 
-<p>On the <strong>Set role name and review</strong> page, name the role <strong>ExampleStack</strong>. You can customize this naming convention, as I explain later when I create the claims rules.</p> 
-<p>You can describe the role as desired. Ensure that the trusted entities match the AD FS IdP ARN, and that the policy attached is the policy created earlier granting access only to this stack.</p> 
-<p>Choose <strong>Create Role</strong>.</p> 
-<blockquote> 
-<p><strong>Important:</strong> If you grant more than the stack permissions to federated users, you can give them access to other areas of the console as well. AWS strongly recommends that you attach policies to a role that grants access only to the resources to be shared with federated users.</p> 
-<p>For example, if you attach the <strong>AdministratorAccess</strong> policy instead of <strong>AppStream2_ExampleStack</strong>, any AppStream 2.0 federated user in the <strong>ExampleStack</strong> Active Directory group has <strong>AdministratorAccess</strong> in your AWS account. Even though AD&nbsp;FS routes users to the stack, users can still navigate to other areas of the console, using deep links that go directly to specific console locations.</p> 
-</blockquote> 
-<p>Next, create the Active Directory group in the format AWS-AccountNumber-RoleName using the “ExampleStack” role name that you just created. You reference this Active Directory group in the AD FS claim rules later using regex. For <strong>Group scope</strong>, choose <strong>Global</strong>. For <strong>Group type</strong>, choose <strong>Security</strong></p> 
-<p>Note: To follow this walkthrough exactly, name your Active Directory group in the format “AWS-AccountNumber-ExampleStack” replacing AccountNumber with your AWS AccountID (without hyphens). For example:</p> 
-<pre>AWS-012345678910-ExampleStack</pre> 
-<h3>Configure the relying party trust</h3> 
-<p>In this section, you configure AD FS 3.0 to communicate with the configurations made in AWS.</p> 
-<p>Open the AD FS console on your AD FS 3.0 server.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-6.png"><img class="wp-image-2627 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-6.png" alt="" width="401" height="251" /></a></p> 
-<p>&nbsp;</p> 
-<p>Open the context (right-click) menu for AD FS and choose <strong>Add Relying Party Trust…</strong></p> 
-<p>On the <strong>Welcome</strong> page, choose <strong>Start</strong>. On the <strong>Select Data Source</strong> page, keep <strong>Import data about the relying party published online or on a local network</strong> checked. For <strong>Federation metadata address (host name or URL)</strong>, type the following link to the SAML metadata to describe AWS as a relying party and then choose <strong>Next</strong>.</p> 
-<pre>https://signin.aws.amazon.com/static/saml-metadata.xml</pre> 
-<p>On the <strong>Specify Display Name</strong> page, for <strong>Display name</strong>, type “AppStream 2.0 – ExampleStack” or similar value. For <strong>Notes</strong>, provide a description. Choose <strong>Next</strong>.</p> 
-<p>On the <strong>Configure Multi-factor Authentication Now?</strong> page, choose <strong>I do not want to configure multi-factor authentication settings for this relying party trust at this time</strong>. Choose <strong>Next</strong>.</p> 
-<p>Because you are controlling access to the stack using an Active Directory group, and IAM role with an attached policy, on the <strong>Choose Issuance Authorization Rules</strong> page, check <strong>Permit all users to access this relying party</strong>. Choose <strong>Next</strong>.</p> 
-<p>On the <strong>Ready to Add Trust</strong> page, there shouldn’t be any changes needed to be made. Choose <strong>Next</strong>.</p> 
-<p>On the <strong>Finish</strong> page, clear <strong>Open the </strong>edit<strong> Claim Rules dialog for this relying party trust when the wizard closes</strong>. You open this later.</p> 
-<p>Next, you add the https://signin.aws.amazon.com/saml URL is listed on the <strong>Identifiers</strong> tab within the properties of the trust. To do this, open the context (right-click) menu for the relying party trust that you just created and choose <strong>Properties</strong>.</p> 
-<p>On the <strong>Monitoring</strong> tab and clear <strong>Monitor relying party</strong>. Choose <strong>Apply</strong>. On the <strong>Identifiers</strong> tab, for <strong>Relying party identifier</strong>, add <strong>https://signin.aws.amazon.com/saml</strong> and choose <strong>OK</strong>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-7.png"><img class="wp-image-2628 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-7.png" alt="" width="406" height="476" /></a></p> 
-<p>&nbsp;</p> 
-<b>Create claim rules</b> 
-<p>In this section, you create four AD FS claim rules, which identify accounts, set LDAP attributes, get the Active Directory groups, and match them to the role created earlier.</p> 
-<p>In the AD FS console, expand <strong>Trust Relationships</strong>, choose <strong>Relying Party Trusts</strong>, and then select the relying party trust that you just created (in this case, the display name is AppStream 2.0 – ExampleStack). Open the context (right-click) menu for the relying party trust and choose <strong>Edit Claim Rules</strong>. Choose <strong>Add Rule</strong>.</p> 
-<h3>Rule 1: Name ID</h3> 
-<p>This claim rule tells AD FS the type of expected incoming claim and how to send the claim to AWS. AD FS receives the UPN and tags it as the Name ID when it’s forwarded to AWS. This rule interacts with the third rule, which fetches the user groups.</p> 
-<p style="padding-left: 30px"><strong>Claim rule template:</strong> Transform an Incoming Claim</p> 
-<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
-<p style="padding-left: 30px"><strong>Claim Rule Name:</strong>&nbsp; Name ID</p> 
-<p style="padding-left: 30px"><strong>Incoming Claim Type:</strong>&nbsp; UPN</p> 
-<p style="padding-left: 30px"><strong>Outgoing Claim Type:</strong>&nbsp; Name ID</p> 
-<p style="padding-left: 30px"><strong>Outgoing name ID format:</strong>&nbsp; Persistent Identifier</p> 
-<p style="padding-left: 30px"><strong>Pass through all claim values:</strong>&nbsp; selected</p> 
-<h3>Rule 2: RoleSessionName</h3> 
-<p>This rule sets a unique identifier for the user. In this case, use the E-Mail-Addresses values.</p> 
-<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send LDAP Attributes as Claims</p> 
-<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
-<p style="padding-left: 30px"><strong>Claim rule name:</strong>&nbsp; RoleSessionName</p> 
-<p style="padding-left: 30px"><strong>Attribute store:</strong> &nbsp;Active Directory</p> 
-<p style="padding-left: 30px"><strong>LDAP Attribute:</strong>&nbsp; E-Mail-Addresses</p> 
-<p style="padding-left: 30px"><strong>Outgoing Claim Type:</strong>&nbsp;&nbsp;https://aws.amazon.com/SAML/Attributes/RoleSessionName</p> 
-<h3>Rule 3: Get Active Directory groups</h3> 
-<p>This rule queries Active Directory and returns the groups to which the user is assigned, such as AWS-012345678910-ExampleStack .</p> 
-<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send Claims Using a Custom Rule</p> 
-<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
-<p style="padding-left: 30px"><strong>Claim Rule Name:</strong>&nbsp; Get Active Directory Groups</p> 
-<p style="padding-left: 30px"><strong>Custom Rule:</strong></p> 
-<pre style="padding-left: 30px">c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;] =&gt; add(store = &quot;Active Directory&quot;, types = (&quot;http://temp/variable&quot;), query = &quot;;tokenGroups;{0}&quot;, param = c.Value);</pre> 
-<h3>Rule 4: Roles</h3> 
-<p>This rule converts the value of the Active Directory group starting with AWS-AccountNumber prefix to the roles known by AWS. For this rule, you need the AWS IdP ARN that you noted earlier. If your IdP in AWS was named ADFS01 and the AccountID was 012345678910, the ARN would look like the following:</p> 
-<pre>arn:aws:iam::012345678910:saml-provider/ADFS01
-</pre> 
-<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send Claims Using a Custom Rule</p> 
-<p style="padding-left: 30px"><strong>Configure Claim Rule values:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</strong></p> 
-<p style="padding-left: 30px"><strong>Claim Rule Name:&nbsp;</strong> Roles</p> 
-<p style="padding-left: 30px"><strong>Custom Rule:</strong></p> 
-<pre style="padding-left: 30px">c:[Type == &quot;http://temp/variable&quot;, Value =~ &quot;(?i)^AWS-&quot;]
-&nbsp;=&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/Role&quot;, Value = RegExReplace(c.Value, &quot;AWS-012345678910-&quot;, &quot;arn:aws:iam::012345678910:saml-provider/ADFS01,arn:aws:iam::012345678910:role/&quot;));</pre> 
-<ul> 
-<li>Change&nbsp;<span style="color: #ff0000">arn:aws:iam::012345678910:saml-provider/ADFS01</span> to the ARN of your AWS IdP</li> 
-<li>Change <span style="color: #ff0000">012345678910</span> to the ID (without hyphens) of the AWS account.</li> 
-</ul> 
-<p>In this walkthrough, “AWS-” returns the Active Directory groups that start with the AWS- prefix, then removes AWS-012345678910- leaving ExampleStack left on the Active Directory Group name to match the ExampleStack IAM role. To customize the role naming convention, for example to name the IAM Role ADFS-ExampleStack, add “ADFS-” to the end of the role ARN at the end of the rule: arn:aws:iam::012345678910:role/ADFS-.</p> 
-<p>You should now have four claims rules created:</p> 
-<ul> 
-<li><strong>NameID</strong></li> 
-<li><strong>RoleSessionName</strong></li> 
-<li><strong>Get Active Directory Groups</strong></li> 
-<li><strong>Role</strong></li> 
-</ul> 
-<b></b> 
-<b>Enable RelayState and forms authentication</b> 
-<p>By default, AD FS 3.0 doesn’t have RelayState enabled. AppStream 2.0 uses RelayState to direct users to your AppStream 2.0 stack.</p> 
-<p>On your AD FS server, open the following with elevated (administrator) permissions:</p> 
-<pre>%systemroot%\adfs\Microsoft.IdentityServer.Servicehost.exe.config</pre> 
-<p>In the Microsoft.IdentityServer.Servicehost.exe.config file, find the section <strong>&lt;microsoft.identityServer.web&gt;</strong>. Within this section, add the following line:</p> 
-<pre>&lt;useRelayStateForIdpInitiatedSignOn enabled=&quot;true&quot; /&gt;</pre> 
-<p><code class="lang-aspnet"></code>The edit should look like the following:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-8.png"><img class="alignnone wp-image-2629 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-8.png" alt="" width="1096" height="749" /></a></p> 
-<p>&nbsp;</p> 
-<p>In the AD FS console, verify that forms authentication is enabled. Choose <strong>Authentication Policies</strong>. Under <strong>Primary Authentication</strong>, for <strong>Global Settings</strong>, choose <strong>Edit</strong>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Authentication-Policies-Overview.png"><img class="alignnone wp-image-2645 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Authentication-Policies-Overview.png" alt="" width="1195" height="756" /></a></p> 
-<p>&nbsp;</p> 
-<p>For <strong>Extranet</strong>, choose <strong>Forms Authentication</strong>. For <strong>Intranet</strong>, do the same and choose <strong>OK</strong>.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-10.png"><img class="wp-image-2631 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-10.png" alt="" width="500" height="648" /></a></p> 
-<p>&nbsp;</p> 
-<p>On the AD FS server, from an elevated (administrator) command prompt, run the following commands sequentially to stop, then start the AD FS service to register the changes:</p> 
-<pre>net stop adfssrv 
-net start adfssrv
-</pre> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-11.png"><img class="wp-image-2632 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-11.png" alt="" width="671" height="231" /></a></p> 
-<p>&nbsp;</p> 
-<b>Create the AppStream 2.0 RelayState URL and access the stack</b> 
-<p>Now that RelayState is enabled, you can generate the URL.</p> 
-<p>I have created an Excel spreadsheet for RelayState URL generation, available as <a href="https://s3-us-west-2.amazonaws.com/as2-blog-artifacts/RelayGenerator.xlsx">RelayGenerator.xlsx</a>. This spreadsheet only requires the fully qualified domain name for your AD FS server, account ID (without hyphens), stack name (case-sensitive), and the AppStream 2.0 region. After all&nbsp;the inputs are entered, the spreadsheet generates a URL in the blue box, as shown in the screenshot below. Copy the entire contents of the blue box to retrieve the generated RelayState URL for AD FS.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-12.png"><img class="wp-image-2633 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-12.png" alt="" width="673" height="522" /></a></p> 
-<p>&nbsp;</p> 
-<p>Alternatively, if you do not have Excel, there are third-party tools for RelayState URL generation. However, they do require some customization to work with AppStream 2.0. Example customization steps for one such tool are provided below.</p> 
-<p>CodePlex has an <a href="https://adfsrelaystate.codeplex.com/downloads/get/474227">AD FS RelayState generator</a>, which downloads an HTML file locally that you can use to create the RelayState URL. The generator says it’s for AD FS 2.0; however, it also works for AD FS 3.0. You can generate the RelayState URL manually but if the syntax or case sensitivity is incorrect even slightly, it won’t work. I recommend using the tool to ensure a valid URL.</p> 
-<p>When you open the URL generator, clear out the default text fields. You see a tool that looks like the following:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-13.png"><img class="alignnone wp-image-2634 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-13.png" alt="" width="1190" height="256" /></a></p> 
-<p>&nbsp;</p> 
-<p>To generate the values, you need three pieces of information:</p> 
-<ul> 
-<li><strong>IDP URL String</strong></li> 
-<li><strong>Relying Party Identifier</strong></li> 
-<li><strong>Relay State / Target App</strong></li> 
-</ul> 
-<h3>&nbsp;IDP URL String</h3> 
-<p>The IDP URL string is the URL you use to hit your AD FS sign-on page. For example:</p> 
-<pre>https://&lt;ADFSInstance&gt;/adfs/ls/idpinitiatedsignon.aspx</pre> 
-<p>In this configuration, use the following:</p> 
-<pre>https://adfs01.domain.local/adfs/ls/idpinitiatedsignon.aspx</pre> 
-<h3>Relying Party Identifier</h3> 
-<p>This value is always the following:</p> 
-<pre>https://signin.aws.amazon.com/saml</pre> 
-<h3>Relay State / Target App</h3> 
-<p>This is the RelayState link to your AppStream 2.0 stack. The format for this URL is as follows:</p> 
-<pre class="unlimited-height-code"><code class="lang-http">https://appstream2.&lt;region&gt;.aws.amazon.com/saml?stack=Case_Sensitive_Stack_Name&amp;accountId=account_id_without_hyphens</code></pre> 
-<p>Ultimately, the URL looks like the following example, which is for us-east-1, with a stack name of ExampleStack, and an account ID of 012345678910. The stack name is case-sensitive.</p> 
-<pre>https://appstream2.us-east-1.aws.amazon.com/saml?stack=ExampleStack&amp;accountId=012345678910</pre> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-relay-state">Step 5: Configure the Relay State of Your Federation</a>.</p> 
-<p>Input these values into the URL generator, and generate a RelayState URL.</p> 
-<p>Generated URL (case sensitive):’</p> 
-<pre class="unlimited-height-code"><code class="lang-http">https://adfs01.domain.local/adfs/ls/idpinitiatedsignon.aspx?RelayState=RPID%3Dhttps%253A%252F%252Fsignin.aws.amazon.com%252Fsaml%26RelayState%3Dhttps%253A%252F%252Fappstream2.us-east-1.aws.amazon.com%252Fsaml%253Fstack%253D%2520ExampleStack%2526accountId%253D012345678910</code></pre> 
-<p>The generated RelayState URL can now be saved and used by users to log in directly from anywhere that can reach the AD FS server, using their existing domain credentials. After they are authenticated, users are directed seamlessly to the AppStream 2.0 stack.</p> 
-<h3>Test the configuration</h3> 
-<p>Create a new AD user in Domain.local named Test User, with a username TUser and an email address. An email address is required based on the claim rules.</p> 
-<p>Next, add TUser to the AD group you created for the AWS-012345678910-ExampleStack stack.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-14.png"><img class="wp-image-2635 size-full aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-14.png" alt="" width="423" height="287" /></a></p> 
-<p>&nbsp;</p> 
-<p>Next, navigate to the RelayState URL and log in with domain\TUser.</p> 
-<p>After you log in, you are directed to the streaming session for the ExampleStack stack. As an administrator, you can disassociate and associate different fleets of applications to this stack, without impacting federation, and deliver different applications to this group of federated users.</p> 
-<p>Because the policy attached to the role only allows access to this AppStream 2.0 stack, if a federated user were to try to access another section of the console, such as Amazon EC2, they would discover that they are not authorized to see (describe) any resources or perform any actions, as shown in the screenshot below. This is why it’s important to grant access only to the AppStream 2.0 stack.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-15.png"><img class="alignnone wp-image-2636 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-15.png" alt="" width="1617" height="783" /></a></p> 
-<p>&nbsp;</p> 
-<b>Configurations for AD FS 4.0</b> 
-<p>If you are using AD FS 4.0, there are a few differences from the procedures discussed earlier.</p> 
-<p>Do not customize the following file as described in the Enable RelayState and forms authentication of the AD FS 3.0 guide:</p> 
-<pre>%systemroot%\adfs\Microsoft.IdentityServer.Servicehost.exe.config</pre> 
-<p>Enable the IdP-initiated sign-on page that is used when generating the RelayState URL. To do this, open an elevated PowerShell terminal and run the following command:</p> 
-<pre>Set-AdfsProperties -EnableIdPInitiatedSignonPage $true</pre> 
-<p>This enables the following URL referenced earlier:</p> 
-<pre>https://&lt;ADFSInstance&gt;/adfs/ls/idpinitiatedsignon.aspx</pre> 
-<p>Next, enable Relay States. To do this, run the following command from an elevated PowerShell terminal:</p> 
-<pre>Set-AdfsProperties -EnableRelayStateForIdpInitiatedSignOn $true</pre> 
-<p>To register these changes with AD FS, restart the AD FS service from an elevated PowerShell terminal (or command prompt):</p> 
-<pre>net stop adfssrv
-net start adfssrv</pre> 
-<p>After these changes are made, AD FS 4.0 should now work for AppStream 2.0 identity federation.</p> 
-<b>Troubleshooting</b> 
-<p>If you are still encountering errors with your setup, below are common error messages you may see, and configuration areas that I recommend that you check.</p> 
-<h3>Invalid policy</h3> 
-<pre>Unable to authorize the session. (Error Code: INVALID_AUTH_POLICY);Status Code:401</pre> 
-<p>This error message can occur when the IAM policy does not permit access to the AppStream 2.0 stack. However, it can also occur when the stack name is not entered into the policy or RelayState URL using case-sensitive characters. For example, if your stack name is “ExampleStack” in AppStream 2.0 and the policy has “examplestack” or if the Relay State URL has “examplestack” or any capitalization pattern other than the exact stack name, you see this error message.</p> 
-<h3>Invalid relay state</h3> 
-<pre>Error: Bad Request.(Error Code: INVALID_RELAY_STATE);Status Code:400</pre> 
-If you are receiving this error message, there is likely to be another issue in the Relay State URL. It could be related to case sensitivity (other than the stack name). For example, https://relay-state-region-endoint?stack=stackname&amp;accountId=aws-account-id-without-hyphens. 
-<p>This URL must contain the region-specific Relay State endpoint exactly as listed in the <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-relay-state">Step 5: Configure the Relay State of Your Federation topic</a>.</p> 
-<h3>Cross account access</h3> 
-<pre><code class="lang-aspnet">Unable to authorize the session. Cross account access is not allowed. (Error Code: CROSS_ACCOUNT_ACCESS_NOT_ALLOWED);Status Code:401</code></pre> 
-<p>If you see this error message, check to make sure that the AccountId number is correct in the Relay State URL.</p> 
-<b>Summary</b> 
-<p>In this post, you walked through enabling AD FS 3.0 for AppStream 2.0 identity federation. You should now be able to configure AD FS 3.0 or 4.0 for AppStream 2.0 identity federation. If you have questions or suggestions, please comment below.</p> 
-<img style="border: 0px;width: 32px;height: 32px;margin-right: 5px !important" src="https://aws-support-gm.s3.amazonaws.com/prod/tiny-url-shrinker/TinyURLShortener-icon-64x64.png" /> 
-<textarea id="url-shrinker-txtarea"></textarea> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/iam/" rel="tag">IAM</a>, <a href="https://aws.amazon.com/blogs/compute/tag/identity-federation/" rel="tag">identity federation</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2619');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1133x630.png" /> 
-<b class="b post-title" property="name headline">Deploying an NGINX Reverse Proxy Sidecar Container on Amazon ECS</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Peck</span></span> | on 
-<time property="datePublished" datetime="2017-08-03T14:54:02+00:00">03 AUG 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/nginx-reverse-proxy-sidecar-container-on-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2525" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2525&amp;disqus_title=Deploying+an+NGINX+Reverse+Proxy+Sidecar+Container+on+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/nginx-reverse-proxy-sidecar-container-on-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2525');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Reverse proxies are a powerful software architecture primitive for fetching resources from a server on behalf of a client. They serve a number of purposes, from protecting servers from unwanted traffic to offloading some of the heavy lifting of HTTP traffic processing.</p> 
-<p>This post explains the benefits of a reverse proxy, and explains how to use <a href="https://www.nginx.com/resources/wiki/">NGINX</a> and <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service (Amazon ECS)</a> to easily implement and deploy a reverse proxy for your containerized application.</p> 
-<b>Components</b> 
-<p>NGINX is a high performance HTTP server that has achieved significant adoption because of its asynchronous event driven architecture. It can serve thousands of concurrent requests with a low memory footprint. This efficiency also makes it ideal as a reverse proxy.</p> 
-<p>Amazon ECS is a highly scalable, high performance container management service that supports Docker containers. It allows you to run applications easily on a managed cluster of Amazon EC2 instances. Amazon ECS helps you get your application components running on instances according to a specified configuration. It also helps scale out these components across an entire fleet of instances.</p> 
-<p>Sidecar containers are a common software pattern that has been embraced by engineering organizations. It’s a way to keep server side architecture easier to understand by building with smaller, modular containers that each serve a simple purpose. Just like an application can be powered by multiple microservices, each microservice can also be powered by multiple containers that work together. A sidecar container is simply a way to move part of the core responsibility of a service out into a containerized module that is deployed alongside a core application container.<span id="more-2525"></span></p> 
-<p>The following diagram shows how an NGINX reverse proxy sidecar container operates alongside an application server container:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy.png"><img class="aligncenter wp-image-2526 size-large" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1024x570.png" alt="" width="640" height="356" /></a></p> 
-<p>In this architecture, Amazon ECS has deployed two copies of an application stack that is made up of an NGINX reverse proxy side container and an application container. Web traffic from the public goes to an Application Load Balancer, which then distributes the traffic to one of the NGINX reverse proxy sidecars. The NGINX reverse proxy then forwards the request to the application server and returns its response to the client via the load balancer.</p> 
-<b>Reverse proxy for security</b> 
-<p>Security is one reason for using a reverse proxy in front of an application container. Any web server that serves resources to the public can expect to receive lots of unwanted traffic every day. Some of this traffic is relatively benign scans by researchers and tools, such as Shodan or nmap:</p> 
-<pre><code class="lang-bash">[18/May/2017:15:10:10 +0000] &quot;GET /YesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScann HTTP/1.1&quot; 404 1389 - Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.86 Safari/537.36
-[18/May/2017:18:19:51 +0000] &quot;GET /clientaccesspolicy.xml HTTP/1.1&quot; 404 322 - Cloud mapping experiment. Contact research@pdrlabs.net</code></pre> 
-<p>But other traffic is much more malicious. For example, here is what a web server sees while being scanned by the hacking tool <a href="https://en.wikipedia.org/wiki/ZmEu_(vulnerability_scanner)">ZmEu</a>, which scans web servers trying to find PHPMyAdmin installations to exploit:</p> 
-<pre><code class="lang-bash">[18/May/2017:16:27:39 +0000] &quot;GET /mysqladmin/scripts/setup.php HTTP/1.1&quot; 404 391 - ZmEu
-[18/May/2017:16:27:39 +0000] &quot;GET /web/phpMyAdmin/scripts/setup.php HTTP/1.1&quot; 404 394 - ZmEu
-[18/May/2017:16:27:39 +0000] &quot;GET /xampp/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
-[18/May/2017:16:27:40 +0000] &quot;GET /apache-default/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 405 - ZmEu
-[18/May/2017:16:27:40 +0000] &quot;GET /phpMyAdmin-2.10.0.0/scripts/setup.php HTTP/1.1&quot; 404 397 - ZmEu
-[18/May/2017:16:27:40 +0000] &quot;GET /mysql/scripts/setup.php HTTP/1.1&quot; 404 386 - ZmEu
-[18/May/2017:16:27:41 +0000] &quot;GET /admin/scripts/setup.php HTTP/1.1&quot; 404 386 - ZmEu
-[18/May/2017:16:27:41 +0000] &quot;GET /forum/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
-[18/May/2017:16:27:41 +0000] &quot;GET /typo3/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
-[18/May/2017:16:27:42 +0000] &quot;GET /phpMyAdmin-2.10.0.1/scripts/setup.php HTTP/1.1&quot; 404 399 - ZmEu
-[18/May/2017:16:27:44 +0000] &quot;GET /administrator/components/com_joommyadmin/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 418 - ZmEu
-[18/May/2017:18:34:45 +0000] &quot;GET /phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 390 - ZmEu
-[18/May/2017:16:27:45 +0000] &quot;GET /w00tw00t.at.blackhats.romanian.anti-sec:) HTTP/1.1&quot; 404 401 - ZmEu</code></pre> 
-<p>In addition, servers can also end up receiving unwanted web traffic that is intended for another server. In a cloud environment, an application may end up reusing an IP address that was formerly connected to another service. It’s common for misconfigured or misbehaving DNS servers to send traffic intended for a different host to an IP address now connected to your server.</p> 
-<p>It’s the responsibility of anyone running a web server to handle and reject potentially malicious traffic or unwanted traffic. Ideally, the web server can reject this traffic as early as possible, before it actually reaches the core application code. A reverse proxy is one way to provide this layer of protection for an application server. It can be configured to reject these requests before they reach the application server.</p> 
-<b>Reverse proxy for performance</b> 
-<p>Another advantage of using a reverse proxy such as NGINX is that it can be configured to offload some heavy lifting from your application container. For example, every HTTP server should support gzip. Whenever a client requests gzip encoding, the server compresses the response before sending it back to the client. This compression saves network bandwidth, which also improves speed for clients who now don’t have to wait as long for a response to fully download.</p> 
-<p>NGINX can be configured to accept a plaintext response from your application container and gzip encode it before sending it down to the client. This allows your application container to focus 100% of its CPU allotment on running business logic, while NGINX handles the encoding with its efficient gzip implementation.</p> 
-<p>An application may have security concerns that require SSL termination at the instance level instead of at the load balancer. NGINX can also be configured to terminate SSL before proxying the request to a local application container. Again, this also removes some CPU load from the application container, allowing it to focus on running business logic. It also gives you a cleaner way to patch any SSL vulnerabilities or update SSL certificates by updating the NGINX container without needing to change the application container.</p> 
-<b>NGINX configuration</b> 
-<p>Configuring NGINX for both traffic filtering and gzip encoding is shown below:</p> 
-<pre><code class="lang-bash">http {
-&nbsp; # NGINX will handle gzip compression of responses from the app server
-&nbsp; gzip on;
-&nbsp; gzip_proxied any;
-&nbsp; gzip_types text/plain application/json;
-&nbsp; gzip_min_length 1000;
-&nbsp;
-&nbsp; server {
-&nbsp;&nbsp;&nbsp; listen 80;
-&nbsp;
-&nbsp;&nbsp;&nbsp; # NGINX will reject anything not matching /api
-&nbsp;&nbsp;&nbsp; location /api {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # Reject requests with unsupported HTTP method
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; if ($request_method !~ ^(GET|POST|HEAD|OPTIONS|PUT|DELETE)$) {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; return 405;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # Only requests matching the whitelist expectations will
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # get sent to the application server
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_pass http://app:3000;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_http_version 1.1;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Upgrade $http_upgrade;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Connection 'upgrade';
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Host $host;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_cache_bypass $http_upgrade;
-&nbsp;&nbsp;&nbsp; }
-&nbsp; }
-}</code></pre> 
-<p>The above configuration only accepts traffic that matches the expression /api and has a recognized HTTP method. If the traffic matches, it is forwarded to a local application container accessible at the local hostname app. If the client requested gzip encoding, the plaintext response from that application container is gzip-encoded.</p> 
-<b>Amazon ECS configuration</b> 
-<p>Configuring ECS to run this NGINX container as a sidecar is also simple. ECS uses a core primitive called the task definition. Each task definition can include one or more containers, which can be linked to each other:</p> 
-<pre><code class="lang-json">&nbsp;{
-&nbsp;&nbsp;&quot;containerDefinitions&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;name&quot;: &quot;nginx&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;image&quot;: &quot;&lt;NGINX reverse proxy image URL here&gt;&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;memory&quot;: &quot;256&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cpu&quot;: &quot;256&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;essential&quot;: true,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;portMappings&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;containerPort&quot;: &quot;80&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;protocol&quot;: &quot;tcp&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;links&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;app&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]
-&nbsp;&nbsp;&nbsp;&nbsp; },
-&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;name&quot;: &quot;app&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;image&quot;: &quot;&lt;app image URL here&gt;&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;memory&quot;: &quot;256&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cpu&quot;: &quot;256&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;essential&quot;: true
-&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp; ],
-&nbsp;&nbsp; &quot;networkMode&quot;: &quot;bridge&quot;,
-&nbsp;&nbsp; &quot;family&quot;: &quot;application-stack&quot;
-}
-</code></pre> 
-<p>This task definition causes ECS to start both an NGINX container and an application container on the same instance. Then, the NGINX container is linked to the application container. This allows the NGINX container to send traffic to the application container using the hostname app.</p> 
-<p>The NGINX container has a port mapping that exposes port 80 on a publically accessible port but the application container does not. This means that the application container is not directly addressable. The only way to send it traffic is to send traffic to the NGINX container, which filters that traffic down. It only forwards to the application container if the traffic passes the whitelisted rules.</p> 
-<b>Conclusion</b> 
-<p>Running a sidecar container such as NGINX can bring significant benefits by making it easier to provide protection for application containers. Sidecar containers also improve performance by freeing your application container from various CPU intensive tasks. Amazon ECS makes it easy to run sidecar containers, and automate their deployment across your cluster.</p> 
-<p>To see the full code for this NGINX sidecar reference, or to try it out yourself, you can check out the open source <a href="https://github.com/awslabs/ecs-nginx-reverse-proxy/tree/master/reverse-proxy">NGINX reverse proxy reference architecture on GitHub</a>.</p> 
-<p>– Nathan<br /> <a href="https://twitter.com/nathankpeck" target="_blank"><img class="alignnone wp-image-2597 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/03/twitter_16.png" alt="" width="16" height="16" /></a>&nbsp;<a href="https://twitter.com/nathankpeck" target="_blank" rel="noopener noreferrer">@nathankpeck</a></p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/nginx/" rel="tag">nginx</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2525');
-});
-</script> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Deploying Java Microservices on Amazon EC2 Container Service</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-07-11T09:12:17+00:00">11 JUL 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/deploying-java-microservices-on-amazon-ec2-container-service/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2489" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2489&amp;disqus_title=Deploying+Java+Microservices+on+Amazon+EC2+Container+Service&amp;disqus_url=https://aws.amazon.com/blogs/compute/deploying-java-microservices-on-amazon-ec2-container-service/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2489');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>This post and accompanying code graciously contributed by:</p> 
-<table> 
-<tbody> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/huynhz.jpeg" alt="" width="120" height="160" /></td> 
-<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/magnusb.jpeg" alt="" width="119" height="160" /></td> 
-</tr> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><b>Huy Huynh</b><br /> Sr. Solutions Architect</td> 
-<td style="padding: 0px 30px 0px 0px"><b>Magnus Bjorkman</b><br /> Solutions Architect</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>Java is a popular language used by many enterprises today. To simplify and accelerate Java application development, many companies are moving from a monolithic to microservices architecture. For some, it has become a strategic imperative. <a href="https://aws.amazon.com/containers/">Containerization</a> technology, such as <a href="https://aws.amazon.com/docker/">Docker</a>, lets enterprises build scalable, robust microservice architectures without major code rewrites.</p> 
-<p>In this post, I cover how to containerize a monolithic Java application to run on Docker. Then, I show how to deploy it on AWS using Amazon EC2 Container Service (<a href="https://aws.amazon.com/ecs/">Amazon ECS</a>), a high-performance container management service. Finally, I show how to break the monolith into multiple services, all running in containers on Amazon ECS.</p> 
-<p><span id="more-2489"></span></p> 
-<b>Application Architecture</b> 
-<p>For this example, I use the <a href="https://github.com/spring-projects/spring-petclinic">Spring Pet Clinic</a>, a monolithic Java application for managing a veterinary practice. It is a simple REST&nbsp;API, which allows the client to manage and view Owners, Pets, Vets, and Visits.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png"><img class="aligncenter wp-image-2498 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png" alt="" width="975" height="394" /></a></p> 
-<p>It is a simple three-tier architecture:</p> 
-<ul> 
-<li><strong>Client</strong><br /> You simulate this by using curl commands.</li> 
-<li><strong>Web/app server</strong><br /> This is the Java and Spring-based application that you run using the embedded Tomcat. As part of this post, you run this within Docker containers.</li> 
-<li><strong>Database server</strong><br /> This is the relational database for your application that stores information about owners, pets, vets, and visits. For this post, use MySQL RDS.</li> 
-</ul> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2.png"><img class="aligncenter size-medium wp-image-2499" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2-288x300.png" alt="" width="288" height="300" /></a></p> 
-<p>I decided to not put the database inside a container as containers were designed for applications and are transient in nature. The choice was made even easier because you have a fully managed database service available with <a href="https://aws.amazon.com/rds">Amazon RDS</a>.</p> 
-<p>RDS manages the work involved in setting up a relational database, from provisioning the infrastructure capacity that you request to installing the database software. After your database is up and running, RDS automates common administrative tasks, such as performing backups and patching the software that powers your database. With optional <a href="https://aws.amazon.com/rds/faqs/#36">Multi-AZ deployments</a>, Amazon RDS also manages synchronous data replication across Availability Zones with automatic failover.</p> 
-<b>Walkthrough</b> 
-<p>You can find the code for the example covered in this post at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/">amazon-ecs-java-microservices</a> on GitHub.</p> 
-<b>Prerequisites</b> 
-<p>You need the following to walk through this solution:</p> 
-<ul> 
-<li>An AWS account</li> 
-<li>An access key and secret key for a user in the account</li> 
-<li>The AWS CLI installed</li> 
-</ul> 
-<p>Also, install the latest versions of the following:</p> 
-<ul> 
-<li>Java</li> 
-<li>Maven</li> 
-<li>Python</li> 
-<li>Docker</li> 
-</ul> 
-<b>Step 1: Move the existing Java Spring application to a container deployed using Amazon ECS</b> 
-<p>First, move the existing monolith application to a container and deploy it using Amazon ECS. This is a great first step before breaking the monolith apart because you still get some benefits before breaking apart the monolith:</p> 
-<ul> 
-<li>An improved pipeline. The container also allows an engineering organization to create a standard pipeline for the application lifecycle.</li> 
-<li>No mutations to machines.</li> 
-</ul> 
-<p>You can find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/1_ECS_Java_Spring_PetClinic">1_ECS_Java_Spring_PetClinic</a>.</p> 
-<h3>Container deployment overview</h3> 
-<p>The following diagram is an overview of what the setup looks like for Amazon ECS and related services:</p> 
-<p><img class="aligncenter wp-image-2497 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/ecs-spring-monolithic-containers-1.png" alt="" width="262" height="300" /></p> 
-<p><strong>This setup consists of the following resources:</strong></p> 
-<ul> 
-<li>The client application that makes a request to the load balancer.</li> 
-<li>The load balancer that distributes requests across all available ports and instances registered in the application’s target group using round-robin.</li> 
-<li>The target group that is updated by Amazon ECS to always have an up-to-date list of all the service containers in the cluster. This includes the port on which they are accessible.</li> 
-<li>One Amazon ECS cluster that hosts the container for the application.</li> 
-<li>A VPC network to host the Amazon ECS cluster and associated security groups.</li> 
-</ul> 
-<p>Each container has a single application process that is bound to port 8080 within its namespace. In reality, all the containers are exposed on a different, randomly assigned port on the host.</p> 
-<p>The architecture is containerized but still monolithic because each container has all the same features of the rest of the containers</p> 
-<p><strong>The following is also part of the solution but not depicted in the above diagram:</strong></p> 
-<ul> 
-<li>One <a href="https://aws.amazon.com/ecr/">Amazon EC2 Container Registry (Amazon ECR)</a>&nbsp;repository for the application.</li> 
-<li>A service/task definition that spins up containers on the instances of the Amazon ECS cluster.</li> 
-<li>A MySQL RDS instance that hosts the applications schema. The information about the MySQL RDS instance is sent in through environment variables to the containers, so that the application can connect to the MySQL RDS instance.</li> 
-</ul> 
-<p>I have automated setup with the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/ecs-cluster.cf">1_ECS_Java_Spring_PetClinic/ecs-cluster.cf</a> AWS CloudFormation template and a <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/setup.py">Python script</a>.</p> 
-<p>The Python script calls the CloudFormation template for the initial setup of the VPC, Amazon ECS cluster, and RDS instance. It then extracts the outputs from the template and uses those for API calls to create Amazon ECR repositories, tasks, services, Application Load Balancer, and target groups.</p> 
-<h3>Environment variables and Spring properties binding</h3> 
-<p>As part of the Python script, you pass in a number of environment variables to the container as part of the task/container definition:</p> 
-<pre><code class="lang-json">'environment': [
-{
-'name': 'SPRING_PROFILES_ACTIVE',
-'value': 'mysql'
-},
-{
-'name': 'SPRING_DATASOURCE_URL',
-'value': my_sql_options['dns_name']
-},
-{
-'name': 'SPRING_DATASOURCE_USERNAME',
-'value': my_sql_options['username']
-},
-{
-'name': 'SPRING_DATASOURCE_PASSWORD',
-'value': my_sql_options['password']
-}
-],</code></pre> 
-<p>The preceding environment variables work in concert with the Spring property system. The value in the variable SPRING_PROFILES_ACTIVE, makes Spring use the MySQL version of the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/src/main/resources/application-mysql.properties">application property file</a>. The other environment files override the following properties in that file:</p> 
-<ul> 
-<li><code class="lang-sql">spring.datasource.url</code></li> 
-<li><code class="lang-sql">spring.datasource.username</code></li> 
-<li><code class="lang-sql">spring.datasource.password</code></li> 
-</ul> 
-<p>Optionally, you can also encrypt sensitive values by using <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager Parameter Store. Instead of handing in the password, you pass in a reference to the parameter and fetch the value as part of the container startup. For more information, see </a><a href="https://aws.amazon.com/blogs/compute/managing-secrets-for-amazon-ecs-applications-using-parameter-store-and-iam-roles-for-tasks/">Managing Secrets for Amazon ECS Applications Using Parameter Store and IAM Roles for Tasks</a><a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">.</a></p> 
-<h3>Spotify Docker Maven plugin</h3> 
-<p>Use the <a href="https://github.com/spotify/docker-maven-plugin">Spotify Docker Maven plugin</a> to create the image and push it directly to Amazon ECR. This allows you to do this as part of the regular Maven build. It also integrates the image generation as part of the overall build process. Use an explicit <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/src/main/docker/Dockerfile">Dockerfile</a> as input to the plugin.</p> 
-<pre><code class="lang-sql">FROM frolvlad/alpine-oraclejdk8:slim
-VOLUME /tmp
-ADD spring-petclinic-rest-1.7.jar app.jar
-RUN sh -c 'touch /app.jar'
-ENV JAVA_OPTS=&quot;&quot;
-ENTRYPOINT [ &quot;sh&quot;, &quot;-c&quot;, &quot;java $JAVA_OPTS -Djava.security.egd=file:/dev/./urandom -jar /app.jar&quot; ]</code></pre> 
-<p>The Python script discussed earlier uses the <a href="https://aws.amazon.com/cli">AWS CLI</a> to authenticate you with AWS. The script places the token in the appropriate location so that the plugin can work directly against the Amazon ECR repository.</p> 
-<h3>Test setup</h3> 
-<p>You can test the setup by running the Python script:<br /> <code class="lang-python">python setup.py -m setup -r &lt;your region&gt;</code></p> 
-<p>After the script has successfully run, you can test by querying an endpoint:<br /> <code class="lang-python">curl &lt;your endpoint from output above&gt;/owner</code></p> 
-<p>You can clean this up before going to the next section:<br /> <code class="lang-python">python setup.py -m cleanup -r &lt;your region&gt;</code></p> 
-<b>Step 2: Converting the monolith into microservices running on Amazon ECS</b> 
-<p>The second step is to convert the monolith into microservices. For a real application, you would likely not do this as one step, but re-architect an application piece by piece. You would continue to run your monolith but it would keep getting smaller for each piece that you are breaking apart.</p> 
-<p>By migrating microservices, you would get four benefits associated with microservices:</p> 
-<ul> 
-<li><b>Isolation of crashes</b><br /> If one microservice in your application is crashing, then only that part of your application goes down. The rest of your application continues to work properly.</li> 
-<li><b>Isolation of security</b><br /> When microservice best practices are followed, the result is that if an attacker compromises one service, they only gain access to the resources of that service. They can’t horizontally access other resources from other services without breaking into those services as well.</li> 
-<li><b>Independent scaling</b><br /> When features are broken out into microservices, then the amount of infrastructure and number of instances of each microservice class can be scaled up and down independently.</li> 
-<li><b>Development velocity</b><br /> In a monolith, adding a new feature can potentially impact every other feature that the monolith contains. On the other hand, a proper microservice architecture has new code for a new feature going into a new service. You can be confident that any code you write won’t impact the existing code at all, unless you explicitly write a connection between two microservices.</li> 
-</ul> 
-<p>Find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/2_ECS_Java_Spring_PetClinic_Microservices">2_ECS_Java_Spring_PetClinic_Microservices</a>.<br /> You break apart the Spring Pet Clinic application by creating a microservice for each REST&nbsp;API operation, as well as creating one for the system services.</p> 
-<h3>Java code changes</h3> 
-<p>Comparing the project structure between the monolith and the microservices version, you can see that each service is now its own separate build.<br /> <strong>First, the monolith version:</strong><br /> <img class="aligncenter size-full wp-image-2500" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_3.png" alt="" width="379" height="377" /><br /> You can clearly see how each API operation is its own subpackage under the <i>org.springframework.samples.petclinic</i> package, all part of the same monolithic application.<br /> <strong>This changes as you break it apart in the microservices version:</strong><br /> <img class="aligncenter size-full wp-image-2501" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_4.png" alt="" width="392" height="477" /><br /> Now, each API operation is its own separate build, which you can build independently and deploy. You have also duplicated some code across the different microservices, such as the classes under the model subpackage. This is intentional as you don’t want to introduce artificial dependencies among the microservices and allow these to evolve differently for each microservice.</p> 
-<p>Also, make the dependencies among the API operations more loosely coupled. In the monolithic version, the components are tightly coupled and use object-based invocation.</p> 
-<p>Here is an example of this from the OwnerController operation, where the class is directly calling PetRepository to get information about pets. PetRepository is the Repository class (Spring data access layer) to the Pet table in the RDS instance for the Pet API:</p> 
-<pre><code class="lang-java">@RestController
-class OwnerController {
-@Inject
-private PetRepository pets;
-@Inject
-private OwnerRepository owners;
-private static final Logger logger = LoggerFactory.getLogger(OwnerController.class);
-@RequestMapping(value = &quot;/owner/{ownerId}/getVisits&quot;, method = RequestMethod.GET)
-public ResponseEntity&lt;List&lt;Visit&gt;&gt; getOwnerVisits(@PathVariable int ownerId){
-List&lt;Pet&gt; petList = this.owners.findById(ownerId).getPets();
-List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
-petList.forEach(pet -&gt; visitList.addAll(pet.getVisits()));
-return new ResponseEntity&lt;List&lt;Visit&gt;&gt;(visitList, HttpStatus.OK);
-}
-}</code></pre> 
-<p>In the microservice version, call the Pet API operation and not PetRepository directly. Decouple the components by using interprocess communication; in this case, the Rest API. This provides for fault tolerance and disposability.</p> 
-<pre><code class="lang-java">@RestController
-class OwnerController {
-@Value(&quot;#{environment['SERVICE_ENDPOINT'] ?: 'localhost:8080'}&quot;)
-private String serviceEndpoint;
-@Inject
-private OwnerRepository owners;
-private static final Logger logger = LoggerFactory.getLogger(OwnerController.class);
-@RequestMapping(value = &quot;/owner/{ownerId}/getVisits&quot;, method = RequestMethod.GET)
-public ResponseEntity&lt;List&lt;Visit&gt;&gt; getOwnerVisits(@PathVariable int ownerId){
-List&lt;Pet&gt; petList = this.owners.findById(ownerId).getPets();
-List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
-petList.forEach(pet -&gt; {
-logger.info(getPetVisits(pet.getId()).toString());
-visitList.addAll(getPetVisits(pet.getId()));
-});
-return new ResponseEntity&lt;List&lt;Visit&gt;&gt;(visitList, HttpStatus.OK);
-}
-private List&lt;Visit&gt; getPetVisits(int petId){
-List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
-RestTemplate restTemplate = new RestTemplate();
-Pet pet = restTemplate.getForObject(&quot;http://&quot;+serviceEndpoint+&quot;/pet/&quot;+petId, Pet.class);
-logger.info(pet.getVisits().toString());
-return pet.getVisits();
-}
-}</code></pre> 
-<p>You now have an additional method that calls the API. You are also handing in the service endpoint that should be called, so that you can easily inject dynamic endpoints based on the current deployment.</p> 
-<h3>Container deployment overview</h3> 
-<p>Here is an overview of what the setup looks like for Amazon ECS and the related services:<br /> <img class="aligncenter size-large wp-image-2496" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/ecs-spring-microservice-containers.png" alt="" width="640" height="731" /><br /> <b>This setup consists of the following resources:</b></p> 
-<ul> 
-<li>The client application that makes a request to the load balancer.</li> 
-<li>The Application Load Balancer that inspects the client request. Based on routing rules, it directs the request to an instance and port from the target group that matches the rule.</li> 
-<li>The Application Load Balancer that has a target group for each microservice. The target groups are used by the corresponding services to register available container instances. Each target group has a path, so when you call the path for a particular microservice, it is mapped to the correct target group. This allows you to use one Application Load Balancer to serve all the different microservices, accessed by the path. For example, https:///owner/* would be mapped and directed to the Owner microservice.</li> 
-<li>One Amazon ECS cluster that hosts the containers for each microservice of the application.</li> 
-<li>A VPC network to host the Amazon ECS cluster and associated security groups.</li> 
-</ul> 
-<p>Because you are running multiple containers on the same instances, use dynamic port mapping to avoid port clashing. By using dynamic port mapping, the container is allocated an anonymous port on the host to which the container port (8080) is mapped. The anonymous port is registered with the Application Load Balancer and target group so that traffic is routed correctly.</p> 
-<p><strong>The following is also part of the solution but not depicted in the above diagram:</strong></p> 
-<ul> 
-<li>One Amazon ECR repository for each microservice.</li> 
-<li>A service/task definition per microservice that spins up containers on the instances of the Amazon ECS cluster.</li> 
-<li>A MySQL RDS instance that hosts the applications schema. The information about the MySQL RDS instance is sent in through environment variables to the containers. That way, the application can connect to the MySQL RDS instance.</li> 
-</ul> 
-<p>I have again automated setup with the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/2_ECS_Java_Spring_PetClinic_Microservices/ecs-cluster.cf">2_ECS_Java_Spring_PetClinic_Microservices/ecs-cluster.cf</a> CloudFormation template and a <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/2_ECS_Java_Spring_PetClinic_Microservices/setup.py">Python script</a>.</p> 
-<p>The CloudFormation template remains the same as in the previous section. In the Python script, you are now building five different Java applications, one for each microservice (also includes a system application). There is a separate Maven POM file for each one. The resulting Docker image gets pushed to its own Amazon ECR repository, and is deployed separately using its own service/task definition. This is critical to get the benefits described earlier for microservices.</p> 
-<p>Here is an example of the POM file for the Owner microservice:</p> 
-<pre><code class="lang-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
-&lt;project xmlns=&quot;http://maven.apache.org/POM/4.0.0&quot; xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot;
-xsi:schemaLocation=&quot;http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd&quot;&gt;
-&lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
-&lt;groupId&gt;org.springframework.samples&lt;/groupId&gt;
-&lt;artifactId&gt;spring-petclinic-rest&lt;/artifactId&gt;
-&lt;version&gt;1.7&lt;/version&gt;
-&lt;parent&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
-&lt;version&gt;1.5.2.RELEASE&lt;/version&gt;
-&lt;/parent&gt;
-&lt;properties&gt;
-&lt;!-- Generic properties --&gt;
-&lt;java.version&gt;1.8&lt;/java.version&gt;
-&lt;docker.registry.host&gt;${env.docker_registry_host}&lt;/docker.registry.host&gt;
-&lt;/properties&gt;
-&lt;dependencies&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;javax.inject&lt;/groupId&gt;
-&lt;artifactId&gt;javax.inject&lt;/artifactId&gt;
-&lt;version&gt;1&lt;/version&gt;
-&lt;/dependency&gt;
-&lt;!-- Spring and Spring Boot dependencies --&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-data-rest&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-cache&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-data-jpa&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-web&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-starter-test&lt;/artifactId&gt;
-&lt;scope&gt;test&lt;/scope&gt;
-&lt;/dependency&gt;
-&lt;!-- Databases - Uses HSQL by default --&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.hsqldb&lt;/groupId&gt;
-&lt;artifactId&gt;hsqldb&lt;/artifactId&gt;
-&lt;scope&gt;runtime&lt;/scope&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;mysql&lt;/groupId&gt;
-&lt;artifactId&gt;mysql-connector-java&lt;/artifactId&gt;
-&lt;scope&gt;runtime&lt;/scope&gt;
-&lt;/dependency&gt;
-&lt;!-- caching --&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;javax.cache&lt;/groupId&gt;
-&lt;artifactId&gt;cache-api&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.ehcache&lt;/groupId&gt;
-&lt;artifactId&gt;ehcache&lt;/artifactId&gt;
-&lt;/dependency&gt;
-&lt;!-- end of webjars --&gt;
-&lt;dependency&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-devtools&lt;/artifactId&gt;
-&lt;scope&gt;runtime&lt;/scope&gt;
-&lt;/dependency&gt;
-&lt;/dependencies&gt;
-&lt;build&gt;
-&lt;plugins&gt;
-&lt;plugin&gt;
-&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
-&lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
-&lt;/plugin&gt;
-&lt;plugin&gt;
-&lt;groupId&gt;com.spotify&lt;/groupId&gt;
-&lt;artifactId&gt;docker-maven-plugin&lt;/artifactId&gt;
-&lt;version&gt;0.4.13&lt;/version&gt;
-&lt;configuration&gt;
-&lt;imageName&gt;${env.docker_registry_host}/${project.artifactId}&lt;/imageName&gt;
-&lt;dockerDirectory&gt;src/main/docker&lt;/dockerDirectory&gt;
-&lt;useConfigFile&gt;true&lt;/useConfigFile&gt;
-&lt;registryUrl&gt;${env.docker_registry_host}&lt;/registryUrl&gt;
-&lt;!--dockerHost&gt;https://${docker.registry.host}&lt;/dockerHost--&gt;
-&lt;resources&gt;
-&lt;resource&gt;
-&lt;targetPath&gt;/&lt;/targetPath&gt;
-&lt;directory&gt;${project.build.directory}&lt;/directory&gt;
-&lt;include&gt;${project.build.finalName}.jar&lt;/include&gt;
-&lt;/resource&gt;
-&lt;/resources&gt;
-&lt;forceTags&gt;false&lt;/forceTags&gt;
-&lt;imageTags&gt;
-&lt;imageTag&gt;${project.version}&lt;/imageTag&gt;
-&lt;/imageTags&gt;
-&lt;/configuration&gt;
-&lt;/plugin&gt;
-&lt;/plugins&gt;
-&lt;/build&gt;
-&lt;/project&gt;</code></pre> 
-<h3>Test setup</h3> 
-<p>You can test this by running the Python script:</p> 
-<p><code class="lang-python">python setup.py -m setup -r &lt;your region&gt;</code></p> 
-<p>After the script has successfully run, you can test by querying an endpoint:</p> 
-<p><code class="lang-python">curl &lt;your endpoint from output above&gt;/owner</code></p> 
-<b>Conclusion</b> 
-<p>Migrating a monolithic application to a containerized set of microservices can seem like a daunting task. Following the steps outlined in this post, you can begin to containerize monolithic Java apps, taking advantage of the container runtime environment, and beginning the process of re-architecting into microservices. On the whole, containerized microservices are faster to develop, easier to iterate on, and more cost effective to maintain and secure.</p> 
-<p>This post focused on the first steps of microservice migration. You can learn more about optimizing and scaling your microservices with components such as service discovery, blue/green deployment, circuit breakers, and configuration servers at <a href="http://aws.amazon.com/containers">http://aws.amazon.com/containers</a>.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2489');
 });
 </script> 
 </article> 

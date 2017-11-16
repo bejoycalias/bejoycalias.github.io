@@ -189,18 +189,146 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a</p>
 <br>
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">How to Export EC2 Instance Execution Logs to an S3 Bucket Using CloudWatch Logs, Lambda, and CloudFormation</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">FINRA Gatekeeper: Amazon EC2 Access Management System Using Amazon EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T18:14:22+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/finra-gatekeeper-amazon-ec2-access-management-system-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em><img class="size-full wp-image-2017 alignright" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/finra-logo.png" alt="" width="352" height="107" />By Daniel Koo, Senior Director at FINRA, and Stephen Mele, Software Developer at FINRA</em></p> 
+<h3>Introduction</h3> 
+<p>Moving from a traditional data center to the cloud can impose many questions around compliance and security. FINRA took these concerns very seriously with our cloud migration journey to AWS. As a regulatory organization, overseeing up to 75 billion market transactions every day, it is critical for us to establish proper governance to ensure that compliance is met and that the right level of security is in place. In order for us to achieve this, we looked at building solutions on top of existing AWS services for managing human access. We wanted to make sure we properly control who has access to which resources, allow transparency to look at who is trying to access what resources, and add the necessary approval process when access is requested. The goal was to develop a solution which follows a self-service model, making it very easy for the development and ops community to adopt. The <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> (SSM) and <a href="https://console.aws.amazon.com/ssm/run-command">Run Command</a> service provided us exactly what we needed to build the right solution.</p> 
+<p><span id="more-2011"></span></p> 
+<p><img class="size-full wp-image-2014 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/problem.png" alt="" width="500" height="303" /></p> 
+<h3>Solution Approach</h3> 
+<p>Our solution was to provide temporary access to people using their existing credentials and permissions already being leveraged. We also wanted to make sure that we give the temporary access in a timely and responsive manner. In a traditional data center, it takes a significant amount of time to request access to a particular server and finally be granted the access. This is typically done through a paper process. Given that the majority of the servers are transient in the cloud, this long process did not work so we needed to automate the process and have a fast turnaround time. Ultimately, we wanted to discourage people from accessing the servers so that we could promote cloud-centric approaches such as re-deployment and self-healing. However this solution was necessary to achieve our desired control when access was absolutely needed. Following this approach, while keeping the compliance and security goals in mind, we developed an application called Gatekeeper which leverages <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a> as the main technology.</p> 
+<p><img class="size-full wp-image-2015 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/approach.png" alt="" width="500" height="273" /></p> 
+<h3>Gatekeeper Application</h3> 
+<p>Gatekeeper is designed as a Web application that is built around a request lifecycle management system, where a user performs a search, selects one or more EC2 resources for a specified environment (such as DEV, QA, Production), and makes a request for temporary access. The users have the ability to specify a set of people desiring the temporary access as well as the number of hours needed. Upon submitting the request, depending on the environment they are requesting for, there are two outcomes:</p> 
+<ol> 
+<li>The temporary access is immediately granted to the user(s).</li> 
+<li>The access request requires a review and approval before being granted the temporary access. Upon approval, access is immediately granted to the user(s), otherwise the access is denied.</li> 
+</ol> 
+<p>Once the request is live, our lifecycle management system keeps track of the time that has elapsed since a request has been fulfilled. As soon as the time allotted to a specific request expires, the system will automatically revoke the user’s access from the resources specified in their request.</p> 
+<p><img class="alignnone wp-image-2033 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/15/schema_ssm.jpg" alt="" width="579" height="335" /></p> 
+<h3>Creating the Users</h3> 
+<p>Gatekeeper needs to be able to create an account for each user on all of the instances provided with the Access Request. To achieve this goal, Gatekeeper has documents staged in EC2 Systems Manager that perform the creation of users on running instances. The document itself is a simple shell script which will set up the user for the temporary access. Gatekeeper calls these documents by leveraging EC2 Systems Manager with the AWS SDK for Java. By taking this route, we do not have to worry about directly connecting to each instance and creating the users; we can simply make an AWS API call and let Systems Manager do all of the heavy lifting for us. Upon successful creation, the system will distribute the private keys to each user that is specified in the Access Request. Currently we have create/delete documents for Amazon Linux, Ubuntu, and Windows, but we could easily add more documents to support more operating systems should the need arise.</p> 
+<h4>Example Create Document</h4> 
+<pre><code class="lang-json">{
+&quot;schemaVersion&quot;:&quot;1.2&quot;,
+&quot;description&quot;:&quot;Script for GateKeeper to create temp user.&quot;,
+&quot;parameters&quot;:{
+&quot;userName&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The username to create.&quot;,
+&quot;allowedPattern&quot;:&quot;gk-.*&quot;,
+&quot;maxChars&quot;:64
+},
+&quot;publicKey&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The public key string for the user.&quot;,
+&quot;maxChars&quot;:4096
+},
+&quot;executionTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;default&quot;:&quot;300&quot;,
+&quot;description&quot;:&quot;(Optional) The time in seconds for a command to be completed before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
+&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
+}
+},
+&quot;runtimeConfig&quot;:{
+&quot;aws:runShellScript&quot;:{
+&quot;properties&quot;:[
+{
+&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
+&quot;runCommand&quot;:[
+&quot;useradd -e `date -d '+2 days' '+%Y-%m-%d'` {{ userName }} -m&quot;,
+&quot;mkdir /home/{{ userName }}/.ssh&quot;,
+&quot;echo '{{ publicKey }}' &gt;&gt; /home/{{ userName }}/.ssh/authorized_keys&quot;,
+&quot;chown -R {{ userName }}:{{ userName }} /home/{{ userName }}&quot;,
+&quot;chmod -R go-rwx /home/{{ userName }}/.ssh&quot;,
+&quot;echo '{{ userName }}  ALL=(ALL) NOPASSWD: ALL' &gt; /etc/sudoers.d/{{ userName }}&quot;,
+&quot;usermod -p '*' {{ userName }}&quot;
+],
+&quot;workingDirectory&quot;:&quot;/root&quot;,
+&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
+}
+]
+}
+}
+}</code></pre> 
+<p>At a high level the script takes in 3 parameters and uses these to execute a shell script. The arguments for this script are:</p> 
+<ol> 
+<li><strong>userName</strong> – the username that the script will set up</li> 
+<li><strong>publicKey</strong> – the public key that will be used for this user</li> 
+<li><strong>executionTimeout</strong> – how much time to wait for the script to successfully complete</li> 
+</ol> 
+<p>The Gatekeeper application is responsible for providing the Systems Manager document with the <strong>userName</strong> and the public SSH key associated with that user. Gatekeeper will generate a new public/private SSH key each time so that no key will be re-used.</p> 
+<p>The script itself will create the user via the&nbsp;<strong>useradd</strong> command, which will set up the user to expire after 2 days (if the system is unable to successfully remove the user). The user will be able to log into the instance only via their private key.</p> 
+<h3>Revoking the User(s) Access</h3> 
+<p>The Gatekeeper application keeps track of each Access Request that is active and determines whether it is time to revoke the user’s access. When the access period for a request expires, the system will invoke a different Systems Manager script that will execute a shell script which removes the user from the instance(s) to which they had requested access.</p> 
+<h4>Example Remove Document</h4> 
+<pre><code class="lang-json">{
+&quot;schemaVersion&quot;:&quot;1.2&quot;,
+&quot;description&quot;:&quot;Script for GateKeeper to cleanup expired users.&quot;,
+&quot;parameters&quot;:{
+&quot;userName&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The username to delete.&quot;,
+&quot;allowedPattern&quot;:&quot;gk-.*&quot;,
+&quot;maxChars&quot;:64
+},
+&quot;executionTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;default&quot;:&quot;300&quot;,
+&quot;description&quot;:&quot;(Optional) The time in seconds for a command to be completed before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
+&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
+}
+},
+&quot;runtimeConfig&quot;:{
+&quot;aws:runShellScript&quot;:{
+&quot;properties&quot;:[
+{
+&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
+&quot;runCommand&quot;:[ &quot;cut -f1 -d':' /etc/passwd | grep {{ userName }} &gt; /dev/null &amp;&amp; (userdel -rf {{ userName }} ; echo 'user deleted' ) || echo 'no user to delete'&quot;,
+&quot;ls /etc/sudoers.d/ | grep {{ userName }} &gt; /dev/null &amp;&amp; (rm -f /etc/sudoers.d/{{ userName }} ; echo 'sudo file deleted' ) || echo 'no sudo file to delete'&quot;    ],
+&quot;workingDirectory&quot;:&quot;/root&quot;,
+&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
+}
+]
+}
+}
+}</code></pre> 
+<p>The arguments for this script are:</p> 
+<ol> 
+<li><strong>userName</strong>&nbsp;– the username that the script will delete</li> 
+<li><strong>executionTimeout</strong>&nbsp;– how much time to wait for the script to successfully complete</li> 
+</ol> 
+<p>The script itself uses the <strong>userName</strong>&nbsp;parameter to delete the user from the instance(s). Should the script for some reason fail to run, it will re-try a set amount of times, and if there was no successful run, then the system will notify the Ops team to investigate and remove the user.</p> 
+<h3>Conclusion</h3> 
+<p>By leveraging Amazon EC2 Systems Manager and other services such as Amazon EC2 and AWS Identity and Access Management (IAM), FINRA was able to build a solution to manage temporary access to our resources running in AWS across multiple environments. Systems Manager is very easy to adopt, and it is extremely reliable and fast. It is a great tool for performing ad-hoc execution of scripts on running instances.</p> 
+<p><em>The content and opinions in this blog are those of the third-party author and AWS is not responsible for the content or accuracy of this post.</em></p> 
+<p>&nbsp;</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Export EC2 Instance Execution Logs to an S3 Bucket Using CloudWatch Logs, Lambda, and CloudFormation</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
 <time property="datePublished" datetime="2017-11-13T11:12:07+00:00">13 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/how-to-export-ec2-instance-execution-logs-to-an-s3-bucket-using-cloudwatch-logs-lambda-and-cloudformation/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>“We want to get execution logs from our EC2 instances into S3,” my customer said. “Then we can store them and process them later, for optimization, audit, and security review, and so on. We’d like to do it in our CloudFormation stacks, as that’s our execution standard. Can you help us?”</p> 
 <p>This blog post shows you how to build a solution for this problem. We’ll build it using Amazon CloudWatch Logs, AWS Lambda, and some useful capabilities in AWS CloudFormation for customizing EC2 instances.</p> 
@@ -354,18 +482,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">The Virtues of YAML CloudFormation and Using CloudFormation Designer to Convert JSON to YAML</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">The Virtues of YAML CloudFormation and Using CloudFormation Designer to Convert JSON to YAML</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Aaron Fagan</span></span> | on 
 <time property="datePublished" datetime="2017-11-10T09:19:38+00:00">10 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/the-virtues-of-yaml-cloudformation-and-using-cloudformation-designer-to-convert-json-to-yaml/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> provides the framework to define infrastructure-as-code in AWS and, until last year, this could only be written in JSON. However, in 2016, AWS added <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-formats.html">YAML 1.1</a> support for CloudFormation. Let’s take a look at some of the advantages of using YAML over JSON, as well as how to overcome some of the challenges in getting started writing CloudFormation in YAML.</p> 
 <h3>The virtues of YAML</h3> 
@@ -538,18 +664,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation-designer/" rel="tag">AWS CloudFormation Designer</a>, <a href="https://aws.amazon.com/blogs/mt/tag/yaml/" rel="tag">YAML</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Controlling Projected User Costs Through Monthly Budget Policies</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Controlling Projected User Costs Through Monthly Budget Policies</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Adam Westrich</span></span> | on 
 <time property="datePublished" datetime="2017-11-06T16:10:43+00:00">06 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/" title="View all posts in AWS Cost Management*"><span property="articleSection">AWS Cost Management*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/" title="View all posts in AWS Cost Management*"><span property="articleSection">AWS Cost Management*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/controlling-projected-user-costs-through-monthly-budget-policies/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <h3 style="text-align: left">Introduction</h3> 
 <p>With the announcement of our new AWS Price List Query APIs, let’s discuss a use-case that you can deploy directly to your AWS account. Customers often ask for ways to proactively control costs while having the flexibility to experiment with different AWS resource sizes and types. The solution we’ll discuss in this blog post gives you the ability to project monthly <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> costs for individual Identity and Access Management (IAM) users and receive alerts when user projected costs exceed their configured thresholds. You can deploy this solution to your AWS account using <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a>&nbsp;below.</p> 
@@ -561,13 +685,11 @@ by
 <ol> 
 <li>When a user launches an EC2 instance, user and launch details are logged in <a href="https://aws.amazon.com/cloudtrail/">AWS CloudTrail</a>, which triggers an <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/LogEC2InstanceState.html">Amazon CloudWatch event</a>.</li> 
 <li>The CloudWatch event triggers a <a href="https://aws.amazon.com/lambda/">Lambda function</a>, which performs three&nbsp;tasks: 
-<ul> 
 <li>Calls the AWS Price List Query API to retrieve the price of EC2 instance on which action was taken.</li> 
 <li>Based on event type (Launch/Start or Stop/Terminate), edits the <a href="https://aws.amazon.com/dynamodb/">DynamoDB</a> table with new price based upon the continued projection for the month.</li> 
 <li>Sends a trigger to another Lambda function which will check for a policy breach.</li> 
 </ul> </li> 
 <li>The policy breach Lambda function checks if the user in the DynamoDB table has breached the budgeted&nbsp;threshold 
-<ul> 
 <li style="text-align: left">If the budget threshold is breached, the Lambda function generates an Amazon SNS notification to email alert the IT operations team.</li> 
 </ul> </li> 
 </ol> 
@@ -616,11 +738,9 @@ by
 </tbody> 
 </table> 
 <h4>Notes:</h4> 
-<ul> 
 <li>This solution should be used as an addition to the AWS Billing and Cost Management tools. The solution calculations are based upon on-demand EC2 costs per second for non-Windows operating systems and per hour for Windows operating systems. They don’t include instances with pre-installed software or AWS Marketplace software licenses.</li> 
 <li>The monthly cost of the AWS resources to deploy this cost-control solution&nbsp;is in most scenarios, &lt; $5.</li> 
 <li>These projections are only estimates, and monthly charges will be based on your actual usage of AWS services, and may vary from the projections provided.</li> 
-</ul> 
 <h3>Conclusion</h3> 
 <p>As organizations are given freedoms to experiment with computing resources in the AWS cloud, they often need governance controls for an effective solution. The AWS Management Tools and partner ecosystem enable you to deploy or even build the right governance solution for your organization’s needs.</p> 
 <h3>About the Author:</h3> 
@@ -638,27 +758,23 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/budget/" rel="tag">Budget</a>, <a href="https://aws.amazon.com/blogs/mt/tag/cost-control/" rel="tag">Cost Control</a>, <a href="https://aws.amazon.com/blogs/mt/tag/governance/" rel="tag">Governance</a>, <a href="https://aws.amazon.com/blogs/mt/tag/price-list-api/" rel="tag">Price List API</a>, <a href="https://aws.amazon.com/blogs/mt/tag/user-budgeting/" rel="tag">User Budgeting</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Run Scripts Stored in Private or Public GitHub Repositories Using Amazon EC2 Systems Manager</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Run Scripts Stored in Private or Public GitHub Repositories Using Amazon EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
 <time property="datePublished" datetime="2017-11-06T09:28:29+00:00">06 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/run-scripts-stored-in-private-or-public-github-repositories-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>By Melonia Mendonca, Software Development Engineer at Amazon Web Services</em></p> 
 <p><a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> (SSM) lets you configure, manage and automate your AWS and on-premises resources at scale. You can perform safe and secure operations without SSH access or bastion hosts using Systems Manager Run Command, mitigate configuration drift using Systems Manager State Manager, and create an access-controlled environment with full auditing. With SSM Documents, you can author your configurations as code and enable centralized management across accounts, enforcing best practices. Systems Manger provides a number of public documents for common management scenarios, or you can create your own.</p> 
 <p>We recently <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-ec2-systems-manager-now-integrates-with-github/">announced</a> the ability to run scripts from remote locations such as GitHub or Amazon S3. This simplifies how you automate environments by letting you use existing scripts or toolsets without having to port them over to Systems Manager or create Documents as wrapper around those scripts or tools. For information, please read our partner and product integration documentation <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-integration.html">here</a>. &nbsp;For example, you can:</p> 
-<ul> 
 <li><span style="text-decoration: underline">Execute various types of scripts</span> written in Python, Ruby or PowerShell. You can also run configurations such as Ansible playbooks. You can pretty much run anything on your instances as long as the software (e.g., Python 2.7 or Ansible) is installed on your instance and recognized by Shell on Linux and PowerShell on Windows</li> 
 <li><span style="text-decoration: underline">Download scripts</span> stored in private or public GitHub repositories, or on Amazon S3 onto your instances for execution</li> 
 <li><span style="text-decoration: underline">Run multiple files</span> by downloading a complete GitHub directory or an S3 bucket</li> 
-</ul> 
 <p><span id="more-1905"></span></p> 
 <p>Systems Manager now provides a new public Document, <strong>AWS-RunRemoteScript</strong> that runs scripts from GitHub or Amazon S3 on specified instances. It does this using the new plugin from <a href="https://github.com/aws/amazon-ssm-agent">Amazon SSM Agent</a>, <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-downloadContent">aws:downloadContent</a>, which downloads content from locations such as public or private GitHub repositories, S3 buckets, and Documents already created on SSM. If you create your own documents, you can use the <strong>aws:downloadContent</strong> plugin, and the existing <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-runShellScript"><strong>aws:runShellScript</strong></a> (on Linux) or<a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-runPowerShellScript"><strong> aws:runPowerShellScript</strong></a> (on Windows) to execute the scripts.</p> 
 <p>In this blog post, I’ll show you how to run an Ansible playbook located in a public or private GitHub repository using the AWS-RunRemoteScript Document. This lets you run Ansible from an external location without requiring SSH access on your instances.</p> 
@@ -675,14 +791,10 @@ by
 <p>On the EC2 console, on the navigation pane at the left, under Systems Manager Services, choose <strong>Run Command</strong>. Choose <strong>Run a Command</strong>, and then select the AWS-RunRemoteScript document and the instances you want to execute this document on (whether a list of instances or tag-queries).</p> 
 <p><strong>Step 2: Reference the Ansible playbook located on GitHub</strong></p> 
 <p>Enter the parameters for the AWS-RunRemoteScript Document to reference the Ansible playbook.</p> 
-<ul> 
 <li><span style="text-decoration: underline">Source Type</span>: Location of the script – GitHub, S3. In this case, choose GitHub.</li> 
 <li><span style="text-decoration: underline">Source Info</span>: Provides location information for accessing the content. &nbsp;In this example, since the repository is public, you only need to provide the owner, repository and the path to the playbook. The playbook needs to access the nginx directory shown in the structure that follows. So we’ll download the entire directory, which includes server.yml and the nginx directory.</li> 
-</ul> 
 <p><img class="size-full wp-image-1907 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/github-structure.png" alt="" width="1072" height="163" /></p> 
-<ul> 
 <li><span style="text-decoration: underline">Command Line</span>: The command needed to execute the playbook</li> 
-</ul> 
 <p>When you are done, the console will look like this:</p> 
 <p><img class="size-full wp-image-1906 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/console-string-map.png" alt="" width="672" height="317" /></p> 
 <p><strong>Step 3: Run the command</strong></p> 
@@ -718,29 +830,25 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ansible/" rel="tag">Ansible</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/github/" rel="tag">GitHub</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">AWS OpsWorks for Chef Automate Now Supports Compliance</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">AWS OpsWorks for Chef Automate Now Supports Compliance</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Rahul Gulati</span></span> | on 
 <time property="datePublished" datetime="2017-11-06T08:19:50+00:00">06 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/aws-opsworks-for-chef-automate-now-supports-compliance/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>AWS OpsWorks&nbsp;for Chef Automate gives you a fully managed Chef server with a suite of automation tools. &nbsp;The release of Chef Automate version 1.6 includes the new <a href="https://blog.chef.io/2017/07/05/chef-automate-release-july-2017/">Compliance view</a> for Chef Automate UI. With AWS OpsWorks for Chef Automate integrated with compliance, you can track the compliance of your infrastructure based on a predefined policy. This allows you to frequently audit your applications for vulnerabilities and remediate violations.</p> 
 <p><span id="more-1957"></span></p> 
 <p><span style="text-decoration: underline">Use cases and benefits</span></p> 
 <p>With this update, you can detect and correct security risks and compliance issues across your entire infrastructure.</p> 
-<ul> 
 <li>Move from manual compliance to <a href="https://learn.chef.io/tracks/compliance-automation#/">continuous compliance</a> by frequently conducting assessments and managing compliance as code. This means that you can bake compliance into your Chef workflow.</li> 
 <li>Select from 88 pre-packaged profiles that meet industry benchmarks, available in Profile Store. Further, you can customize these profiles to fulfill your information security needs.</li> 
 <li>Use the <strong>Compliance</strong> pane, which offers a unified dashboard for identifying issues, remediating them, and tracking progress. In addition, you can view <strong>Scan Results</strong> for various Nodes and Profiles.</li> 
 <li>Describe compliance controls in InSpec, an open-source testing framework, and integrate these automated tests into any stage of your deployment pipeline.</li> 
-</ul> 
 <p>To get started, go to the AWS Management Console, and open the OpsWorks console. On the AWS OpsWorks Stacks home page, choose <strong>Go to OpsWorks for Chef Automate</strong>. &nbsp;Then choose <strong>Compliance</strong>. In the left navigation pane, choose <strong>Profile Store</strong>. Then, in the <strong>Available</strong> tab, select a profile such as <a href="https://github.com/dev-sec/ssh-baseline/">DevSec SSH Baseline</a>, and choose <strong>Get</strong> to install.</p> 
 <p><img class="aligncenter size-full wp-image-1959" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/03/Screen-Shot-2017-10-22-at-7.03.34-PM.png" alt="" width="2880" height="1442" /></p> 
 <p>On the profile details page, you can view a brief profile description, set of controls, and their severity. Choose <strong>+</strong> to see the expected outcome of a control and code that it executes.</p> 
@@ -756,18 +864,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/chef-automate/" rel="tag">Chef Automate</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Upgrading SQL Server Using EC2 Systems Manager</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Upgrading SQL Server Using EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
 <time property="datePublished" datetime="2017-11-01T12:55:40+00:00">01 NOV 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/upgrading-sql-server-using-ec2-systems-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>This post was written by Alan Cranfield, Systems Engineer at Amazon Web Services</em></p> 
 <p>This is the first in a series of blog posts aimed at the enterprise SQL Server DBA. I’ll demonstrate how to administer your SQL Server workloads on Amazon EC2 using practical examples and best practices.</p> 
@@ -782,7 +888,6 @@ by
 <h3>Using PowerShell modules</h3> 
 <p>For this exercise we’ll use the Run Command native support for PowerShell modules to download and import a PowerShell module from an Amazon S3 bucket. This module will be called to identify the version of SQL that is running and then download and install the latest service pack. I’ll walk you through updating the SQL service pack by using the AWS Management Console and by using AWS Tools for PowerShell.</p> 
 <h3>Updating the SQL service pack from the EC2 console</h3> 
-<ul> 
 <li>Sign In to the AWS Management Console. To confirm that your instances are in a state to be managed, make sure they are listed in the EC2 console under EC2 Dashboard\Managed Instances.</li> 
 <li>Navigate to the Run Command and choose Run a command. Then select the AWS-InstallPowershellModule document, and the servers you’d like to upgrade.<img class="size-full wp-image-1696 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/run-a-command.png" alt="" width="708" height="397" /><img class="size-full wp-image-1697 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/install-ps-module.png" alt="" width="890" height="316" /></li> 
 <li>For Source enter the location of the S3 bucket that holds the PowerShell module: <a href="https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip">https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip</a></li> 
@@ -793,32 +898,23 @@ Install-SQLUpdate -Action &quot;Yes&quot;</code></pre>
 <li>Choose the <strong>Run</strong> button and check the <strong>Status</strong> column for the instance progress.<img class="size-full wp-image-1699 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/command-success.png" alt="" width="971" height="300" /></li> 
 <li>Choose a specific Instance ID in the top pane, and then in the bottom pane choose the Output tab and then choose View Output.</li> 
 <li>The results of the service pack upgrade are shown in the Output results window.<img class="size-full wp-image-1700 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/output.png" alt="" width="828" height="471" /></li> 
-</ul> 
 <h3>Updating the SQL service pack using the AWS Tools for PowerShell</h3> 
 <p>For those who prefer a scripted solution you can call Run Command using the <a href="http://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-set-up.html">AWS Tools for Windows PowerShell</a>.</p> 
-<ul> 
 <li>Download and install the latest AWS Tools for Windows PowerShell.</li> 
-</ul> 
 <pre><code class="lang-powershell">$AWSPSURL = &quot;http://sdk-for-net.amazonwebservices.com/latest/AWSToolsAndSDKForNet.msi&quot; 
 $AWSPSSetup = &quot;C:\Windows\Temp\AWSPowerShellSetup.msi&quot;
 (New-Object System.Net.WebClient).DownloadFile($AWSPSURL, $AWSPSSetup)
 Start-Process -FilePath msiexec.exe -Argument List &quot;/i $AWSPSSetup&quot;
 Remove-Item $AWSPSSetup -Force</code></pre> 
-<ul> 
 <li>Set your credentials and AWS Region</li> 
-</ul> 
 <pre><code class="lang-powershell"># set credentials
 Set-AWSCredentials -StoreAs SQL -AccessKey &lt;your access key&gt; -SecretKey &lt;your secret key&gt;
 Set-AWSCredentials -ProfileName SQL
 Set-DefaultAWSRegion &quot;us-west-2&quot; 
 Get-IAMUser</code></pre> 
-<ul> 
 <li>Confirm that your instances are managed by SSM</li> 
-</ul> 
 <p><code class="lang-powershell">Get-SSMInstanceInformation -InstanceInformationFilterList @{Key=&quot;PingStatus&quot;;ValueSet=&quot;Online&quot;} | select ComputerName, InstanceId<br /> </code></p> 
-<ul> 
 <li>Run a Command against your instances to upgrade the SQL service pack. (Tagging can also be used to group servers.)</li> 
-</ul> 
 <pre><code class="lang-powershell"></code><code class="lang-powershell">$InstanceIds = (Get-SSMInstanceInformation).InstanceId
 $InstanceIds.count
 $source = 'https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip'
@@ -833,9 +929,7 @@ commands = $commands;
 }
 $document = 'AWS-InstallPowerShellModule'
 $cmd = Send-SSMCommand –InstanceId $InstanceIds –DocumentName $document –Parameter $parameter </code></pre> 
-<ul> 
 <li>Check the progress.</li> 
-</ul> 
 <pre><code class="lang-powershell">Get-SSMCommandInvocation -CommandId $cmd.CommandId -Details $true | select InstanceId, status </code></pre> 
 <pre><code class="lang-powershell">InstanceId          Status    
 ----------          ------    
@@ -847,9 +941,7 @@ i-0b861190458f9381f InProgress
 i-09dc29e6a093ac14c InProgress
 i-09aee29b50203cf3c Success
 </code></pre> 
-<ul> 
 <li>Check the results.</li> 
-</ul> 
 <p><code class="lang-powershell">Get-SSMCommandInvocation -CommandId $cmd.CommandId -Details $true | select -ExpandProperty CommandPlugins</code></p> 
 <p><code class="lang-powershell">== Install SQL Update ==<br /> </code></p> 
 <pre><code class="lang-powershell">2017-08-18 23:54:38.760 Test-SQLInstallation
@@ -884,18 +976,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">AWS CloudFormation Guardrails: Protecting your Stacks and Ensuring Safer Updates</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Guardrails: Protecting your Stacks and Ensuring Safer Updates</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
 <time property="datePublished" datetime="2017-10-31T17:03:10+00:00">31 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-guardrails-protecting-your-stacks-and-ensuring-safer-updates/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <blockquote> 
 <p><em>“I wonder what will happen if I touch these two wires together.” – Unix fortune</em></p> 
@@ -1012,18 +1102,14 @@ by
 <p>&nbsp;</p> 
 <p><strong>A few more suggestions</strong></p> 
 <p>Beyond understanding how these four guardrails work, here are a few other suggestions and ideas you&nbsp;can study&nbsp;as you look to implement these controls, or improve existing controls you may have inherited:</p> 
-<ul> 
 <li>By having smaller, multiple policies that affect a smaller set of resources and stacks, you can limit the blast radius of policy changes as you improve them over time, to either make them more restrictive or to add layers of control.</li> 
 <li>Stack and IAM policies should be treated as code and, with that in mind, they should be periodically tested and versioned. Consider implementing validation pipelines and creating chaos engineering-like tests where critical resource deletions are attempted.</li> 
 <li>For your own custom resources, it’s up to you to add code to determine what happens to your resources when they get deleted. For stateful custom resources, it becomes your responsibility to ensure a given resource is backed up or retained. You can also use a Lambda-backed custom resource to pass a stack’s policy from a root stack to a nested stack using the setStackPolicy API call&nbsp;because nested stacks don’t automatically inherit the root stack’s policy.</li> 
 <li>These guardrails are preventive steps that you can execute within CloudFormation. If you go outside of CloudFormation and use a resource’s AWS Management Console to update and delete it, your template code will become out-of-sync with the resource’s state. You should update your template to reflect the new changes, and prevent future changes&nbsp;using additional IAM policies.</li> 
-</ul> 
 <p>You should plan to use most (if not all) of these options. Let’s say, for example, that you’ve just inherited a group of applications (and, with those, the infrastructure stacks and templates associated with them) and are looking at adding layers of protection using these guardrails. A defensible approach may look like this:</p> 
-<ul> 
 <li>Review your stacks and templates,&nbsp;and review the resources that are more critical, like stateful or semi-durable resources.&nbsp;Determine which of these critical resources are useful candidates for a DeletionPolicy of Retain or Snapshot.</li> 
 <li>Go one level up from resources to stacks, and consider what operations will be allowed for resources (or groups of resources) within that stack. On top of your resource deletion policy layer, add stack policy restrictions that reflect the criticality of those stacks. For the more critical stacks, consider also using stack termination protection. Even if it becomes a nuisance, at least you’ll&nbsp;gain understanding about how frequently stack updates are required for those stacks, which stacks have cross stack references or parent/child relationships, etc. Armed with this information, you can adjust your&nbsp;controls accordingly.</li> 
 <li>Finally, once you’ve protected the resources and stacks themselves, you should then restrict which users should have the ability to run updates on those stacks using IAM policies.</li> 
-</ul> 
 <p><strong>Conclusion</strong></p> 
 <p>We just walked through a sequence starting with&nbsp;the most detailed controls at the individual resource level, then to the stacks, and finally to the users, and will likely end up with the most enforced or least privileged controls. Alternatively, you can also opt to start with users, groups, and roles first, and then work your way down through stacks and resources. This can probably be justified if, in looking at the history of your unplanned downtime events, you already suspect that your IAM policies need more urgent attention. In either case, you want to ensure that there are multiple layers of safety in place by having multiple guardrails apply to your most critical resources.</p> 
 <p>Overall, the key to success in making the most of these features is to carefully test and adapt your use of these guardrails over time, and ensure that you have multiple guardrail layers in place for the most critical stacks and resources. Many existing CloudFormation best practices still apply; for example, smaller stacks will be easier to test and ultimately protect than large, complex ones. &nbsp;Finally, consider ways to establish automated tests for your template code by implementing processes like validation pipelines.</p> 
@@ -1043,19 +1129,17 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/26/awsreinvent2017banner.png" /> 
-<b class="b post-title" property="name headline">Your AWS CloudFormation Guide to re:Invent 2017 &nbsp;</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Your AWS CloudFormation Guide to re:Invent 2017 &nbsp;</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Chuck Meyer</span></span> | on 
 <time property="datePublished" datetime="2017-10-30T14:31:05+00:00">30 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/your-aws-cloudformation-guide-to-reinvent-2017/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><img class="alignnone size-full wp-image-1685" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/26/awsreinvent2017banner.png" alt="" width="1040" height="204" /></p> 
 <p>There are only five weeks left until <a href="https://reinvent.awsevents.com/">re:Invent 2017</a>. As in years past, AWS CloudFormation will be there, both behind the scenes deploying infrastructure and front-and-center for break-out sessions, workshops, and developer chats.</p> 
@@ -1063,25 +1147,19 @@ by
 <p><span id="more-1585"></span></p> 
 <b id="breakout-sessions">Breakout Sessions</b> 
 <p>Breakout sessions are the traditional, 60 minute, lecture-style content format.</p> 
-<ul> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14428">DEV317 – Deep Dive on AWS CloudFormation</a> <em>The AWS CloudFormation team guides you through techniques used for creating modular templates and and considerations for governance.</em></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16239">DEV318 – Learn How Intuit Built a Frictionless Infrastructure Management System Using AWS CloudFormation</a> <em>Intuit shows you how they built a standardized serverless solution using AWS CloudFormation to manage infrastructure as code.</em></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15142">GPSTEC319 – GPS: Build Once, Deploy Many: Architecting and Building Automated, Reusable Reference Deployments with AWS CloudFormation</a> <em>The AWS Quick Start team shares with you the experience and best practices they’ve gained building over 50 Quick Start reference deployments.</em></li> 
-</ul> 
 <b id="workshops">Workshops</b> 
 <p>Workshops are 2.5 hour, small-scale breakouts where you work in teams to build projects and solve problems on AWS.</p> 
-<ul> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14430">DEV336 – Stack Mastery: Create and Optimize Advanced AWS CloudFormationTemplates</a> <em>Take a real-world architecture from a sandbox template to production-ready reusable code.</em></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16359">DEV337 – Deploy a Data Lake with AWS CloudFormation</a> <em>You will learn how to build AWS CloudFormation templates using proven methods and best practices to deploy a fully functional data lake architecture.</em></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14629">SID312 – DevSecOps Capture the Flag</a> <em>Improve your DevSecOps skills in this Capture the Flag style workshop. Earn points by enforcing policy via CloudFormation static analysis.</em></li> 
-</ul> 
 <b id="other-relevant-sessions">Other relevant sessions</b> 
 <p>While the following sessions aren’t CloudFormation specific, they will show you mature patterns for infrastructure management using CloudFormation alongside other AWS services.</p> 
-<ul> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14965">DEV324 – Deep Dive on Advanced Continuous Delivery Techniques Using AWS DevOps Tools</a></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15199">DEV340 – How Amazon.com Uses AWS Management Tools</a></li> 
 <li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14521">MSC201 – Building end-to-end IT Lifecycle Mgmt &amp; Workflows with AWS Service Catalog</a></li> 
-</ul> 
 <p>You can <a href="https://www.portal.reinvent.awsevents.com/connect/publicDashboard.ww">log in and reserve seats for any of these sessions</a> now.</p> 
 <p>In addition, the AWS CloudFormation Developer Advocates will be presenting a series of CloudFormation focused Dev Chats on the Expo floor on Wednesday and Thursday. Stop by the Dev Lounge in the Expo Hall for exact times.</p> 
 <p>And finally, you can come chat with any of the Management Tools team at the AWS booth all week long.</p> 
@@ -1125,18 +1203,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/reinvent/" rel="tag">re:Invent</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Amazon EC2 Systems Manager Parameter Store adds support for Parameter versions</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Systems Manager Parameter Store adds support for Parameter versions</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
 <time property="datePublished" datetime="2017-10-26T12:45:28+00:00">26 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-parameter-store-adds-support-for-parameter-versions/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>By Lou de la Torre, AWS Partner Solutions Architect and </em><em>Venkat Krishnamachari, Principal Product Manager, Amazon EC2 Systems Manager</em></p> 
 <p>Today we are excited to announce versioning support for Amazon EC2 Systems Manager Parameter Store. With Parameter Store versioning support, each iteration of a parameter is assigned a unique version number at creation time. These individual version numbers can be easily referenced in API actions and Systems Manager Documents. By default, the latest value of the parameter will be returned when no version is specified.</p> 
@@ -1315,151 +1391,6 @@ Version&nbsp;&nbsp; : 1
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-secrets/" rel="tag">Configuration Secrets</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/parameter-store/" rel="tag">Parameter Store</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">OpsWorks for Chef Automate – Automatically Bootstrapping Nodes in Different Accounts</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Darko Meszaros</span></span> | on 
-<time property="datePublished" datetime="2017-10-24T23:23:40+00:00">24 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/opsworks-for-chef-automate-automatically-bootstrapping-nodes-in-different-accounts/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Lots of us today are managing multiple AWS accounts. Although having multiple accounts can bring you &nbsp;benefits, such as more granular control of resources and access, decentralized control, and simpler billing. Multiple accounts can also introduce some challenges. A challenge we face in this blog post is having a centralized configuration management server with its nodes spread throughout other AWS accounts.</p> 
-<h3>Goal</h3> 
-<p>Let’s picture working for a company where various teams own Amazon EC2 instances in their own respective AWS accounts. We have a team dedicated to managing the configuration of all EC2 instances (nodes) across all of the company’s AWS accounts. The configuration management is performed by an <a href="https://aws.amazon.com/opsworks/chefautomate/">OpsWorks for Chef Automate</a> server. How do we go about bootstrapping these nodes to the Chef Automate server?</p> 
-<p>I’ll show you how you can bootstrap nodes in other AWS accounts to a single/centralized OpsWorks for Chef Automate server. To be precise, I’ll bootstrap an <a href="https://aws.amazon.com/amazon-linux-ami/">Amazon Linux</a> node in AWS account B to an OpsWorks for Chef Automate server in Account A. To bootstrap the instance I’ll use the user data provided in the Chef Automate starter kit we have downloaded during the creation of the server. This user data script uses the built-in AWS API calls to bootstrap your node.</p> 
-<p><span id="more-1630"></span></p> 
-<h3>A few notes before we start</h3> 
-<p>In this tutorial I assume that you don’t have <a href="https://aws.amazon.com/documentation/iam/">IAM</a> roles created for your Chef nodes, so we are creating everything from scratch. If, in fact, you do have roles configured, then just focus on the policy part of this tutorial. Also, we assume that you have the AWS CLI set up on your workstation with adequate privileges. Additionally, make sure all the ARNs mentioned here have the correct account IDs.</p> 
-<h3>Step 1: Set up IAM permissions on account A, our Chef Automate account</h3> 
-<p>First, we’ll create a role in account A that can be assumed by a node in account B. This role gives the node the necessary permissions to bootstrap itself with the Chef Automate server.</p> 
-<p>A) Create a policy that allows us to associate the nodes with our Chef Automate server. Create the policy using the following document:<code> owca_allow_associate.json</code></p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Action&quot;: [
-&quot;opsworks-cm:AssociateNode&quot;,
-&quot;opsworks-cm:DescribeNodeAssociationStatus&quot;
-],
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-}
-]
-}</code></pre> 
-<p>B)&nbsp;Create the policy with that document, using the AWS CLI:</p> 
-<pre><code class="lang-bash">aws iam create-policy 
---policy-name OWCA-AllowAssociate 
---policy-document file://owca_allow_associate.json</code></pre> 
-<p>C)&nbsp;Create a role that can be assumed by the other account (Account B – where the nodes are). Create that role using the following document: <code>owca_trust_policy.json</code></p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:root&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}]
-}</code></pre> 
-<p>D) Now, let’s use the AWS CLI to create the role:</p> 
-<pre><code class="lang-bash">aws iam create-role 
---role-name CrossAccount-OWCA 
---assume-role-policy-document file://./owca_trust_policy.json </code></pre> 
-<p>E) And finally, attach the policy we created in step B to the role we created in step D:</p> 
-<pre><code class="lang-bash">aws iam attach-role-policy 
---role-name CrossAccountPowerUser 
---policy-arn  arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:policy/OWCA-AllowAssociate </code></pre> 
-<h3>Step 2: Set up IAM permissions on account B, our nodes account</h3> 
-<p>In this step we create an instance role that will be attached to your node on launch. This role allows the instance to assume a role from account A (the Chef Automate account) so it can associate itself to the Chef Automate server.</p> 
-<p>A) To create a role, we first need to create a document: <code>role_owca_associate.json</code></p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}
-]
-}</code></pre> 
-<p>B) Create the role with the document, by running AWS CLI:</p> 
-<pre><code class="lang-bash">aws iam create-role
---role-name AssociateCrossAccount-owca 
---assume-role-policy-document file://role_owca_associate.json</code></pre> 
-<p>C) Create a policy document that allows our instance to assume a role: <code>node_assume_role.json</code></p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: {
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
-&quot;Resource&quot;: &quot;arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA &quot;
-}
-}</code></pre> 
-<p>D) Create the policy:</p> 
-<pre><code class="lang-bash">aws iam create-policy 
---policy-name ChefAssociateAccess 
---policy-document file://./node_assume_role.json</code></pre> 
-<p>E) Finally, attach the policy to the role we created earlier:</p> 
-<pre><code class="lang-bash">aws iam attach-role-policy 
---role-name CrossAccountPowerUser 
---policy-arn  arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:policy/AssociateCrossAccount-owca</code></pre> 
-<h3>Step 3: Modifying the user data</h3> 
-<p>In this step, we take the generated user data (<code>userdata.sh</code>) from the downloaded OpsWorks for Chef Automate starter_kit.zip and modify it with a few more functions that allow us to bootstrap your nodes across accounts.</p> 
-<p>The modifications we are adding here are quite simple. We are just using <code>aws sts assume-role</code> to assume the role that we have created in account A (the Chef server account), and use the temporary credentials it generates to run the <code>associate-node</code> commands, which are required for bootstrapping the node to the Chef Automate server.</p> 
-<p>Additionally, we are installing the <a href="https://github.com/stedolan/jq">jq utility for JSON parsing</a> – but this is removed during the cleanup.</p> 
-<p>A) Open up the <code>userdata.sh</code> file in a text editor and add the following lines on line 21 (just after the <code>set -e -o pipefail</code> line):</p> 
-<pre><code class="lang-bash">set_cli_role() {
-yum install -y jq
-ASSUMED_ROLE=$(aws sts assume-role --role-arn arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA --role-session-name owca)
-export AWS_ACCESS_KEY_ID=$(echo $ASSUMED_ROLE | jq .Credentials.AccessKeyId | xargs)
-export AWS_SECRET_ACCESS_KEY=$(echo $ASSUMED_ROLE | jq .Credentials.SecretAccessKey | xargs)
-export AWS_SESSION_TOKEN=$(echo $ASSUMED_ROLE | jq .Credentials.SessionToken | xargs)
-}
-cleanup_cli_role(){
-yum remove -y jq
-unset AWS_SESSION_TOKEN
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-}</code></pre> 
-<p>The first function we create here (<code>set_cli_role</code>) is used for assuming the role from account A, and exporting the temporary credentials to environment variables that will be used by our API calls. The second function is just for cleanup – removing of the <code>jq</code> JSON parser and un-setting the environment variables we set in the function before.</p> 
-<p>B) Now on the line 87 insert the <code>set_cli_role</code> function, and on line 93 add the <code>cleanup_cli_role</code>. Your function execution section should go from this:</p> 
-<pre><code class="lang-bash">install_aws_cli
-node_association_status_token=&quot;$(associate_node)&quot;
-install_chef_client
-write_chef_config
-install_trusted_certs
-wait_node_associated &quot;${node_association_status_token}&quot;</code></pre> 
-<p>C) To this:</p> 
-<pre><code class="lang-bash">install_aws_cli
-set_cli_role
-node_association_status_token=&quot;$(associate_node)&quot;
-install_chef_client
-write_chef_config
-install_trusted_certs
-wait_node_associated &quot;${node_association_status_token}&quot;
-cleanup_cli_role</code></pre> 
-<p>Here we simply change the execution part of the user data shell script to include our two new functions.</p> 
-<p>D) Save the <code>userdata.sh</code> somewhere safe.</p> 
-<h3>Step 4: Launch the nodes with the user data script</h3> 
-<p>The only thing left now is to run your nodes with the newly edited user data script. We can achieve this either by adding the user data during a manual launch of the EC2 instance, or by setting this on an<a href="https://aws.amazon.com/autoscaling/"> Auto Scaling</a> group launch configuration.</p> 
-<h3>Conclusion</h3> 
-<p>In this blog post we’ve enabled your nodes from different AWS accounts to bootstrap themselves to a centralized OpsWorks for Chef Automate server that is present in a separate account. We’ve achieved this by creating the required IAM roles and policies, and also by changing the user data that ships with the OpsWorks for Chef Automate starter kit. We’ve done this only for two accounts, but you can modify this to work on any number of accounts.</p> 
-<p><strong>About the Author</strong></p> 
-<p><img class="size-full wp-image-1647 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/24/darko-cropped.jpeg" alt="" width="120" height="137" /><br /> Darko Meszaros is a Cloud Support Engineer who supports customers that use various AWS automation tools, such as AWS OpsWorks, AWS CodeDeploy, and AWS CloudFormation. He is a subject matter expert for OpsWorks and CodeDeploy. Outside of work, he loves collecting video games and old computers.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/chef-automate/" rel="tag">Chef Automate</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
 </footer> 
 </article> 
 <p>

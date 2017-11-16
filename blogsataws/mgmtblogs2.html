@@ -189,18 +189,159 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a</p>
 <br>
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">AWS CloudFormation Feature Updates: Support for Amazon Athena and Coverage Updates for Amazon S3, Amazon RDS, Amazon Kinesis and Amazon CloudWatch</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">OpsWorks for Chef Automate – Automatically Bootstrapping Nodes in Different Accounts</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Darko Meszaros</span></span> | on 
+<time property="datePublished" datetime="2017-10-24T23:23:40+00:00">24 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/opsworks-for-chef-automate-automatically-bootstrapping-nodes-in-different-accounts/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Lots of us today are managing multiple AWS accounts. Although having multiple accounts can bring you &nbsp;benefits, such as more granular control of resources and access, decentralized control, and simpler billing. Multiple accounts can also introduce some challenges. A challenge we face in this blog post is having a centralized configuration management server with its nodes spread throughout other AWS accounts.</p> 
+<h3>Goal</h3> 
+<p>Let’s picture working for a company where various teams own Amazon EC2 instances in their own respective AWS accounts. We have a team dedicated to managing the configuration of all EC2 instances (nodes) across all of the company’s AWS accounts. The configuration management is performed by an <a href="https://aws.amazon.com/opsworks/chefautomate/">OpsWorks for Chef Automate</a> server. How do we go about bootstrapping these nodes to the Chef Automate server?</p> 
+<p>I’ll show you how you can bootstrap nodes in other AWS accounts to a single/centralized OpsWorks for Chef Automate server. To be precise, I’ll bootstrap an <a href="https://aws.amazon.com/amazon-linux-ami/">Amazon Linux</a> node in AWS account B to an OpsWorks for Chef Automate server in Account A. To bootstrap the instance I’ll use the user data provided in the Chef Automate starter kit we have downloaded during the creation of the server. This user data script uses the built-in AWS API calls to bootstrap your node.</p> 
+<p><span id="more-1630"></span></p> 
+<h3>A few notes before we start</h3> 
+<p>In this tutorial I assume that you don’t have <a href="https://aws.amazon.com/documentation/iam/">IAM</a> roles created for your Chef nodes, so we are creating everything from scratch. If, in fact, you do have roles configured, then just focus on the policy part of this tutorial. Also, we assume that you have the AWS CLI set up on your workstation with adequate privileges. Additionally, make sure all the ARNs mentioned here have the correct account IDs.</p> 
+<h3>Step 1: Set up IAM permissions on account A, our Chef Automate account</h3> 
+<p>First, we’ll create a role in account A that can be assumed by a node in account B. This role gives the node the necessary permissions to bootstrap itself with the Chef Automate server.</p> 
+<p>A) Create a policy that allows us to associate the nodes with our Chef Automate server. Create the policy using the following document:<code> owca_allow_associate.json</code></p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: [
+&quot;opsworks-cm:AssociateNode&quot;,
+&quot;opsworks-cm:DescribeNodeAssociationStatus&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+}
+]
+}</code></pre> 
+<p>B)&nbsp;Create the policy with that document, using the AWS CLI:</p> 
+<pre><code class="lang-bash">aws iam create-policy 
+--policy-name OWCA-AllowAssociate 
+--policy-document file://owca_allow_associate.json</code></pre> 
+<p>C)&nbsp;Create a role that can be assumed by the other account (Account B – where the nodes are). Create that role using the following document: <code>owca_trust_policy.json</code></p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:root&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}]
+}</code></pre> 
+<p>D) Now, let’s use the AWS CLI to create the role:</p> 
+<pre><code class="lang-bash">aws iam create-role 
+--role-name CrossAccount-OWCA 
+--assume-role-policy-document file://./owca_trust_policy.json </code></pre> 
+<p>E) And finally, attach the policy we created in step B to the role we created in step D:</p> 
+<pre><code class="lang-bash">aws iam attach-role-policy 
+--role-name CrossAccountPowerUser 
+--policy-arn  arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:policy/OWCA-AllowAssociate </code></pre> 
+<h3>Step 2: Set up IAM permissions on account B, our nodes account</h3> 
+<p>In this step we create an instance role that will be attached to your node on launch. This role allows the instance to assume a role from account A (the Chef Automate account) so it can associate itself to the Chef Automate server.</p> 
+<p>A) To create a role, we first need to create a document: <code>role_owca_associate.json</code></p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}</code></pre> 
+<p>B) Create the role with the document, by running AWS CLI:</p> 
+<pre><code class="lang-bash">aws iam create-role
+--role-name AssociateCrossAccount-owca 
+--assume-role-policy-document file://role_owca_associate.json</code></pre> 
+<p>C) Create a policy document that allows our instance to assume a role: <code>node_assume_role.json</code></p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: {
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Resource&quot;: &quot;arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA &quot;
+}
+}</code></pre> 
+<p>D) Create the policy:</p> 
+<pre><code class="lang-bash">aws iam create-policy 
+--policy-name ChefAssociateAccess 
+--policy-document file://./node_assume_role.json</code></pre> 
+<p>E) Finally, attach the policy to the role we created earlier:</p> 
+<pre><code class="lang-bash">aws iam attach-role-policy 
+--role-name CrossAccountPowerUser 
+--policy-arn  arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:policy/AssociateCrossAccount-owca</code></pre> 
+<h3>Step 3: Modifying the user data</h3> 
+<p>In this step, we take the generated user data (<code>userdata.sh</code>) from the downloaded OpsWorks for Chef Automate starter_kit.zip and modify it with a few more functions that allow us to bootstrap your nodes across accounts.</p> 
+<p>The modifications we are adding here are quite simple. We are just using <code>aws sts assume-role</code> to assume the role that we have created in account A (the Chef server account), and use the temporary credentials it generates to run the <code>associate-node</code> commands, which are required for bootstrapping the node to the Chef Automate server.</p> 
+<p>Additionally, we are installing the <a href="https://github.com/stedolan/jq">jq utility for JSON parsing</a> – but this is removed during the cleanup.</p> 
+<p>A) Open up the <code>userdata.sh</code> file in a text editor and add the following lines on line 21 (just after the <code>set -e -o pipefail</code> line):</p> 
+<pre><code class="lang-bash">set_cli_role() {
+yum install -y jq
+ASSUMED_ROLE=$(aws sts assume-role --role-arn arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA --role-session-name owca)
+export AWS_ACCESS_KEY_ID=$(echo $ASSUMED_ROLE | jq .Credentials.AccessKeyId | xargs)
+export AWS_SECRET_ACCESS_KEY=$(echo $ASSUMED_ROLE | jq .Credentials.SecretAccessKey | xargs)
+export AWS_SESSION_TOKEN=$(echo $ASSUMED_ROLE | jq .Credentials.SessionToken | xargs)
+}
+cleanup_cli_role(){
+yum remove -y jq
+unset AWS_SESSION_TOKEN
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+}</code></pre> 
+<p>The first function we create here (<code>set_cli_role</code>) is used for assuming the role from account A, and exporting the temporary credentials to environment variables that will be used by our API calls. The second function is just for cleanup – removing of the <code>jq</code> JSON parser and un-setting the environment variables we set in the function before.</p> 
+<p>B) Now on the line 87 insert the <code>set_cli_role</code> function, and on line 93 add the <code>cleanup_cli_role</code>. Your function execution section should go from this:</p> 
+<pre><code class="lang-bash">install_aws_cli
+node_association_status_token=&quot;$(associate_node)&quot;
+install_chef_client
+write_chef_config
+install_trusted_certs
+wait_node_associated &quot;${node_association_status_token}&quot;</code></pre> 
+<p>C) To this:</p> 
+<pre><code class="lang-bash">install_aws_cli
+set_cli_role
+node_association_status_token=&quot;$(associate_node)&quot;
+install_chef_client
+write_chef_config
+install_trusted_certs
+wait_node_associated &quot;${node_association_status_token}&quot;
+cleanup_cli_role</code></pre> 
+<p>Here we simply change the execution part of the user data shell script to include our two new functions.</p> 
+<p>D) Save the <code>userdata.sh</code> somewhere safe.</p> 
+<h3>Step 4: Launch the nodes with the user data script</h3> 
+<p>The only thing left now is to run your nodes with the newly edited user data script. We can achieve this either by adding the user data during a manual launch of the EC2 instance, or by setting this on an<a href="https://aws.amazon.com/autoscaling/"> Auto Scaling</a> group launch configuration.</p> 
+<h3>Conclusion</h3> 
+<p>In this blog post we’ve enabled your nodes from different AWS accounts to bootstrap themselves to a centralized OpsWorks for Chef Automate server that is present in a separate account. We’ve achieved this by creating the required IAM roles and policies, and also by changing the user data that ships with the OpsWorks for Chef Automate starter kit. We’ve done this only for two accounts, but you can modify this to work on any number of accounts.</p> 
+<p><strong>About the Author</strong></p> 
+<p><img class="size-full wp-image-1647 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/24/darko-cropped.jpeg" alt="" width="120" height="137" /><br /> Darko Meszaros is a Cloud Support Engineer who supports customers that use various AWS automation tools, such as AWS OpsWorks, AWS CodeDeploy, and AWS CloudFormation. He is a subject matter expert for OpsWorks and CodeDeploy. Outside of work, he loves collecting video games and old computers.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/chef-automate/" rel="tag">Chef Automate</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Feature Updates: Support for Amazon Athena and Coverage Updates for Amazon S3, Amazon RDS, Amazon Kinesis and Amazon CloudWatch</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
 <time property="datePublished" datetime="2017-10-18T18:46:07+00:00">18 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-athena/" title="View all posts in Amazon Athena*"><span property="articleSection">Amazon Athena*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-athena/" title="View all posts in Amazon Athena*"><span property="articleSection">Amazon Athena*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-features-update-support-for-amazon-athena-coverage-updates-for-s3-rds-kinesis-and-cloudwatch/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>As one of the most widely-used services in AWS, CloudFormation continues to expand its feature set&nbsp;by including adding support for Amazon Athena, two new features to protect stacks and control rollback processes, plus several new coverage updates.</p> 
 <p>CloudFormation now supports the creation of an <a href="https://aws.amazon.com/athena/">Amazon Athena</a> named query as a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-athena-namedquery.html">resource</a>. Amazon Athena is a query service that makes it easy to analyze data directly from files stored in S3 using standard SQL statements. Named queries can then be executed manually from the AWS Management Console, CLI or programmatically&nbsp;using API calls.</p> 
@@ -240,55 +381,32 @@ GROUP BY backend_response_code;</code></pre>
 <p>&nbsp;</p> 
 <p>The <strong>Results</strong> pane shows that most pages return a HTTP 200 response code, which is good (OK). You can inspect the other error codes, like 404 (Not Found), 302 (Redirect) or 500 (Server Error).</p> 
 <p>Beyond the new Athena support, two new features have been released within the last few weeks:</p> 
-<ul> 
 <li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-protect-stacks.html">Stack termination protection</a></strong> prevents a stack from being accidentally deleted. It’s a property that can be enabled on new or existing stacks, and it provides yet another level of protection for stacks and their resources. This setting is disabled by default, so you have to explicitly enable it when you create new stacks. For existing, non-nested stacks, you can change termination protection&nbsp;using the console or CLI.</li> 
 <li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_RollbackConfiguration.html">Rollback triggers</a></strong> allow you to have CloudFormation monitor the state of your application while the stack is being created or updated, and to roll back that create or update operation if the application triggers any alarms you have configured. Chuck Meyer’s blog post <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">here</a> demonstrates the use of rollback triggers.</li> 
-</ul> 
 <p>CloudFormation has also introduced the following resource coverage updates:</p> 
-<ul> 
 <li><strong>Amazon Simple Storage Service (S3)</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html">Configure</a> the transfer acceleration state.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>Amazon Relational Database Service (RDS)</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-rds-database-instance.html">Update</a> engine property from Oracle-SE or Oracle SE1&nbsp;to Oracle&nbsp;SE2 without the database instance being replaced.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>AWS Elastic Load Balancing (ELB)</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html">Specify</a> the IDs of the subnets to attach to a load balancer, and specify the type of load balancer to create.</li> 
 <li>For target groups, <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html">specify</a> the Availability Zone where the IP address is to be registered,&nbsp;and also specify the registration type of the targets in a given target group.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>AWS Elastic Beanstalk</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk.html">Define</a> lifecycle settings for resources that belong to the application, as well as the service role that Elastic Beanstalk assumes in order to apply lifecycle settings.</li> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk-environment.html">Specify</a> a custom platform for Elastic Beanstalk.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>Amazon&nbsp;Elastic Compute Cloud (EC2)</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-natgateway.html">Specify</a> resource tags for a Network Address Translation (NAT) gateway.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>Amazon&nbsp;Kinesis Firehose</strong> 
-<ul> 
 <li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html">Specify</a> the stream type, as well as stream and role ARNs for a Kinesis stream used as a source for a delivery stream.</li> 
 </ul> </li> 
-</ul> 
-<ul> 
 <li><strong>Amazon CloudWatch</strong> 
-<ul> 
 <li>Support new <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-events-rule.html">properties</a> for input transformation of events, as well as setting Amazon ECS tasks and Kinesis stream targets.</li> 
 </ul> </li> 
-</ul> 
 <p>Visit our <a href="https://aws.amazon.com/cloudformation/">product</a> and <a href="https://aws.amazon.com/documentation/cloudformation/">documentation</a> pages for more information, as well as our list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported AWS resources</a>.</p> 
 <hr /> 
 <p><strong>About the Author</strong></p> 
@@ -306,18 +424,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Configuring Serverless Applications Using AWS CloudFormation Custom Resources</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Configuring Serverless Applications Using AWS CloudFormation Custom Resources</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Steven Challis</span></span> | on 
 <time property="datePublished" datetime="2017-10-11T10:10:35+00:00">11 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda"><span property="articleSection">AWS Lambda</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/configuring-serverless-applications-using-aws-cloudformation-custom-resources/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>AWS makes it easy for developers to get started developing applications in the cloud. With the extensive array of services available on AWS, developers might incorporate more than just a few components in their applications. Manually managing the resources needed for an application can become time consuming. In addition, applications usually require more than just infrastructure to function.</p> 
 <p>In this blog post, I’ll show you how to achieve additional configuration tasks such as&nbsp;data loading, compilation of templates, and deployment of static files&nbsp;using&nbsp;a completely serverless architecture and a single AWS CloudFormation template.</p> 
@@ -456,12 +572,10 @@ response_url = event['ResponseURL']
 result = requests.put(response_url, data=json.dumps(response_data))
 return result</code></pre> 
 <b>Tips</b> 
-<ul> 
 <li>Make sure to handle exceptions and timeouts. If your Lambda function doesn’t successfully call back to CloudFormation, then the stack update will hang. You can use CloudWatch Logs to debug your Custom Resource Lambda functions. You might find it useful to disable automatic rollback on stack failure, otherwise the logs might be gone by the time you go to view them.</li> 
 <li>Ensure that your function is idempotent (handles retries etc.). Since updates can run multiple times, avoid unnecessary logic or add explicit handling for operations that might not be idempotent, such as database inserts.</li> 
 <li>You have the ability to return custom properties to be used later in your template. This can be useful for constructing custom resources that look up AMI IDs or custom IP address ranges, for example.</li> 
 <li>Use third-party libraries to assist you in writing your custom resource Lambda functions , for example, <a href="https://github.com/awslabs/aws-cloudformation-templates/tree/master/community/custom_resources/python_custom_resource_helper">crhelper.py by awslabs</a>&nbsp;(or similar) to make logging and event handling easier.</li> 
-</ul> 
 <p>&nbsp;</p> 
 <h3><img class="alignleft wp-image-1461 " src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/06/challiss-badge.jpg" alt="" width="85" height="120" />About the Author</h3> 
 <p>Steven Challis is a Solutions Architect with AWS in New York and has a background in application development and enterprise software primarily within the media and entertainment sector. Outside of work, Steve&nbsp;has&nbsp;passion for cars, instruments and traveling.</p> 
@@ -470,18 +584,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/custom-resources/" rel="tag">Custom Resources</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Recover your impaired instances using EC2Rescue and Amazon EC2 Systems Manager Automation</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Recover your impaired instances using EC2Rescue and Amazon EC2 Systems Manager Automation</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
 <time property="datePublished" datetime="2017-10-02T16:07:40+00:00">02 OCT 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/compute/amazon-ec2/" title="View all posts in Amazon EC2"><span property="articleSection">Amazon EC2</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/" title="View all posts in Compute"><span property="articleSection">Compute</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/recover-your-impaired-instances-using-ec2rescue-and-amazon-ec2-systems-manager-automation/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>Have you ever had an issue connecting to your <a href="https://aws.amazon.com/ec2">Amazon EC2 </a>Windows instance? This can be caused by any number of different reasons, but is almost always related to how the instance is configured. Unfortunately, if you can’t connect to it, you can’t fix it!</p> 
 <p>Earlier this year, AWS <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/amazon-ec2rescue-is-now-available/">announced EC2Rescue for Windows</a>, a convenient, straightforward, GUI-based troubleshooting tool that can be run on your Windows instances to troubleshoot operating system-level issues and collect advanced logs and configuration files for further analysis.</p> 
@@ -490,11 +602,9 @@ by
 <p>In Automation, you can define a sequence of actions to perform: &nbsp;stopping or starting EC2 instances, creating backup AMIs, invoking AWS Lambda functions, creating AWS CloudFormation templates, and more. In this blog we will show you how you can use AWSSupport-ExecuteEC2Rescue Automation document to orchestrate&nbsp;EC2Rescue workflow.</p> 
 <h3>Introducing EC2Rescue powered by Systems Manager Automation</h3> 
 <p>While the symptom is always the same (you can’t remotely access your Windows instance), there could be multiple causes for it. AWS Support regularly publishes the most frequent questions and requests received from AWS customers in <a href="https://aws.amazon.com/premiumsupport/knowledge-center/#ec2">Knowledge Center</a>.<br /> The most common reasons AWS Support has dealt with over the years are:</p> 
-<ul> 
 <li>Network adapter misconfiguration: &nbsp;There is an incorrect static IP address assigned to the network interface, or the DHCP client can’t renew the DHCP lease.</li> 
 <li>RDP service issues: &nbsp;The service is disabled or you are using a non-default configuration, that is, a TCP port other than 3389.</li> 
 <li>Firewall: &nbsp;The Windows firewall is blocking RDP traffic.</li> 
-</ul> 
 <h3>What are your troubleshooting options?</h3> 
 <p>To start, you can take a <a href="https://aws.amazon.com/premiumsupport/knowledge-center/capture-instance-screenshot/">console screenshot</a>. It may show, for example, that Windows is installing updates. In that case, you just need to wait.</p> 
 <p>For issues like RDP and firewall misconfiguration, you can use <a href="https://aws.amazon.com/ec2/run-command/">Systems Manager Run Command</a>, to start your investigation or even fix the problem.</p> 
@@ -585,11 +695,9 @@ by
 <p>EC2Rescue found that the Windows Firewall and a static IP address configured on the network adapter may have caused the connectivity issue, and made some changes in an attempt to resolve them. Update your custom AMI to make sure that you can launch new EC2 instances consistently in your VPC.</p> 
 <h3>Under the hood</h3> 
 <p><strong>AWSSupport-ExecuteEC2Rescue</strong> automates the use of <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html">EC2Rescue for Windows</a> in <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html#w2ab1c32c19">offline mode</a>. This document leverages an AWS CloudFormation template and AWS Lambda functions, orchestrated by Systems Manager Automation, to automate the steps normally required to use EC2Rescue, including:</p> 
-<ul> 
 <li>Creating an instance to assist with recovery in the appropriate Availability Zone</li> 
 <li>Attaching and detaching EBS volumes</li> 
 <li>Running the EC2Rescue tool</li> 
-</ul> 
 <p>This provides a one-click solution to remediate common Windows issues that prevent remote access to the instance.</p> 
 <p><strong>AWSSupport-ExecuteEC2Rescue</strong> creates a VPC where EC2Rescue can run, completely isolated from your environment, and creates a backup AMI of the instance on which to run EC2Rescue before any further action is taken.</p> 
 <p>&nbsp;</p> 
@@ -604,10 +712,8 @@ by
 <p>&nbsp;</p> 
 <p><img class="alignnone size-full wp-image-1440" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step2.png" alt="" width="922" height="526" /></p> 
 <p>At this stage, <strong>AWSSupport-ExecuteEC2Rescue</strong> runs a new Run Command document, called <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-ssm.html">AWSSupport-RunEC2RescueForWindowsTool</a>, against the EC2Rescue instance. The document:</p> 
-<ul> 
 <li>Downloads EC2Rescue.</li> 
 <li>Runs the EC2Rescue for Windows tool CLI to diagnose and attempts to fix all the issues that it can identify in the offline root volume that was just attached.</li> 
-</ul> 
 <p>&nbsp;</p> 
 <p><img class="alignnone size-full wp-image-1441" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/03/step3.png" alt="" width="922" height="526" /></p> 
 <p>The root volume is then automatically reattached to your instance. The Automation document terminates the EC2Rescue instance, and deletes the EC2Rescue VPC.</p> 
@@ -627,25 +733,21 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/automation/" rel="tag">Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager-automation/" rel="tag">EC2 Systems Manager Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Use AWS CloudFormation Stack Termination Protection and Rollback Triggers to Maintain Infrastructure Availability</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Use AWS CloudFormation Stack Termination Protection and Rollback Triggers to Maintain Infrastructure Availability</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Chuck Meyer</span></span> | on 
 <time property="datePublished" datetime="2017-09-29T16:06:07+00:00">29 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation"><span property="articleSection">AWS CloudFormation</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>Managing your infrastructure as code using <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> provides a consistent way to rapidly deliver AWS environments for your applications. As your pace of delivery increases, it’s important to ensure you have the appropriate guardrails to protect your most critical infrastructure resources.</p> 
 <p>AWS CloudFormation now includes two additional tools to help you ensure the consistent health and stability of your application environments:</p> 
-<ul> 
 <li><strong>Stack Termination Protection</strong> provides a low friction mechanism to quickly protect stacks that contain critical resources.</li> 
 <li><strong>Rollback Triggers</strong> allow you to quickly revert infrastructure changes that are having a negative impact to the performance of your applications.</li> 
-</ul> 
 <p>In this post, I’m going to examine strategies for adding these new features to your infrastructure management tool belt.</p> 
 <p><span id="more-1375"></span></p> 
 <h3>Stack Termination Protection</h3> 
@@ -755,18 +857,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-alarm/" rel="tag">Amazon CloudWatch Alarm</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Amazon EC2 Systems Manager as a General-Purpose DevOps Tool</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Systems Manager as a General-Purpose DevOps Tool</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
 <time property="datePublished" datetime="2017-09-28T12:31:50+00:00">28 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-as-a-general-purpose-devops-tool/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>This guest post was written by Andrew Rout, Engineer at Riverbed SteelCentral Office of the CTO</em></p> 
 <p>A long time ago, a manufacturer in Cincinnati invented Play-Doh to be used as a wallpaper cleaner. Twenty years later, an even better purpose was found for it, and kids everywhere rejoiced.</p> 
@@ -774,12 +874,10 @@ by
 <h3>The need to communicate with EC2 instances</h3> 
 <p>To manage the EC2 instances that power Riverbed Technology’s <a href="https://www.riverbed.com/products/steelcentral/use-as-a-service.html">SteelCentral SaaS</a> offering, Riverbed’s DevOps team built an internal tool that allows them to perform tasks on the EC2 instances and gives them insight into the state of the environment. A UI sits on top of a backend that communicates with the EC2 instances and various other AWS services.</p> 
 <p>This internal DevOps tool allows our operations team to do the following:</p> 
-<ul> 
 <li>See dashboards describing the overall health of all infrastructure components and software components of SteelCentral SaaS</li> 
 <li>Provision new resources as necessary</li> 
 <li>Troubleshoot services running on EC2 instances</li> 
 <li>Manage users and licensing<span id="more-1345"></span></li> 
-</ul> 
 <p><img class="size-full wp-image-1346 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/25/steelcentral_saas.png" alt="" width="1000" height="431" /></p> 
 <p>In addition to a DevOps tool, Riverbed’s SaaS environment includes an event-driven service that also needs to communicate with EC2 instances. The event-driven system is used to provision additional resources on an EC2 instance as the system scales.</p> 
 <p>Each of the tasks executed by the DevOps tool and the event-driven service requires one or more remote shell commands to be executed on an EC2 instance to either fetch information from an application or make a change to it.</p> 
@@ -791,12 +889,10 @@ by
 <p><strong>No, EC2 Systems Manager makes issuing remote commands easier</strong></p> 
 <p>Really what <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a> did was provide a way to execute ANY command on a remote EC2 instance. Anywhere an SSH command is needed, a Run Command call can take its place.</p> 
 <p>The benefits of using Run Command instead of SSH have been stated in other <a href="https://aws.amazon.com/blogs/aws/manage-instances-at-scale-without-ssh-access-using-ec2-run-command/">blog posts</a>, so I’ll briefly list them here.</p> 
-<ul> 
 <li>No need to store SSH keys anywhere</li> 
 <li>Ability to execute remote shell commands is controlled by IAM policies</li> 
 <li>Commands issued via Run Command are auditable</li> 
 <li>Command output can be stored in Amazon S3 for historical reference</li> 
-</ul> 
 <p>Essentially, EC2 Systems Manager is used as a communication service between a client and your EC2 instances.&nbsp; In Riverbed’s case, the DevOps tool is the client that wants to communicate with our EC2 instances.</p> 
 <p><img class="size-full wp-image-1385 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/29/riverbed_arch-diagram.png" alt="" width="695" height="443" /></p> 
 <p>Riverbed’s SteelCentral SaaS uses EC2 Systems Manager to issue commands to stop, start, and modify services running on EC2 instances. For example, when a new user signs up, an event is triggered and Run Command sends commands to ensure additional services are provisioned and configured as the system scales.</p> 
@@ -882,18 +978,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Automate remediation actions for Amazon EC2 notifications and beyond using EC2 Systems Manager Automation and AWS Health</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Automate remediation actions for Amazon EC2 notifications and beyond using EC2 Systems Manager Automation and AWS Health</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
 <time property="datePublished" datetime="2017-09-27T13:40:09+00:00">27 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/automate-remediation-actions-for-amazon-ec2-notifications-and-beyond-using-ec2-systems-manager-automation-and-aws-health/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p>You can use EC2 <a href="https://aws.amazon.com/ec2/systems-manager/">Systems Manager Automation</a> to take remediation actions in response to events that may impact your AWS resources. To illustrate this concept, this post guides you through setting up automated remediation actions when an <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> backed <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2</a> instance is scheduled for retirement.</p> 
 <p>An instance is scheduled to be retired when AWS detects irreparable failure of the underlying hardware hosting the instance. If your instance root device is an Amazon EBS volume you can stop and start the instance at any time of your convenience before the retirement.</p> 
@@ -1101,18 +1195,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/automation/" rel="tag">Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-sns/" rel="tag">AWS SNS</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Get Disk Utilization of Your Fleet Using EC2 Systems Manager Custom Inventory Types</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Get Disk Utilization of Your Fleet Using EC2 Systems Manager Custom Inventory Types</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Tanu Mutreja</span></span> | on 
 <time property="datePublished" datetime="2017-09-20T14:23:32+00:00">20 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/get-disk-utilization-of-your-fleet-using-ec2-systems-manager-custom-inventory-types/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><a href="https://aws.amazon.com/ec2/systems-manager/inventory/">Amazon EC2 Systems Manager Inventory</a> provides a centralized way to collect and query system, application, and instance metadata. Using the resource data sync feature, you can sync this metadata to Amazon S3. In Amazon S3 you can aggregate the metadata for different AWS Regions and accounts. After you sync this inventory data to Amazon S3, you can create various visuals of the data using Amazon Athena and Amazon QuickSight.</p> 
 <p>The inventory data collection policy is configured using <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">State Manager</a> , which in turn gets executed by <a href="https://github.com/aws/amazon-ssm-agent/tree/master/agent/plugins/inventory">aws:softwareInventory plugin</a> in <a href="https://github.com/aws/amazon-ssm-agent">amazon-ssm-agent</a>.</p> 
@@ -1245,18 +1337,16 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager-inventory/" rel="tag">AWS Systems Manager Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/custom-inventory/" rel="tag">Custom Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/custom-inventory-type/" rel="tag">Custom Inventory Type</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager-inventory/" rel="tag">EC2 Systems Manager Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/inventory/" rel="tag">Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm-inventory/" rel="tag">SSM Inventory</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Manage your fleet at scale using EC2 Systems Manager</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Manage your fleet at scale using EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
 <time property="datePublished" datetime="2017-09-19T10:28:04+00:00">19 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/manage-your-fleet-at-scale-using-ec2-systems-manager/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>This guest post was written by Michael Baker, who works as a DevOps Engineer for the Infrastructure Engineering team at Bulletproof</em></p> 
 <h3>Introduction</h3> 
@@ -1265,21 +1355,17 @@ by
 <h3>Customer One: Extending Amazon Auto Scaling with automated Amazon Machine Image (AMI) patching and deployment</h3> 
 <p>Bulletproof recently has been charged with building a fully automated patching and deployment pipeline as an extension to an existing environment that was built with, among other things,&nbsp;Auto Scaling from AWS. &nbsp;It was important that this pipeline enabled both scheduled and ad hoc operating system and key service patching. &nbsp;During requirements gathering it became clear that owing to governance policy within our customer’s business we were unable to deliver an entirely automated deployment pipeline. A manual approval step was a part of their key requirements.</p> 
 <p>After a quick review of tooling in-place within the customer build process, we took a mixture of Bulletproof’s current best practice recommendations and elected to use the following primary toolkit:</p> 
-<ul> 
 <li><a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a></li> 
 <li><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a></li> 
 <li><a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a></li> 
 <li><a href="https://aws.amazon.com/getting-started/projects/setup-jenkins-build-server/">Jenkins (running on Amazon EC2)</a></li> 
-</ul> 
 <p>Diving in a little more deeply on the Jenkins configuration, the following key steps occur after our customer initiates the deployment job by logging on to their EC2 instances over VPN:</p> 
-<ul> 
 <li>We clone the customer’s GitHub repository (to pick up the most recent changes).</li> 
 <li>Then we execute a Systems Manager Automation to launch an EC2 instance running the up-to-date customer code.</li> 
 <li>Next we send and store the SSM command ID within the <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Systems Manager Parameter Store</a>. (We can now use this command ID to view the state of the SSM execution.)</li> 
 <li>When the Systems Manager job state reaches complete, we wait 60 seconds and then begin a CodeDeploy run. (The delay is to ensure that the instance is available in time for CodeDeploy.)</li> 
 <li>Jenkins queries the parameter store with the command ID of the first job executed and asks Systems Manager for the new AMI ID.</li> 
 <li>We then initiate a stack update in the relevant&nbsp;<a href="https://aws.amazon.com/cloudformation/">CloudFormation </a>stack. This updates the <a href="https://aws.amazon.com/autoscaling/">Auto Scaling</a> group configuration with the new AMI. &nbsp;(This happens in such a way as to reduce the chance of service interruption.)</li> 
-</ul> 
 <p><img class="size-full wp-image-1316 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/1-1.png" alt="" width="1760" height="1152" /></p> 
 <p>The final key requirement was to enable rapid deployments. Previously even basic change required multiple stakeholders and a brief service outage. &nbsp;Today our customers create change with confidence, knowing that the integration work is&nbsp;successful and it happens without interruption to service. &nbsp;A side effect of rapid deployment is that both Developer and Operations teams are able to collaborate more closely, without one team being slowed down by the other. Continuous improvement or cloud optimization from both teams now happens on a daily basis.</p> 
 <h3>Customer Two: Migration of internal services onto Amazon EC2 Container Service (ECS)</h3> 
@@ -1299,27 +1385,23 @@ TAGS:
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-codedeploy/" rel="tag">AWS CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-opsworks/" rel="tag">AWS OpsWorks</a>, <a href="https://aws.amazon.com/blogs/mt/tag/documents/" rel="tag">Documents</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/maintenance-window/" rel="tag">Maintenance Window</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-complaince/" rel="tag">Patch Complaince</a>, <a href="https://aws.amazon.com/blogs/mt/tag/patch-manager/" rel="tag">Patch Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
 </footer> 
 </article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Reducing Configuration Drift with Amazon EC2 Systems Manager State Manager and Amazon CloudWatch Events</b> 
-<footer class="meta">
+<b class="lb-b blog-post-title" property="name headline">Reducing Configuration Drift with Amazon EC2 Systems Manager State Manager and Amazon CloudWatch Events</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
 <time property="datePublished" datetime="2017-09-14T12:16:35+00:00">14 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager"><span property="articleSection">Amazon EC2 Systems Manager</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/mt/reducing-configuration-drift-with-amazon-ec2-systems-manager-state-manager-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
 <p><em>This post was written by Anupam Shrivastava, Software Development Engineer with Amazon Web Services.</em></p> 
 <p>State Manager helps you automate the process of keeping your EC2 instances or virtual machines (VM) in your on-premises data center in a desired state. Some use cases for State Manager include:</p> 
-<ul> 
 <li>Ensuring that instances are joined to a Windows domain</li> 
 <li>Ensuring that instances are patched with specific software throughout their lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/configure-amazon-ec2-instances-in-an-auto-scaling-group-using-state-manager/">Configure Amazon EC2 Instances in an Auto Scaling Group</a>.</li> 
 <li>Executing Linux shell scripts or PowerShell scripts at scheduled times during the instances lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/combating-configuration-drift-using-amazon-ec2-systems-manager-and-windows-powershell-dsc/">Combating Configuration Drift Using Amazon EC2 Systems Manager and Windows PowerShell DSC</a>.</li> 
 <li>Using other configuration management tools like Ansible. For more information, see <a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/">Running Ansible Playbooks using EC2 Systems Manager, Run Command and State Manager</a></li> 
-</ul> 
 <p>In State Manager, an association is a binding between your expressed configuration in a document, and a set of targets, on a specific schedule, to ensure consistent state. As part of the recent launch, we have made it easy for customers to easily remediate their instances when they drift from a desired configuration, provide you more control on when you can reapply configurations, and also make it easy for you to track changes to State Manager associations.</p> 
 <p>In this post, I demonstrate some new State Manager features such as association names and versions, rate expressions, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> integration. You start by specifying the configuration in a Systems Manager document.</p> 
 <p><span id="more-1243"></span></p> 
@@ -1334,19 +1416,16 @@ by
 <h4>Step 1: &nbsp;Create an association</h4> 
 <p>Open the EC2 console and choose <strong>Systems Manager, State Manager.</strong></p> 
 <p>On the State Manager page, create an association with the following settings:</p> 
-<ul> 
 <li>For <strong>Association Name</strong>, type ‘CriticalWindowsUpdates’.</li> 
 <li>For <strong>Select Document</strong>, select the AWS-InstallWindowsUpdates document.</li> 
 <li>For <strong>Targets</strong>, select a Windows instance.</li> 
 <li>For <strong>Schedule</strong>, choose <strong>Rate schedule builder</strong> and specify a rate expression of every 1 day.</li> 
 <li>For <strong>Parameters</strong>, select the following: 
-<ul> 
 <li>Action: Install</li> 
 <li>Allow Reboot: True</li> 
 <li>Categories: CriticalUpdates</li> 
 </ul> </li> 
 <li>Choose <strong>Create Association</strong>.</li> 
-</ul> 
 <p>You can also perform the same operations with the AWS CLI, using the following command:</p> 
 <pre><code class="lang-bash">aws ssm create-association --name AWS-InstallWindowsUpdates --targets &quot;Key=InstanceIds,Values=i-0ca45fddbf4ce950f&quot; --schedule-expression &quot;rate(1 day)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True –-association-name CriticalWindowsUpdates</code></pre> 
 <p>If you have not upgraded the SSM agent on your EC2 instance to the latest version, you might get a failed association error of ‘UnsupportedAgent’. In that case, upgrade the SSM agent to the latest version by executing a command using Run Command and the AWS-UpdateSSMAgent document. After you upgrade the agent, the association should start succeeding.</p> 
@@ -1354,14 +1433,12 @@ by
 <p>Because you have created an association to ensure that an instance always has the latest critical Windows updates, you should also configure CloudWatch Events to notify you in case the association failed to check and apply the critical Windows updates.</p> 
 <p>Create an Amazon SNS topic that is configured to send you email. In the example below, I have an SNS topic already created with the topic ‘WindowsCriticalUpdates’.</p> 
 <p>Open the CloudWatch console and choose <strong>Events, Create rule</strong>. Use the following values:</p> 
-<ul> 
 <li><strong>Service Name</strong>: EC2 Simple Systems Manager (SSM)</li> 
 <li><strong>Event Type</strong>: State Manager</li> 
 <li><strong>Specific type</strong>: EC2 State Manager Association State Change</li> 
 <li><strong>Specific status</strong>: Failed</li> 
 <li><strong>Edit Event Pattern</strong>:&nbsp; Add the Association Name to track the status for a specific Association</li> 
 <li>Choose <strong>Configure details</strong>.</li> 
-</ul> 
 <p>When you’re done, the event pattern should look like the following:</p> 
 <pre><code class="lang-json">{
 &quot;source&quot;: [&quot;aws.ssm&quot;],
@@ -1376,24 +1453,20 @@ by
 <h4>&nbsp;Step 3: Update the association schedule</h4> 
 <p>After a few days, you might realize that you want to have a more aggressive schedule of checking every 30 minutes for critical Windows updates. On the State Manager page, filter the associations by the word ‘Critical’. Select ‘CriticalWindowsUpdates’ and edit it.</p> 
 <p>On the Edit association page, choose Rate schedule builder and specify a rate expression of every 30 minutes. For Parameters, again select the following:</p> 
-<ul> 
 <li>Action: Install</li> 
 <li>Allow Reboot: True</li> 
 <li>Categories: CriticalUpdates</li> 
-</ul> 
 <p>Choose Edit association. You can also perform the same operations with the AWS CLI, using the following command:</p> 
 <pre><code class="lang-bash">aws ssm update-association --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2 --schedule-expression &quot;rate(30 minutes)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True</code></pre> 
 <p>After the association is edited, it is immediately scheduled for execution on the target instances.</p> 
 <h4>Step 4: Track association changes using versioning</h4> 
 <p>The Versions tab provides an audit trail of all the updates that were made to the association. The attributes that can be updated are:</p> 
-<ul> 
 <li>Association name</li> 
 <li>Document name</li> 
 <li>Document version</li> 
 <li>Parameters</li> 
 <li>Targets</li> 
 <li>Schedule expression</li> 
-</ul> 
 <p>When you update any of the fields in an association, State Manager creates a new version. You can see all previous versions, along with the various field values. This enables you to track changes across various versions.</p> 
 <p>In the earlier example, you can see two association versions corresponding to the two different rate schedule expressions.</p> 
 <p><img class="size-full wp-image-1293 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/versioning.png" alt="" width="1732" height="716" /></p> 
@@ -1401,12 +1474,10 @@ by
 <pre><code class="lang-bash">aws ssm list-association-versions --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2</code></pre> 
 <h3>Conclusion</h3> 
 <p>In this post, I showed you how to use several new features in State Manager that will ensure your instances are in a desired state and do not drift:</p> 
-<ul> 
 <li>Naming associations and filtering by names</li> 
 <li>Granular scheduling by rate expressions</li> 
 <li>Association status notifications through CloudWatch Events</li> 
 <li>Tracking association changes through versions</li> 
-</ul> 
 <hr /> 
 <h3>About the Author</h3> 
 <p><img class="size-full wp-image-1294 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/anupam.jpg" alt="" width="119" height="160" /><a href="https://www.linkedin.com/in/anupamsh/">Anupam Shrivastava</a> is a software development engineer on the Amazon EC2 Systems Manager team. He enjoys being part of AWS and building easy-to-use scalable solutions for customers across the globe. Outside of work, he enjoys playing tennis and cricket, swimming, and traveling.</p> 
@@ -1414,92 +1485,6 @@ by
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/state-manager/" rel="tag">State Manager</a></span> 
-</footer> 
-</article> 
-<article class="post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="b post-title" property="name headline">Introducing the AWS Config Rule Development Kit (RDK)</b> 
-<footer class="meta">
-by 
-<span property="author" typeof="Person"><span property="name">Henry Huang</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T13:59:42+00:00">12 SEP 2017</time> | in 
-<span class="categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config"><span property="articleSection">AWS Config</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools"><span property="articleSection">Management Tools</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/introducing-the-aws-config-rule-development-kit-rdk/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog=""><span class="span icon-share"></span>&nbsp;Share</a> 
-<ul> 
-</ul> 
-</footer> 
-<p>Recently, <a href="https://aws.amazon.com/config">AWS Config</a> released a Rule Development Kit (RDK) that greatly simplifies your custom rule authoring experience. The RDK is an open-source tool that helps you set up AWS Config, author rules, and then test them using a variety of AWS resource types. This allows you to focus on the development of the rule itself. The AWS Config RDK is now available for download from the <a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub repo. We follow semantic versioning, and are dedicated to maintaining backwards compatibility for each major version.</p> 
-<h3>About AWS Config</h3> 
-<p>AWS Config is a service that enables you to assess, audit, and evaluate the configurations of your AWS resources. AWS Config continuously monitors and records your AWS resource configurations and allows you to automate the evaluation of recorded configurations against desired configurations. Rules enable you to automatically check the configuration of AWS resources recorded by AWS Config. There are 37 managed AWS Config rules by default and 34 custom rules maintained by the community in the <a href="https://github.com/awslabs/aws-config-rules">aws-config-rules</a> GitHub repo.</p> 
-<p><span id="more-1254"></span></p> 
-<b>Getting started</b> 
-<p>You can get started with AWS Config RDK and create a rule named “Hello World” in just a few minutes.</p> 
-<ul> 
-<li>Prerequisites</li> 
-<li>Enable AWS Config</li> 
-<li>Create your first rule</li> 
-<li>Test your rule</li> 
-</ul> 
-<b>Prerequisites</b> 
-<p>The AWS Config RDK requires the latest version of the <a href="https://aws.amazon.com/cli">AWS CLI</a>. You must also log in to an AWS account. Use the following command to install the AWS CLI (<a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">requires pip to be installed already</a>):</p> 
-<pre><code class="lang-bash">pip install --upgrade --user awscli</code></pre> 
-<p>Use the following command to configure the AWS CLI. For more information, see <a style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">Configuring the AWS CLI</a><span style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif">.</span></p> 
-<pre><code class="lang-bash">aws configure --profile myCLIprofile 
-AWS Access Key ID [None]: AKIAI44QH8DHBEXAMPLE
-AWS Secret Access Key [None]: je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
-Default region name [None]: us-east-1
-Default output format [None]: text</code></pre> 
-<p>Use the following command to clone the AWS Config RDK on macOS, Linux, or Windows platforms:</p> 
-<pre><code class="lang-bash">git clone https://github.com/awslabs/aws-config-rdk.git</code></pre> 
-<p>Choose your platform (MacLinux or Windows).<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-01.png" /></p> 
-<b>Enable AWS Config</b> 
-<p>To begin, enable AWS Config in your AWS account for the region configured in the AWS CLI. For example, on macOS or Linux, use the following command to configure your profile:</p> 
-<pre><code class="lang-bash">cd MacLinux/setup; ./setup myCLIprofile </code></pre> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-02.png" /><br /> On Windows, use the following command to configure your profile:</p> 
-<pre><code class="lang-bash">cd Windows/setup; ./setup.cmd myCLIprofile </code></pre> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-03.png" /></p> 
-<p>In this example, AWS Config in the us-east-1 region has been enabled by RDK setup.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-04.png" /></p> 
-<b>Create your first rule</b> 
-<p>Now you can create your first rule. Use the following command to create the EBS_OPTIMIZED_INSTANCE managed rule, which checks whether Amazon EBS optimization is enabled for your EC2 instances that can be EBS-optimized. Create the rule under the folder /aws-config-rdk/MacLinux/rules on macOS or Linux:</p> 
-<pre><code class="lang-bash">cd MacLinux/rules; ./createRule myCLIprofile hello_world AWS::EC2::Instance </code></pre> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-05.png" /></p> 
-<p>On Windows, use the following command:</p> 
-<pre><code class="lang-bash">cd Windows/rules; ./createRule.cmd myCLIprofile hello_world AWS::EC2::Instance </code></pre> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-06.png" /></p> 
-<p>The following resources were created:</p> 
-<ul> 
-<li>The parameter “APPLICABLE_RESOURCE_TYPES” has the same value as “APPLICABLE_RESOURCES” already defined in the rule code</li> 
-<li>The AWS Lambda function named “hello_world”</li> 
-<li>An AWS Config rule named “hello_world”, which was also associated with the Lambda function</li> 
-</ul> 
-<p>The rule has started to evaluate EC2 instances for compliance with EBS optimization.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-07.png" /><br /> Now you can replace the default values with your own code. Make sure that resource types are consistent between the rule_code.py and createRule.cmd script parameters. Otherwise, your rule returns NOT_APPLICABLE. The rules/ruleCode/rule_util.py script handles the boring parts of a rule, and should not need to be modified.</p> 
-<b>Test your rule</b> 
-<p>The AWS Config RDK supports testing your rule by invoking the Lambda function with configuration items (used as test cases) from the /rules/testUtil/compliantCIs and /rules/testUtil/noncompliantCIs directories. The RDK checks that the Lambda function returns the corresponding result.</p> 
-<p>On macOS or Linux, use the following command:</p> 
-<pre><code class="lang-bash">cd MacLinux/rules; ./test myCLIprofile hello_world </code></pre> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-08.png" /></p> 
-<p>On Windows, use the following command:</p> 
-<pre><code class="lang-bash">cd Windows/rules; ./test.cmd myCLIprofile hello_world </code></pre> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-09.png" /></p> 
-<p>Besides, we have provided Configuration Item examples in “rules/testUtil/exampleCIs” to help you to write test cases by the modification to make them represent compliant or non-compliant resources.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-10.png" /></p> 
-<b>Summary</b> 
-<p>The AWS Config RDK helps you build rules easily, including the following:</p> 
-<ul> 
-<li>Preparing the initial rule development environment, by enabling AWS Config with a variety of automatically created AWS resources.</li> 
-<li>Creating Lambda functions, rules, and the association between them so that you don’t have to.</li> 
-<li>Supporting multiple platforms: &nbsp;macOS, Linux, and Windows.</li> 
-<li>Testing rules just by the code, with no more manual setup in complicated test environments.</li> 
-</ul> 
-<p>We would love to hear your feedback. Feel free to leave comments or suggestions on the&nbsp;<a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub page.</p> 
-<h3>About the Author</h3> 
-<p><img class="alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-11.png" /><br /> Henry Huang is a DevOps Consultant for the Professional Services Team&nbsp;at Amazon Web Services in China.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-config/" rel="tag">AWS Config</a>, <a href="https://aws.amazon.com/blogs/mt/tag/config-rule/" rel="tag">Config Rule</a>, <a href="https://aws.amazon.com/blogs/mt/tag/rdk/" rel="tag">RDK</a>, <a href="https://aws.amazon.com/blogs/mt/tag/rule-development-kit/" rel="tag">Rule Development Kit</a></span> 
 </footer> 
 </article> 
 <p>
