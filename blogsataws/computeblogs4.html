@@ -191,6 +191,709 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Synchronizing Amazon S3 Buckets Using AWS Step Functions</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-06-25T22:26:59+00:00">25 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/synchronizing-amazon-s3-buckets-using-aws-step-functions/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2404" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2404&amp;disqus_title=Synchronizing+Amazon+S3+Buckets+Using+AWS+Step+Functions&amp;disqus_url=https://aws.amazon.com/blogs/compute/synchronizing-amazon-s3-buckets-using-aws-step-functions/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2404');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg"><img class="alignnone size-full wp-image-2406" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg" alt="" width="120" height="160" /></a></p> 
+<p><strong>Constantin Gonzalez is a Principal Solutions Architect at AWS</strong></p> 
+<p>In my free time, I run a small blog that uses Amazon S3 to host static content and Amazon CloudFront to distribute it world-wide. I use a home-grown, static website generator to create and upload my blog content onto S3.</p> 
+<p>My blog uses two S3 buckets: one for staging and testing, and one for production. As a website owner, I want to update the production bucket with all changes from the staging bucket in a reliable and efficient way, without having to create and populate a new bucket from scratch. Therefore, to synchronize files between these two buckets, I use <a href="https://aws.amazon.com/lambda" target="_blank" rel="noopener noreferrer">AWS Lambda</a> and <a href="https://aws.amazon.com/step-functions" target="_blank" rel="noopener noreferrer">AWS Step Functions</a>.</p> 
+<p>In this post, I show how you can use Step Functions to build a scalable synchronization engine for S3 buckets and learn some common patterns for designing Step Functions state machines while you do so.<span id="more-2404"></span></p> 
+<b id="toc_1">Step Functions overview</b> 
+<p>Step Functions makes it easy to coordinate the components of distributed applications and microservices using visual workflows. Building applications from individual components that each perform a discrete function lets you scale and change applications quickly.</p> 
+<p>While this particular example focuses on synchronizing objects between two S3 buckets, it can be generalized to any other use case that involves coordinated processing of any number of objects in S3 buckets, or other, similar data processing patterns.</p> 
+<b id="toc_2">Bucket replication options</b> 
+<p>Before I dive into the details on how this particular example works, take a look at some alternatives for copying or replicating data between two Amazon S3 buckets:</p> 
+<li>The <a href="https://aws.amazon.com/cli">AWS CLI</a> provides customers with a powerful <a href="http://docs.aws.amazon.com/cli/latest/reference/s3/sync.html" target="_blank" rel="noopener noreferrer">aws s3 sync</a> command that can synchronize the contents of one bucket with another.</li> 
+<li><a href="http://docs.aws.amazon.com/emr/latest/ReleaseGuide/UsingEMR_s3distcp.html">S3DistCP</a> is a powerful tool for users of <a href="https://aws.amazon.com/emr/" target="_blank" rel="noopener noreferrer">Amazon EMR</a> that can efficiently load, save, or copy large amounts of data between S3 buckets and HDFS.</li> 
+<li>The S3 <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/crr.html" target="_blank" rel="noopener noreferrer">cross-region replication</a> functionality enables automatic, asynchronous copying of objects across buckets in different AWS regions.</li> 
+<p>In this use case, you are looking for a slightly different bucket synchronization solution that:</p> 
+<li>Works within the same region</li> 
+<li>Is more scalable than a CLI approach running on a single machine</li> 
+<li>Doesn’t require managing any servers</li> 
+<li>Uses a more finely grained cost model than the hourly based Amazon EMR approach</li> 
+<p>You need a scalable, serverless, and customizable bucket synchronization utility.</p> 
+<b id="toc_3">Solution architecture</b> 
+<p>Your solution needs to do three things:</p> 
+<ol> 
+<li>Copy all objects from a source bucket into a destination bucket, but leave out objects that are already present, for efficiency.</li> 
+<li>Delete all “orphaned” objects from the destination bucket that aren’t present on the source bucket, because you don’t want obsolete objects lying around.</li> 
+<li>Keep track of all objects for #1 and #2, regardless of how many objects there are.</li> 
+</ol> 
+<p>In the beginning, you read in the source and destination buckets as parameters and perform basic parameter validation. Then, you operate two separate, independent loops, one for copying missing objects and one for deleting obsolete objects. Each loop is a sequence of Step Functions states that read in chunks of S3 object lists and use the continuation token to decide in a choice state whether to continue the loop or not.</p> 
+<p>This solution is based on the following architecture that uses Step Functions, Lambda, and two S3 buckets:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1.png"><img class="aligncenter size-medium wp-image-2417" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1-300x250.png" alt="" width="300" height="250" /></a></p> 
+<p>As you can see, this setup involves no servers, just two main building blocks:</p> 
+<li>Step Functions manages the overall flow of synchronizing the objects from the source bucket with the destination bucket.</li> 
+<li>A set of Lambda functions carry out the individual steps necessary to perform the work, such as validating input, getting lists of objects from source and destination buckets, copying or deleting objects in batches, and so on.</li> 
+<p>To understand the synchronization flow in more detail, look at the Step Functions state machine diagram for this example.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1.png"><img class="aligncenter size-medium wp-image-2415" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1-267x300.png" alt="" width="267" height="300" /></a></p> 
+<b id="toc_4">Walkthrough</b> 
+<p>Here’s a detailed discussion of how this works.</p> 
+<p>To follow along, use the code in the <a href="https://github.com/awslabs/sync-buckets-state-machine" target="_blank" rel="noopener noreferrer">sync-buckets-state-machine</a> GitHub repo. The code comes with a ready-to-run deployment script in Python that takes care of all the IAM roles, policies, Lambda functions, and of course the Step Functions state machine deployment using <a href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>, as well as instructions on how to use it.</p> 
+<h3 id="toc_5">Fine print: Use at your own risk</h3> 
+<p>Before I start, here are some disclaimers:</p> 
+<li><strong>Educational purposes only.</strong> <p>The following example and code are intended for educational purposes only. Make sure that you customize, test, and review it on your own before using any of this in production.</p></li> 
+<li><strong>S3 object deletion.</strong> <p>In particular, using the code included below may delete objects on S3 in order to perform synchronization. Make sure that you have backups of your data. In particular, consider using the <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/Versioning.html" target="_blank" rel="noopener noreferrer">Amazon S3 Versioning feature</a> to protect yourself against unintended data modification or deletion.</p></li> 
+<p>Step Functions execution starts with an initial set of parameters that contain the source and destination bucket names in JSON:</p> 
+<pre><code class="language-none">{
+&quot;source&quot;:       &quot;my-source-bucket-name&quot;,
+&quot;destination&quot;:  &quot;my-destination-bucket-name&quot;
+}</code></pre> 
+<p>Armed with this data, Step Functions execution proceeds as follows.</p> 
+<h3 id="toc_6">Step 1: Detect the bucket region</h3> 
+<p>First, you need to know the regions where your buckets reside. In this case, take advantage of the Step Functions <em>Parallel</em> state. This allows you to use a Lambda function <code>get_bucket_location.py</code> inside two different, parallel branches of <em>task</em> states:</p> 
+<li><code>FindRegionForSourceBucket</code></li> 
+<li><code>FindRegionForDestinationBucket</code></li> 
+<p>Each task state receives one bucket name as an input parameter, then detects the region corresponding to “their” bucket. The output of these functions is collected in a result array containing one element per parallel function.</p> 
+<h3 id="toc_7">Step 2: Combine the parallel states</h3> 
+<p>The output of a parallel state is a list with all the individual branches’ outputs. To combine them into a single structure, use a Lambda function called <code>combine_dicts.py</code> in its own <code>CombineRegionOutputs</code> <em>task</em> state. The function combines the two outputs from step 1 into a single JSON dict that provides you with the necessary region information for each bucket.</p> 
+<h3 id="toc_8">Step 3: Validate the input</h3> 
+<p>In this walkthrough, you only support buckets that reside in the same region, so you need to decide if the input is valid or if the user has given you two buckets in different regions. To find out, use a Lambda function called <code>validate_input.py</code> in the <code>ValidateInput</code> <em>task</em> state that tests if the two regions from the previous step are equal. The output is a Boolean.</p> 
+<h3 id="toc_9">Step 4: Branch the workflow</h3> 
+<p>Use another type of Step Functions state, a <em>Choice</em> state, which branches into a <em>Failure</em> state if the comparison in step 3 yields false, or proceeds with the remaining steps if the comparison was successful.</p> 
+<h3 id="toc_10">Step 5: Execute in parallel</h3> 
+<p>The actual work is happening in another <em>Parallel</em> state. Both branches of this state are very similar to each other and they re-use some of the Lambda function code.</p> 
+<p>Each parallel branch implements a looping pattern across the following steps:</p> 
+<ol> 
+<li>Use a <em>Pass</em> state to inject either the string value <code>&quot;source&quot;</code> (<code>InjectSourceBucket</code>) or <code>&quot;destination&quot;</code> (<code>InjectDestinationBucket</code>) into the <code>listBucket</code> attribute of the state document.The next step uses either the source or the destination bucket, depending on the branch, while executing the same, generic Lambda function. You don’t need two Lambda functions that differ only slightly. This step illustrates how to use <em>Pass</em> states as a way of injecting constant parameters into your state machine and as a way of controlling step behavior while re-using common step execution code.</li> 
+<li>The next step <code>UpdateSourceKeyList/UpdateDestinationKeyList</code> lists objects in the given bucket. <p>Remember that the previous step injected either <code>&quot;source&quot;</code> or <code>&quot;destination&quot;</code> into the state document’s <code>listBucket</code> attribute. This step uses the same <code>list_bucket.py</code> Lambda function to list objects in an S3 bucket. The <code>listBucket</code> attribute of its input decides which bucket to list. In the left branch of the main parallel state, use the list of source objects to work through copying missing objects. The right branch uses the list of destination objects, to check if they have a corresponding object in the source bucket and eliminate any orphaned objects. Orphans don’t have a source object of the same S3 key.</p></li> 
+<li>This step performs the actual work. In the left branch, the <code>CopySourceKeys</code> step uses the <code>copy_keys.py</code> Lambda function to go through the list of source objects provided by the previous step, then copies any missing object into the destination bucket. Its sister step in the other branch, <code>DeleteOrphanedKeys</code>, uses its destination bucket key list to test whether each object from the destination bucket has a corresponding source object, then deletes any orphaned objects.</li> 
+<li>The S3 <code>ListObjects</code> API action is designed to be scalable across many objects in a bucket. Therefore, it returns object lists in chunks of configurable size, along with a continuation token. If the API result has a continuation token, it means that there are more objects in this list. You can work from token to token to continue getting object list chunks, until you get no more continuation tokens.</li> 
+</ol> 
+<p>By breaking down large amounts of work into chunks, you can make sure each chunk is completed within the timeframe allocated for the Lambda function, and within the maximum input/output data size for a Step Functions state.</p> 
+<p>This approach comes with a slight tradeoff: the more objects you process at one time in a given chunk, the faster you are done. There’s less overhead for managing individual chunks. On the other hand, if you process too many objects within the same chunk, you risk going over time and space limits of the processing Lambda function or the Step Functions state so the work cannot be completed.</p> 
+<p>In this particular case, use a Lambda function that maximizes the number of objects listed from the S3 bucket that can be stored in the input/output state data. This is currently up to 32,768 bytes, assuming (based on some experimentation) that the execution of the <code>COPY/DELETE</code> requests in the processing states can always complete in time.</p> 
+<p>A more sophisticated approach would use the Step Functions <em>retry/catch</em> state attributes to account for any time limits encountered and adjust the list size accordingly through some list site adjusting.</p> 
+<h3 id="toc_11">Step 6: Test for completion</h3> 
+<p>Because the presence of a continuation token in the S3 ListObjects output signals that you are not done processing all objects yet, use a <em>Choice</em> state to test for its presence. If a continuation token exists, it branches into the <code>UpdateSourceKeyList</code> step, which uses the token to get to the next chunk of objects. If there is no token, you’re done. The state machine then branches into the <code>FinishCopyBranch/FinishDeleteBranch</code> state.</p> 
+<p>By using <em>Choice</em> states like this, you can create loops exactly like the old times, when you didn’t have for statements and used branches in assembly code instead!</p> 
+<h3 id="toc_12">Step 7: Success!</h3> 
+<p>Finally, you’re done, and can step into your final <em>Success</em> state.</p> 
+<b id="toc_13">Lessons learned</b> 
+<p>When implementing this use case with Step Functions and Lambda, I learned the following things:</p> 
+<li>Sometimes, it is necessary to manipulate the JSON state of a Step Functions state machine with just a few lines of code that hardly seem to warrant their own Lambda function. This is ok, and the cost is actually pretty low given Lambda’s 100 millisecond billing granularity. The upside is that functions like these can be helpful to make the data more palatable for the following steps or for facilitating <em>Choice</em> states. An example here would be the <code>combine_dicts.py</code> function.</li> 
+<li><em>Pass</em> states can be useful beyond debugging and tracing, they can be used to inject arbitrary values into your state JSON and guide generic Lambda functions into doing specific things.</li> 
+<li><em>Choice</em> states are your friend because you can build while-loops with them. This allows you to reliably grind through large amounts of data with the patience of an engine that currently supports execution times of up to 1 year. <p>Currently, there is an execution history limit of 25,000 events. Each Lambda task state execution takes up 5 events, while each choice state takes 2 events for a total of 7 events per loop. This means you can loop about 3500 times with this state machine. For even more scalability, you can split up work across multiple Step Functions executions through object key sharding or similar approaches.</p></li> 
+<li>It’s not necessary to spend a lot of time coding exception handling within your Lambda functions. You can delegate all exception handling to Step Functions and instead simplify your functions as much as possible.</li> 
+<li>Step Functions are great replacements for shell scripts. This could have been a shell script, but then I would have had to worry about where to execute it reliably, how to scale it if it went beyond a few thousand objects, etc. Think of Step Functions and Lambda as tools for scripting at a cloud level, beyond the boundaries of servers or containers. “Serverless” here also means “boundary-less”.</li> 
+<b id="toc_14">Summary</b> 
+<p>This approach gives you scalability by breaking down any number of S3 objects into chunks, then using Step Functions to control logic to work through these objects in a scalable, serverless, and fully managed way.</p> 
+<p>To take a look at the code or tweak it for your own needs, use the code in the <a href="https://github.com/awslabs/sync-buckets-state-machine" target="_blank" rel="noopener noreferrer">sync-buckets-state-machine</a> GitHub repo.</p> 
+<p>To see more examples, please visit the <a href="https://aws.amazon.com/step-functions/getting-started/" target="_blank" rel="noopener noreferrer">Step Functions Getting Started</a> page.</p> 
+<p>Enjoy!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-storage-service/" rel="tag">Amazon Simple Storage Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/s3/" rel="tag">S3</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2404');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Kotlin and Groovy JVM Languages with AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Juan Villa</span></span> | on 
+<time property="datePublished" datetime="2017-06-23T07:21:46+00:00">23 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/kotlin-and-groovy-jvm-languages-with-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2430" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2430&amp;disqus_title=Kotlin+and+Groovy+JVM+Languages+with+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/kotlin-and-groovy-jvm-languages-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2430');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg"><img class="alignnone size-full wp-image-2442" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg" alt="" width="119" height="160" /></a><br /> Juan Villa – Partner Solutions Architect</p> 
+<p>&nbsp;</p> 
+<p>When most people hear “Java” they think of Java the programming language. Java is a lot more than a programming language, it also implies a larger ecosystem including the Java Virtual Machine (JVM). Java, the programming language, is just one of the many languages that can be compiled to run on the JVM. Some of the most popular JVM languages, other than Java, are Clojure, Groovy, Scala, Kotlin, JRuby, and Jython (see <a href="https://en.wikipedia.org/wiki/List_of_JVM_languages">this link</a> for a list of more JVM languages).</p> 
+<p>Did you know that you can compile and subsequently run all these languages on AWS Lambda?</p> 
+<p><a href="https://aws.amazon.com/lambda">AWS Lambda</a> supports the Java 8 runtime, but this does not mean you are limited to the Java language. The Java 8 runtime is capable of running JVM languages such as Kotlin and Groovy once they have been compiled and packaged as a “fat” JAR (a JAR file containing all necessary dependencies and classes bundled in).</p> 
+<p>In this blog post we’ll work through building AWS Lambda functions in both <a href="https://kotlinlang.org/">Kotlin</a> and <a href="http://www.groovy-lang.org/">Groovy</a> programming languages. To compile and package our projects we will use <a href="https://gradle.org/">Gradle</a> build tool.</p> 
+<p><span id="more-2430"></span></p> 
+<p>To follow along, please clone the Git repository available at GitHub <a href="https://github.com/awslabs/lambda-kotlin-groovy-example">here</a>. Also, I recommend using an Integrated Development Environment (IDE) such as JetBrain’s <a href="https://www.jetbrains.com/idea/">IntelliJ IDEA</a>, this is the IDE I used while working on these projects.</p> 
+<h4>Kotlin</h4> 
+<p><a href="https://kotlinlang.org/">Kotlin</a> is a statically-typed JVM language designed and developed by <a href="https://www.jetbrains.com/">JetBrains</a> (one of our <a href="https://aws.amazon.com/partners/">Amazon Partner Network</a> Technology partners) and the open source community. Compared to Java the programming language, Kotlin has additional powerful language features such as: <a href="https://kotlinlang.org/docs/reference/data-classes.html">Data Classes</a>, <a href="https://kotlinlang.org/docs/reference/functions.html#default-arguments">Default Arguments</a>, <a href="https://kotlinlang.org/docs/reference/extensions.html">Extensions</a>, <a href="https://kotlinlang.org/docs/reference/null-safety.html">Elvis Operator</a>, and <a href="https://kotlinlang.org/docs/reference/multi-declarations.html">Destructuring Declarations</a>. This is a just a short list of Kotlin’s powerful language features. For a more thorough list of features, and how to use them, refer to the <a href="https://kotlinlang.org/docs/reference/">full documentation</a> of the Kotlin language.</p> 
+<p>Let’s jump right into the code and see what an AWS Lambda function looks like in Kotlin.</p> 
+<pre><code class="lang-kotlin">package com.aws.blog.jvmlangs.kotlin
+import java.io.*
+import com.fasterxml.jackson.module.kotlin.*
+data class HandlerInput(val who: String)
+data class HandlerOutput(val message: String)
+class Main {
+&nbsp;&nbsp;&nbsp; val mapper = jacksonObjectMapper()
+&nbsp;&nbsp;&nbsp; fun handler(input: InputStream, output: OutputStream): Unit {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; val inputObj = mapper.readValue&lt;HandlerInput&gt;(input)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mapper.writeValue(output, HandlerOutput(&quot;Hello ${inputObj.who}&quot;))
+&nbsp;&nbsp;&nbsp; }
+}</code></pre> 
+<p>The above example is a very simple Hello World application that accepts as an input a JSON object containing a key called “who” and returns a JSON object containing a key called “message” with a value of “Hello {who}”.</p> 
+<p>AWS Lambda does not support serializing JSON objects into Kotlin data classes, but don’t worry! AWS Lambda supports passing an input object as a Stream, and also supports an output Stream for returning a result (see <a href="http://docs.aws.amazon.com/lambda/latest/dg/java-handler-io-type-stream.html">this link</a> for more information). Combined with the Input/Output Stream form of the handler function, we are using the <a href="https://github.com/FasterXML/jackson">Jackson</a> library with a Kotlin extension function to support serialization and deserialization of Kotlin data class types.</p> 
+<p>To get started with this example, let’s first compile and package the Kotlin project.</p> 
+<pre><code class="lang-bash">git clone https://github.com/awslabs/lambda-kotlin-groovy-example
+cd lambda-kotlin-groovy-example/kotlin
+./gradlew shadowJar</code></pre> 
+<p>Once packaged, a JAR file containing all necessary dependencies will be available at “build/libs/ jvmlangs-kotlin-1.0-SNAPSHOT-all.jar”. Now let’s deploy this package to AWS Lambda.</p> 
+<p>To deploy the lambda function, we will be using the AWS Command Line Interface (CLI). You can find information on how to set up the AWS CLI <a href="https://aws.amazon.com/cli/">here</a>. This tool allows you to set up and manage AWS services via the command line.</p> 
+<pre><code class="lang-bash">aws lambda create-function --region us-east-1 --function-name kotlin-hello \
+--zip-file fileb://build/libs/jvmlangs-kotlin-1.0-SNAPSHOT-all.jar \
+--role arn:aws:iam::&lt;account_id&gt;:role/lambda_basic_execution \
+--handler com.aws.blog.jvmlangs.kotlin.Main::handler --runtime java8 \
+--timeout 15 --memory-size 128</code></pre> 
+<p>Once deployed, we can test the function by invoking the lambda function from the CLI.</p> 
+<pre><code class="lang-bash">aws lambda invoke --function-name kotlin-hello --payload '{&quot;who&quot;: &quot;AWS Fan&quot;}' output.txt
+cat output.txt</code></pre> 
+<p>If successful, you’ll see an output of <code class="lang-json">“{&quot;message&quot;:&quot;Hello AWS Fan&quot;}”</code>.</p> 
+<h4>Groovy</h4> 
+<p><a href="http://groovy-lang.org/">Groovy</a> is an optionally typed JVM language with both dynamic and static typing capabilities. Groovy is currently being supported by the <a href="http://www.apache.org/">Apache Software Foundation</a>. Like Kotlin, Groovy also packs a lot of powerful features such as: <a href="http://docs.groovy-lang.org/latest/html/documentation/#_closures">Closures</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_dynamic_vs_static">Dynamic Typing</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_collection_literal_type_inference">Collection Literals</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_string_interpolation">String Interpolation</a>, and <a href="http://docs.groovy-lang.org/latest/html/documentation/#_elvis_operator">Elvis Operator</a>. This is just a short list, see the <a href="http://docs.groovy-lang.org/latest/html/documentation/">full documentation</a> for a list of features and how to use them.</p> 
+<p>Once again, let’s jump right into the code.</p> 
+<pre><code class="lang-groovy">package com.aws.blog.jvmlangs.groovy
+class HandlerInput {
+&nbsp;&nbsp;&nbsp; String who
+}
+class HandlerOutput {
+&nbsp;&nbsp;&nbsp; String message
+}
+class Main {
+&nbsp;&nbsp;&nbsp; def handler(HandlerInput input) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; return new HandlerOutput(message: &quot;Hello ${input.who}&quot;)
+&nbsp;&nbsp;&nbsp; }
+}</code></pre> 
+<p>Just like the Kotlin example, we have defined a function that takes a simple JSON object containing a “who” key value and build a response containing a “message” key. Note that in this case we are not using the Input/Output Stream form of the handler function, but rather we are letting AWS Lambda serialize the input JSON object into the type HandlerInput. To accomplish this, AWS Lambda uses the Jackson library and handles the serialization for us.</p> 
+<p>Let’s go ahead and compile and package this Groovy example.</p> 
+<pre><code class="lang-bash">git clone https://github.com/awslabs/lambda-kotlin-groovy-example
+cd lambda-kotlin-groovy-example/groovy
+./gradlew shadowJar</code></pre> 
+<p>Once packaged, a JAR file containing all necessary dependencies will be available at “build/libs/ jvmlangs-groovy-1.0-SNAPSHOT-all.jar”. Now let’s deploy this package to AWS Lambda.</p> 
+<pre><code class="lang-bash">aws lambda create-function --region us-east-1 --function-name groovy-hello \
+--zip-file fileb://build/libs/jvmlangs-groovy-1.0-SNAPSHOT-all.jar \
+--role arn:aws:iam::&lt;account_id&gt;:role/lambda_basic_execution \
+--handler com.aws.blog.jvmlangs.groovy.Main::handler --runtime java8 \
+--timeout 15 --memory-size 128</code></pre> 
+<p>Once deployed, we can test the function by invoking the lambda function from the CLI.</p> 
+<pre><code class="lang-bash">aws lambda invoke --function-name groovy-hello --payload '{&quot;who&quot;: &quot;AWS Fan&quot;}' output.txt
+cat output.txt</code></pre> 
+<p>If successful, you’ll see an output of <code class="lang-json">“{&quot;message&quot;:&quot;Hello AWS Fan&quot;}”</code>.</p> 
+<h4>Gradle Build Tool</h4> 
+<p>Finally, let’s touch up on how we built the JAR package from the Kotlin and Groovy sources above. To build the JARs we used the <a href="https://gradle.org/">Gradle</a> build tool. Gradle builds a project by reading instructions from a file called “build.gradle”. This is a file written in Gradle’s Groovy Domain Specific Langauge (DSL). You can find more information on the gradle build file by looking at their <a href="https://gradle.org/docs">documentation</a>. Let’s take a look at the Gradle build files we used for this post.</p> 
+<p>For the Kotlin example, this is the build file we used.</p> 
+<pre><code class="lang-gradle">buildscript {
+&nbsp;&nbsp;&nbsp; repositories {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mavenCentral()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jcenter()
+&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; dependencies {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath &quot;org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath &quot;com.github.jengelman.gradle.plugins:shadow:1.2.3&quot;
+&nbsp;&nbsp;&nbsp; }
+}
+group 'com.aws.blog.jvmlangs.kotlin'
+version '1.0-SNAPSHOT'
+apply plugin: 'kotlin'
+apply plugin: 'com.github.johnrengelman.shadow'
+repositories {
+&nbsp;&nbsp;&nbsp; mavenCentral()
+}
+dependencies {
+&nbsp;&nbsp;&nbsp; compile &quot;org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version&quot;
+&nbsp;&nbsp;&nbsp; compile &quot;com.fasterxml.jackson.module:jackson-module-kotlin:2.8.2&quot;
+}</code></pre> 
+<p>For the Groovy example this is the build file we used.</p> 
+<pre><code class="lang-gradle">buildscript {
+&nbsp;&nbsp;&nbsp; repositories {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jcenter()
+&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; dependencies {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.3'
+&nbsp;&nbsp;&nbsp; }
+}
+group 'com.aws.blog.jvmlangs.groovy'
+version '1.0-SNAPSHOT'
+apply plugin: 'groovy'
+apply plugin: 'com.github.johnrengelman.shadow'
+repositories {
+&nbsp;&nbsp;&nbsp; mavenCentral()
+}
+dependencies {
+&nbsp;&nbsp;&nbsp; compile 'org.codehaus.groovy:groovy-all:2.3.11'
+&nbsp;&nbsp;&nbsp; testCompile group: 'junit', name: 'junit', version: '4.11'
+}</code></pre> 
+<p>As you can see, the build files for both Kotlin and Groovy files are very similar. For the Kotlin project we define a dependency on the Jackson Kotlin module. Also, for each respective language we include the language supporting libraries (kotlin-stdlib and groovy-all respectively).</p> 
+<p>In addition, you will notice that we are using a plugin called “shadow”. We use this plugin to package all the project dependencies into one JAR by using the Gradle task “shadowJar”. You can find more information on Shadow in their <a href="http://imperceptiblethoughts.com/shadow/">documentation</a>.</p> 
+<h4>Final Words</h4> 
+<p>Don’t stop here though! Take a look at other JVM languages and get them running on AWS Lambda with the Java 8 runtime. Maybe start with <a href="http://clojure.org/">Clojure</a>? or <a href="http://www.scala-lang.org/">Scala</a>?</p> 
+<p>Also take a look <a href="https://github.com/aws/aws-lambda-java-libs">AWS Lambda Java libraries</a> provided by AWS. They provide interfaces and models to make handling events from <a href="http://docs.aws.amazon.com/lambda/latest/dg/invoking-lambda-function.html">event sources</a> easier to handle.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2430');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
+<time property="datePublished" datetime="2017-06-20T12:56:00+00:00">20 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2369" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2369&amp;disqus_title=Building+Loosely+Coupled%2C+Scalable%2C+C%23+Applications+with+Amazon+SQS+and+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2369');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h5>&nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png"><img class="alignnone size-full wp-image-2371" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png" alt="" width="203" height="160" /></a><br /> Stephen Liedig, Solutions Architect</h5> 
+<p>&nbsp;</p> 
+<p>One of the many challenges professional software architects and developers face is how to make cloud-native applications scalable, fault-tolerant, and highly available.</p> 
+<p>Fundamental to your project success is understanding the importance of making systems highly cohesive and loosely coupled. That means considering the multi-dimensional facets of system coupling to support the distributed nature of the applications that you are building for the cloud.</p> 
+<p>By that, I mean addressing not only the application-level coupling (managing incoming and outgoing dependencies), but also considering the impacts of of platform, spatial, and temporal coupling of your systems. Platform coupling relates to the interoperability (or lack thereof) of heterogeneous systems components. Spatial coupling deals with managing components at a network topology level or protocol level. Temporal, or runtime coupling, refers to the ability of a component within your system to do any kind of meaningful work while it is performing a synchronous, blocking operation.</p> 
+<p>The AWS messaging services, <a href="https://aws.amazon.com/sqs/">Amazon SQS</a> and <a href="https://aws.amazon.com/sns/">Amazon SNS</a>, help you deal with these forms of coupling by providing mechanisms for:</p> 
+<li>Reliable, durable, and fault-tolerant delivery of messages between application components</li> 
+<li>Logical decomposition of systems and increased autonomy of components</li> 
+<li>Creating unidirectional, non-blocking operations, temporarily decoupling system components at runtime</li> 
+<li>Decreasing the dependencies that components have on each other through standard communication and network channels</li> 
+<p>Following on the recent topic, <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a>, in this post, I look at some of the ways you can introduce SQS and SNS into your architectures to decouple your components, and show how you can implement them using C#.<span id="more-2369"></span></p> 
+<h3>Walkthrough</h3> 
+<p>To illustrate some of these concepts, consider a web application that processes customer orders. As good architects and developers, you have followed best practices and made your application scalable and highly available. Your solution included implementing load balancing, dynamic scaling across multiple Availability Zones, and persisting orders in a Multi-AZ Amazon RDS database instance, as in the following diagram.</p> 
+<p><img class="aligncenter wp-image-2373 size-large" title="Order_Processing_Application" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/WebApplicationDiagram1-1024x552.png" alt="" width="640" height="345" /><br /> In this example, the application is responsible for handling and persisting the order data, as well as dealing with increases in traffic for popular items.</p> 
+<p>One potential point of vulnerability in the order processing workflow is in saving the order in the database. The business expects that every order has been persisted into the database. However, any potential deadlock, race condition, or network issue could cause the persistence of the order to fail. Then, the order is lost with no recourse to restore the order.</p> 
+<p>With good logging capability, you may be able to identify when an error occurred and which customer order failed. This wouldn’t allow you to “restore” the transaction, and by that stage, your customer is no longer your customer.</p> 
+<p>As illustrated in the following diagram, introducing an SQS queue helps improve your ordering application. Using the queue isolates the processing logic into its own component and runs it in a separate process from the web application. This, in turn, allows the system to be more resilient to spikes in traffic, while allowing work to be performed only as fast as necessary in order to manage costs.</p> 
+<p><img class="aligncenter wp-image-2379 size-large" title="Order_Processing_SQS" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/CustomOrderQueue-1024x632.png" alt="" width="640" height="395" /><br /> In addition, you now have a mechanism for persisting orders as messages (with the queue acting as a temporary database), and have moved the scope of your transaction with your database further down the stack. In the event of an application exception or transaction failure, this ensures that the order processing can be retired or redirected to the Amazon SQS Dead Letter Queue (DLQ), for re-processing at a later stage. (See the recent post, <a href="https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/">Using Amazon SQS Dead-Letter Queues to Control Message Failure,</a> for more information on dead-letter queues.)</p> 
+<h3>Scaling the order processing nodes</h3> 
+<p>This change allows you now to scale the web application frontend independently from the processing nodes. The frontend application can continue to scale based on metrics such as CPU usage, or the number of requests hitting the load balancer. Processing nodes can scale based on the number of orders in the queue. Here is an example of scale-in and scale-out alarms that you would associate with the scaling policy.</p> 
+<p><strong class="lang-bash">Scale-out Alarm</strong></p> 
+<pre><code class="lang-powershell">aws cloudwatch put-metric-alarm --alarm-name AddCapacityToCustomerOrderQueue --metric-name ApproximateNumberOfMessagesVisible --namespace &quot;AWS/SQS&quot; 
+--statistic Average --period 300 --threshold 3 --comparison-operator GreaterThanOrEqualToThreshold --dimensions Name=QueueName,Value=customer-orders
+--evaluation-periods 2 --alarm-actions &lt;arn of the scale-out autoscaling policy&gt;
+</code></pre> 
+<p><strong>Scale-in Alarm</strong></p> 
+<pre><code class="lang-powershell">aws cloudwatch put-metric-alarm --alarm-name RemoveCapacityFromCustomerOrderQueue --metric-name ApproximateNumberOfMessagesVisible --namespace &quot;AWS/SQS&quot; 
+--statistic Average --period 300 --threshold 1 --comparison-operator LessThanOrEqualToThreshold --dimensions Name=QueueName,Value=customer-orders
+--evaluation-periods 2 --alarm-actions &lt;arn of the scale-in autoscaling policy&gt;
+</code></pre> 
+<p>In the above example, use the A<em>pproximateNumberOfMessagesVisible</em> metric to discover the queue length and drive the scaling policy of the Auto Scaling group. Another useful metric is <em>ApproximateAgeOfOldestMessage</em>, when applications have time-sensitive messages and developers need to ensure that messages are processed within a specific time period.</p> 
+<h3>Scaling the order processing implementation</h3> 
+<p>On top of scaling at an infrastructure level using Auto Scaling, make sure to take advantage of the processing power of your <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances by using as many of the available threads as possible. There are several ways to implement this. In this post, we build a Windows service that uses the <strong>BackgroundWorker</strong> class to process the messages from the queue.</p> 
+<p>Here’s a closer look at the implementation. In the first section of the consuming application, use a loop to continually poll the queue for new messages, and construct a <strong>ReceiveMessageRequest</strong> variable.</p> 
+<pre><code class="lang-csharp">public static void PollQueue()
+{
+while (_running)
+{
+Task&lt;ReceiveMessageResponse&gt; receiveMessageResponse;
+// Pull messages off the queue
+using (var sqs = new AmazonSQSClient())
+{
+const int maxMessages = 10;  // 1-10
+//Receiving a message
+var receiveMessageRequest = new ReceiveMessageRequest
+{
+// Get URL from Configuration
+QueueUrl = _queueUrl, 
+// The maximum number of messages to return. 
+// Fewer messages might be returned. 
+MaxNumberOfMessages = maxMessages, 
+// A list of attributes that need to be returned with message.
+AttributeNames = new List&lt;string&gt; { &quot;All&quot; },
+// Enable long polling. 
+// Time to wait for message to arrive on queue.
+WaitTimeSeconds = 5 
+};
+receiveMessageResponse = sqs.ReceiveMessageAsync(receiveMessageRequest);
+}
+</code></pre> 
+<p>The<strong> WaitTimeSeconds</strong> property of the <strong>ReceiveMessageRequest</strong> specifies the duration (in seconds) that the call waits for a message to arrive in the queue before returning a response to the calling application. There are a few benefits to using long polling:</p> 
+<li>It reduces the number of empty responses by allowing SQS to wait until a message is available in the queue before sending a response.</li> 
+<li>It eliminates false empty responses by querying all (rather than a limited number) of the servers.</li> 
+<li>It returns messages as soon any message becomes available.</li> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-long-polling.html">Amazon SQS Long Polling</a>.</p> 
+<p>After you have returned messages from the queue, you can start to process them by looping through each message in the response and invoking a new <strong>BackgroundWorker</strong> thread.</p> 
+<pre><code class="lang-csharp">// Process messages
+if (receiveMessageResponse.Result.Messages != null)
+{
+foreach (var message in receiveMessageResponse.Result.Messages)
+{
+Console.WriteLine(&quot;Received SQS message, starting worker thread&quot;);
+// Create background worker to process message
+BackgroundWorker worker = new BackgroundWorker();
+worker.DoWork += (obj, e) =&gt; ProcessMessage(message);
+worker.RunWorkerAsync();
+}
+}
+else
+{
+Console.WriteLine(&quot;No messages on queue&quot;);
+}
+</code></pre> 
+<p>The event handler, <strong>ProcessMessage</strong>, is where you implement business logic for processing orders. It is important to have a good understanding of how long a typical transaction takes so you can set a message <strong>VisibilityTimeout</strong> that is long enough to complete your operation. If order processing takes longer than the specified timeout period, the message becomes visible on the queue. Other nodes may pick it and process the same order twice, leading to unintended consequences.</p> 
+<h3>Handling Duplicate Messages</h3> 
+<p>In order to manage duplicate messages, seek to make your processing application idempotent. In mathematics, idempotent describes a function that produces the same result if it is applied to itself:</p> 
+<p style="text-align: center">f(x) = f(f(x))</p> 
+<p>No matter how many times you process the same message, the end result is the same (definition from Enterprise Integration Patterns: Designing, Building, and Deploying Messaging Solutions, Hohpe and Wolf, 2004).</p> 
+<p>There are several strategies you could apply to achieve this:</p> 
+<li>Create messages that have inherent idempotent characteristics. That is, they are non-transactional in nature and are unique at a specified point in time. Rather than saying “place new order for Customer A,” which adds a duplicate order to the customer, use “place order &lt;orderid&gt; on &lt;timestamp&gt; for Customer A,” which creates a single order no matter how often it is persisted.</li> 
+<li>Deliver your messages via an <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html">Amazon SQS FIFO queue</a>, which provides the benefits of message sequencing, but also mechanisms for content-based deduplication. You can deduplicate using the <strong>MessageDeduplicationId</strong> property on the <strong>SendMessage</strong> request or by enabling content-based deduplication on the queue, which generates a hash for <strong>MessageDeduplicationId</strong>, based on the content of the message, not the attributes.</li> 
+<pre><code class="lang-csharp">var sendMessageRequest = new SendMessageRequest
+{
+QueueUrl = _queueUrl,
+MessageBody = JsonConvert.SerializeObject(order),
+MessageGroupId = Guid.NewGuid().ToString(&quot;N&quot;),
+MessageDeduplicationId = Guid.NewGuid().ToString(&quot;N&quot;)
+};
+</code></pre> 
+<li>If using SQS FIFO queues is not an option, keep a message log of all messages attributes processed for a specified period of time, as an alternative to message deduplication on the receiving end. Verifying the existence of the message in the log before processing the message adds additional computational overhead to your processing. This can be minimized through low latency persistence solutions such as Amazon DynamoDB. Bear in mind that this solution is dependent on the successful, distributed transaction of the message and the message log.</li> 
+<h3>Handling exceptions</h3> 
+<p>Because of the distributed nature of SQS queues, it does not automatically delete the message. Therefore, you must explicitly delete the message from the queue after processing it, using the message <strong>ReceiptHandle</strong> property (see the following code example).</p> 
+<p>However, if at any stage you have an exception, avoid handling it as you normally would. The intention is to make sure that the message ends back on the queue, so that you can gracefully deal with intermittent failures. Instead, log the exception to capture diagnostic information, and swallow it.</p> 
+<p>By not explicitly deleting the message from the queue, you can take advantage of the <strong>VisibilityTimeout</strong> behavior described earlier. Gracefully handle the message processing failure and make the unprocessed message available to other nodes to process.</p> 
+<p><img class="aligncenter wp-image-2378 size-large" title="SQS_queue_settings" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/ConfigureCustomerOrders-1024x732.png" alt="" width="640" height="458" /></p> 
+<p>In the event that subsequent retries fail, SQS automatically moves the message to the configured DLQ after the configured number of receives has been reached. You can further investigate why the order process failed. Most importantly, the order has not been lost, and your customer is still your customer.</p> 
+<pre><code class="lang-csharp">private static void ProcessMessage(Message message)
+{
+using (var sqs = new AmazonSQSClient())
+{
+try
+{
+Console.WriteLine(&quot;Processing message id: {0}&quot;, message.MessageId);
+// Implement messaging processing here
+// Ensure no downstream resource contention (parallel processing)
+// &lt;your order processing logic in here…&gt;
+Console.WriteLine(&quot;{0} Thread {1}: {2}&quot;, DateTime.Now.ToString(&quot;s&quot;), Thread.CurrentThread.ManagedThreadId, message.MessageId);
+// Delete the message off the queue. 
+// Receipt handle is the identifier you must provide 
+// when deleting the message.
+var deleteRequest = new DeleteMessageRequest(_queueName, message.ReceiptHandle);
+sqs.DeleteMessageAsync(deleteRequest);
+Console.WriteLine(&quot;Processed message id: {0}&quot;, message.MessageId);
+}
+catch (Exception ex)
+{
+// Do nothing.
+// Swallow exception, message will return to the queue when 
+// visibility timeout has been exceeded.
+Console.WriteLine(&quot;Could not process message due to error. Exception: {0}&quot;, ex.Message);
+}
+}
+}
+</code></pre> 
+<h3>Using SQS to adapt to changing business requirements</h3> 
+<p>One of the benefits of introducing a <a href="https://aws.amazon.com/message-queue/">message queue</a> is that you can accommodate new business requirements without dramatically affecting your application.</p> 
+<p>If, for example, the business decided that all orders placed over $5000 are to be handled as a priority, you could introduce a new “priority order” queue. The way the orders are processed does not change. The only significant change to the processing application is to ensure that messages from the “priority order” queue are processed before the “standard order” queue.</p> 
+<p>The following diagram shows how this logic could be isolated in an “order dispatcher,” whose only purpose is to route order messages to the appropriate queue based on whether the order exceeds $5000. Nothing on the web application or the processing nodes changes other than the target queue to which the order is sent. The rates at which orders are processed can be achieved by modifying the poll rates and scalability settings that I have already discussed.</p> 
+<p><img class="aligncenter wp-image-2377 size-large" title="Order_Dispatcher" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher-1024x534.png" alt="" width="640" height="334" /></p> 
+<h3>Extending the design pattern with Amazon SNS</h3> 
+<p>Amazon SNS supports reliable <a href="https://aws.amazon.com/pub-sub-messaging/">publish-subscribe (pub-sub) scenarios</a> and push notifications to known endpoints across a wide variety of protocols. It eliminates the need to periodically check or poll for new information and updates. SNS supports:</p> 
+<li>Reliable storage of messages for immediate or delayed processing</li> 
+<li>Publish / subscribe – direct, broadcast, targeted “push” messaging</li> 
+<li>Multiple subscriber protocols</li> 
+<li>Amazon SQS, HTTP, HTTPS, email, SMS, mobile push, AWS Lambda</li> 
+<p>With these capabilities, you can provide parallel asynchronous processing of orders in the system and extend it to support any number of different business use cases without affecting the production environment. This is commonly referred to as a “fanout” scenario.</p> 
+<p>Rather than your web application pushing orders to a queue for processing, send a notification via SNS. The SNS messages are sent to a topic and then replicated and pushed to multiple SQS queues and Lambda functions for processing.</p> 
+<p><img class="aligncenter wp-image-2376 size-large" title="Order_Dispatcher_Fanout" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher2-1024x718.png" alt="" width="640" height="449" /></p> 
+<p>As the diagram above shows, you have the development team consuming “live” data as they work on the next version of the processing application, or potentially using the messages to troubleshoot issues in production.</p> 
+<p>Marketing is consuming all order information, via a Lambda function that has subscribed to the SNS topic, inserting the records into an Amazon Redshift warehouse for analysis.</p> 
+<p>All of this, of course, is happening without affecting your order processing application.</p> 
+<h3>Summary</h3> 
+<p>While I haven’t dived deep into the specifics of each service, I have discussed how these services can be applied at an architectural level to build loosely coupled systems that facilitate multiple business use cases. I’ve also shown you how to use infrastructure and application-level scaling techniques, so you can get the most out of your EC2 instances.</p> 
+<p>One of the many benefits of using these managed services is how quickly and easily you can implement powerful messaging capabilities in your systems, and lower the capital and operational costs of managing your own messaging middleware.</p> 
+<p>Using Amazon SQS and Amazon SNS together can provide you with a powerful mechanism for decoupling application components. This should be part of design considerations as you architect for the cloud.</p> 
+<p>For more information, see the <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/Welcome.html">Amazon SQS Developer Guide</a> and <a href="http://docs.aws.amazon.com/sns/latest/dg/welcome.html">Amazon SNS Developer Guide</a>. You’ll find tutorials on all the concepts covered in this post, and more. To can get started using the AWS console or SDK of your choice visit:</p> 
+<li><a href="https://aws.amazon.com/sqs/getting-started/">Getting Started with Amazon SQS</a></li> 
+<li><a href="https://aws.amazon.com/sns/getting-started/">Getting Started with Amazon SNS</a></li> 
+<p>Happy messaging!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-notification-service/" rel="tag">Amazon Simple Notification Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-queue-service/" rel="tag">Amazon Simple Queue Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sns/" rel="tag">Amazon SNS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sqs/" rel="tag">Amazon SQS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloud-messaging/" rel="tag">cloud messaging</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-queues/" rel="tag">message queues</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-topics/" rel="tag">message topics</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a>, <a href="https://aws.amazon.com/blogs/compute/tag/notifications/" rel="tag">notifications</a>, <a href="https://aws.amazon.com/blogs/compute/tag/pubsub/" rel="tag">pub/sub</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2369');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Secure API Access with Amazon Cognito Federated Identities, Amazon Cognito User Pools, and Amazon API Gateway</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ed Lima</span></span> | on 
+<time property="datePublished" datetime="2017-06-19T06:31:15+00:00">19 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-api-gateway/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-cognito/" title="View all posts in Amazon Cognito*"><span property="articleSection">Amazon Cognito*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/secure-api-access-with-amazon-cognito-federated-identities-amazon-cognito-user-pools-and-amazon-api-gateway/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image002-1.png"><img class="alignnone size-full wp-image-2274" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image002-1.png" alt="" width="90" height="120" /></a></p> 
+<p>Ed Lima, Solutions Architect</p> 
+<p>&nbsp;</p> 
+<p>Our identities are what define us as human beings. Philosophical discussions aside, it also applies to our day-to-day lives. For instance, I need my work badge to get access to my office building or my passport to travel overseas. My identity in this case is attached to my work badge or passport. As part of the system that checks my access, these documents or objects help define whether I have access to get into the office building or travel internationally.</p> 
+<p>This exact same concept can also be applied to cloud applications and APIs. To provide secure access to your application users, you define who can access the application resources and what kind of access can be granted. <span id="more-2229"></span>Access is based on identity controls that can confirm authentication (AuthN) and authorization (AuthZ), which are different concepts. According to <a href="https://en.wikipedia.org/wiki/Authentication">Wikipedia</a>:</p> 
+<p>&nbsp;</p> 
+<blockquote> 
+<p>“<em>The process of authorization is distinct from that of authentication. Whereas authentication is the process of verifying that “you are who you say you are,” authorization is the process of verifying that “you are permitted to do what you are trying to do.” This does not mean authorization presupposes authentication; an anonymous agent could be authorized to a limited action set.</em>”</p> 
+</blockquote> 
+<p><a href="https://aws.amazon.com/cognito">Amazon Cognito</a> allows building, securing, and scaling a solution to handle user management and authentication, and to sync across platforms and devices. In this post, I discuss the different ways that you can use Amazon Cognito to authenticate API calls to <a href="https://aws.amazon.com/apigateway">Amazon API Gateway</a> and secure access to your own API resources.</p> 
+<p>&nbsp;</p> 
+<b>Amazon Cognito Concepts</b> 
+<p>&nbsp;</p> 
+<p>It’s important to understand that Amazon Cognito provides three different services:</p> 
+<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-identity.html">Amazon Cognito Federated Identities </a></li> 
+<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html">Amazon Cognito User Pools</a></li> 
+<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-sync.html">Amazon Cognito Sync</a></li> 
+<p>Today, I discuss the use of the first two. One service doesn’t need the other to work; however, they can be configured to work together.<br /> &nbsp;</p> 
+<h3>Amazon Cognito Federated Identities</h3> 
+<p>&nbsp;<br /> To use Amazon Cognito Federated Identities in your application, create an identity pool. An identity pool is a store of user data specific to your account. It can be configured to require an identity provider (IdP) for user authentication, after you enter details such as app IDs or keys related to that specific provider.</p> 
+<p>After the user is validated, the provider sends an identity token to Amazon Cognito Federated Identities. In turn, Amazon Cognito Federated Identities contacts the <a href="http://docs.aws.amazon.com/STS/latest/APIReference/Welcome.html">AWS Security Token Service</a> (AWS STS) to retrieve temporary AWS credentials based on a configured, authenticated IAM role linked to the identity pool. The role has appropriate IAM policies attached to it and uses these policies to provide access to other AWS services.</p> 
+<p>Amazon Cognito Federated Identities currently supports the IdPs listed in the following graphic.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/18/CognitoDiagram.png"><img class="aligncenter wp-image-2309 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/18/CognitoDiagram.png" alt="" width="1275" height="714" /></a><br /> 
+<!--more--><br /> &nbsp;</p> 
+<p>In a nutshell, Amazon Cognito Federated Identities can be compared to a token vending machine that uses STS as a backend. The simplified user authentication flow for a given provider is:</p> 
+<ol> 
+<li>App sends user credentials to provider, usually user name and password.</li> 
+<li>After the user is authenticated, the provider sends a valid token back to the application.</li> 
+<li>The application sends the token to the identity pool associated with it.</li> 
+<li>Amazon Cognito Federated Identities validates the token with the IdP.</li> 
+<li>If the token is valid, Amazon Cognito Federated Identities contacts STS to retrieve temporary access credentials (access key, secret key, and session token) based on the authenticated IAM role associated with the identity pool.</li> 
+<li>App contacts the specific AWS service with the temporary credentials.</li> 
+</ol> 
+<p>For more information about the different authentication flows, see the <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html">Authentication Flow</a> topic and the <a href="https://aws.amazon.com/blogs/mobile/understanding-amazon-cognito-authentication-part-4-enhanced-flow/">Understanding Amazon Cognito Authentication Part 4: Enhanced Flow</a> blog post.</p> 
+<p>If you don’t want to use an IdP, Amazon Cognito Federated Identities can also support unauthenticated identities by providing a unique identifier and AWS credentials for users who do not authenticate with an IdP. If your application allows customers to connect as a guest user without logging in, you can enable access for unauthenticated identities. In that case, STS sends temporary credentials based on a specific unauthenticated IAM role with appropriate policies. In these cases, AWS strongly recommends that you stick with the principle of the least privilege, only allowing access to perform a certain task and nothing else.<br /> &nbsp;</p> 
+<h3>Amazon Cognito User Pools</h3> 
+<p>&nbsp;<br /> Amazon Cognito User Pools, on other hand is a full-fledged IdP that you can use to maintain a user directory and add sign-up and sign-in support to your mobile or web application. It uses JSON Web Tokens (JWTs) to authenticate and validate users. JWT is an open standard that defines a compact and self-contained way for securely transmitting information between parties as a JSON object. This information can be verified and trusted because it is digitally signed.</p> 
+<p>Amazon Cognito User Pools and identity pools can be used in conjunction to provide access to your application. An Amazon Cognito User Pools user authenticated with a user name and password can send a JWT to an associated identity pool. In turn, the identity pool sends temporary AWS credentials back to the application to access other AWS services. There’s no difference with the authentication flow mentioned above for other IdPs.</p> 
+<p>To use a metaphor, Amazon Cognito User Pools provided you with a passport (JWT) that you can use at the airport counter to retrieve a boarding pass (access credentials) from an identity pool. With your valid boarding pass, you are then allowed to go to the airport gate and board your flight to the AWS Cloud, which is a fitting analogy for this post. The boarding pass is only valid for a specific time. In application terms, the token (passport) authenticates the user and the issued temporary credentials (boarding pass) authorize the access to connect (board).</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image005.png"><img class="aligncenter wp-image-2276 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image005-300x175.png" alt="" width="300" height="175" /></a></p> 
+<p>&nbsp;</p> 
+<b>A Practical Example – Integrating Amazon Cognito with API Gateway</b> 
+<p>&nbsp;</p> 
+<p>To demonstrate the different ways that Amazon Cognito User Pools and Amazon Cognito Federated Identities can be used to authorize access to your API Gateway API, use a simple AngularV4 single page web application:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image007.png"><img class="aligncenter wp-image-2277 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image007.png" alt="" width="940" height="449" /></a></p> 
+<p>&nbsp;</p> 
+<p>Here’s the basic concept. You have a sample application that authenticates its users with three different IdPs. You also have an API Gateway API with three different resources (paths), one for each type of user. Each provider can only access one API-specific resource/path and cannot access any other resource allocated to other providers.</p> 
+<p>After authentication, the user retrieves specific user attributes such as first name, last name, and email details from their provider and sends a request to the API resource (POST) with the data. After access is granted, an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function is invoked to add the details of the specific user to an <a href="https://aws.amazon.com/dynamodb">Amazon DynamoDB</a> table.</p> 
+<p>You are using a single identity pool and a single API Gateway API to demonstrate that you can secure API access using multiple providers and multiple AuthN/AuthZ options in different ways, but sharing the same resources.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image009.png"><img class="aligncenter wp-image-2278 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image009.png" alt="" width="939" height="342" /></a></p> 
+<p>&nbsp;</p> 
+<p>Both “/google” and “/cip” resources GET/POST methods are configured and secured with IAM authorization. The GET/POST methods in “/cup”, on the other hand, are secured with a user pool authorizer.</p> 
+<p>You can find the application code and a SAM template with instructions to deploy all the backend services in the <strong><a href="https://github.com/awslabs/aws-cognito-apigw-angular-auth">aws-cognito-apigw-angular-auth</a></strong> GitHub repository.</p> 
+<p>There’s yet another way to authenticate API calls with Amazon Cognito: using a Lambda custom authorizer. I’m not covering it in this post; however, the <a href="https://aws.amazon.com/blogs/mobile/integrating-amazon-cognito-user-pools-with-api-gateway/">Integrating Amazon Cognito User Pools with API Gateway</a> post showcases this specific use case.</p> 
+<p>For the first provider, use a public IdP, such as Google. After authenticating with Google credentials, the application collects the user details and then issue a POST call to your API.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image011.png"><img class="aligncenter wp-image-2279 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image011.png" alt="" width="939" height="489" /></a></p> 
+<p>&nbsp;</p> 
+<p>The DynamoDB table is updated with the latest user details and you can retrieve the data about the user making the API call. Notice the ID in blue in the user information card.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image013.png"><img class="aligncenter wp-image-2280 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image013.png" alt="" width="941" height="405" /></a></p> 
+<p>&nbsp;</p> 
+<p>After Amazon Cognito validates a user, it creates a unique identity ID for that user and links it with the specific IdP.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image015.png"><img class="aligncenter size-full wp-image-2281" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image015.png" alt="" width="572" height="347" /></a></p> 
+<p>&nbsp;</p> 
+<p>API Gateway is able to identify the identity ID based on the IAM credentials sent to the API method using the variable <em>$context.identity.cognitoIdentityId</em> in the integration request. A body mapping template adds the ID data automatically to the payload sent to the Lambda function, as follows:</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-json">#set($inputRoot = $input.path('$'))
+{
+&quot;operation&quot;: &quot;create&quot;,
+&quot;payload&quot;: {
+&quot;Item&quot; : {
+&quot;userId&quot; : &quot;$context.identity.cognitoIdentityId&quot;,
+&quot;name&quot; : &quot;$inputRoot.name&quot;,
+&quot;surname&quot; : &quot;$inputRoot.surname&quot;,
+&quot;email&quot; : &quot;$inputRoot.email&quot;,
+&quot;provider&quot;: &quot;Google&quot;
+}
+}
+}
+</code></pre> 
+<p>&nbsp;</p> 
+<p>Lambda processes the data and sends it in a proper format to DynamoDB, which uses the identity ID as a hash key. Due to the random and unique nature of the ID, it’s perfect to be used for querying the table.</p> 
+<p>To guarantee that the Google users can only access their specific allocated API resources, attach the following authenticated role to the identity pool. The users assume this IAM role when validated and it explicitly allows only GET (read) and POST (write) access to the API resource “/google”:</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;execute-api:Invoke&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/GET/google&quot;,
+&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/POST/google&quot;
+]
+}
+]
+}
+</code></pre> 
+<p>&nbsp;</p> 
+<p>It’s time to sign in with the second user. This user is authenticated using Amazon Cognito User Pools as IdP. A JWT is used to retrieve temporary AWS credentials from the associated identity pool, same as is used by the Google provider.</p> 
+<p>Using the Test Access card, you can issue API calls to each one of the three different resources to test the credentials. For instance, if the user tries to make an API call to “/cip” using the IAM credentials provided by Amazon Cognito, the access is granted (Status 200). However, if you try to access the “/google” resource, you get access denied (Status 403). You can confirm using the browser developer tools.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image017.png"><img class="aligncenter size-full wp-image-2282" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image017.png" alt="" width="941" height="552" /></a></p> 
+<p>&nbsp;</p> 
+<p>Even if you have the same identity pool in use by different providers (Google and Amazon Cognito User Pools), you can associate another IAM role to a group with Amazon Cognito User Pools. Because the user “jdoe” is part of that group, it inherits the IAM role association.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image019.png"><img class="aligncenter size-full wp-image-2283" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image019.png" alt="" width="454" height="331" /></a></p> 
+<p>&nbsp;</p> 
+<p>The IAM role explicitly allows only GET (read) and POST (write) access to the API resource “/cip”, nothing else.</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;execute-api:Invoke&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/GET/cip&quot;,
+&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/POST/cip&quot;
+]
+}
+]
+}
+</code></pre> 
+<p>&nbsp;</p> 
+<p>The role details are passed in the JWT itself. For that reason, the identity pool allows the role to be assumed. The default authenticated role for the identity pool needs to be DENIED or else your user would also have access to the “/google” resource.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image021.png"><img class="aligncenter size-full wp-image-2284" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image021.png" alt="" width="796" height="512" /></a></p> 
+<p>&nbsp;</p> 
+<p>For the third and final user, skip Amazon Cognito Federated Identities altogether and authenticate the user from the Amazon Cognito User Pool directly to API Gateway using a Cognito user pool authorizer. You can find more information on my previous blog post, <a href="https://aws.amazon.com/blogs/compute/authorizing-access-through-a-proxy-resource-to-amazon-api-gateway-and-aws-lambda-using-amazon-cognito-user-pools/">Authorizing Access Through a Proxy Resource to Amazon API Gateway and AWS Lambda Using Amazon Cognito User Pools</a>.</p> 
+<p>The user can only access the API resource assigned to the user pool and it’s denied for the other API paths:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image023-1.png"><img class="aligncenter size-full wp-image-2285" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image023-1.png" alt="" width="940" height="624" /></a></p> 
+<p>&nbsp;</p> 
+<p>The ID Token (JWT) is sent directly to API Gateway and there’s no IAM role involved in the user validation. The ID in the user information card looks different compared to the previous users. As no cognito identity ID is generated in this scenario, you need another type of unique ID for the user.</p> 
+<p>Test the JWT generated in this particular user session in the API Gateway console, and retrieve user attributes and claims:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image025.png"><img class="aligncenter size-full wp-image-2286" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image025.png" alt="" width="926" height="423" /></a></p> 
+<p>&nbsp;</p> 
+<p>The “sub” attribute is a unique identifier generated by Amazon Cognito User Pools and can be used to track each user from the user pool. You use this attribute as a hash key for the user pool users in the DynamoDB table. Use the variable <em>$context.authorizer.claims.sub</em> in the integration request, and the following body mapping template adds the ID data automatically to the payload sent to the Lambda function:</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-json">#set($inputRoot = $input.path('$'))
+{
+&quot;operation&quot;: &quot;create&quot;,
+&quot;payload&quot;: {
+&quot;Item&quot; : {
+&quot;userId&quot; : &quot;$context.authorizer.claims.sub&quot;,
+&quot;name&quot; : &quot;$context.authorizer.claims.given_name&quot;,
+&quot;surname&quot; : &quot;$context.authorizer.claims.family_name&quot;,
+&quot;email&quot; : &quot;$context.authorizer.claims.email&quot;,
+&quot;provider&quot; : &quot;Cognito User Pools&quot;
+}
+}
+}
+</code></pre> 
+<p>&nbsp;</p> 
+<p>Check the DynamoDB console and confirm that all users were successfully added to the table with the API calls. As each user can only add or retrieve data from their specific API resource and only using their own UserID, the data is unavailable to other users.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image027.png"><img class="aligncenter size-full wp-image-2287" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image027.png" alt="" width="684" height="346" /></a></p> 
+<p>&nbsp;</p> 
+<b>Summary</b> 
+<p>&nbsp;</p> 
+<p>Amazon Cognito provide a rich set of features to authenticate and authorize users. You can take advantage of the built-in flexibility and different options to secure access to your API Gateway API integrating with multiple IdPs.</p> 
+<p>There are distinct and specific use cases to authenticate, secure, and provide access to your API leveraging the integration between Amazon Cognito and API Gateway, depending on the work load and implementation of your application. I covered a couple of different scenarios in this post:</p> 
+<li><strong>Your users are defined and authenticated by an external or public IdP.</strong></li> 
+<p>You used Google for your sample application but it could be Facebook, Twitter, Amazon, OpenID Connect, your own developer IdP, or even an enterprise-level SAML provider, such as Active Directory. Use any IdP that can seamlessly integrate with Amazon Cognito Federated Identities linked with AWS Identity and Access Management roles.</p> 
+<li><strong>Your users are defined in your own IdP powered by Amazon Cognito User Pools, leveraging aditional secure access with IAM permissions.</strong></li> 
+<p>You want to have additional access granularity and security by integrating the authentication with IAM role-based access controls and Amazon Cognito User Pools groups.</p> 
+<li><strong>Your users are defined in your own IdP powered by Amazon Cognito User Pools, leveraging secure JWTs for authentication.</strong></li> 
+<p>You want to authenticate your API calls directly and seamlessly using these tokens and you are not interested in using IAM integration to authorize access with IAM roles.</p> 
+<p>With Amazon Cognito User Pools, there’s no need to worry about the undifferentiated heavy lifting of maintaining your own IdP servers, allowing you to focus on application logic instead. It also gives you more control around your users, groups, applications, and attributes with no dependency on an external public provider.</p> 
+<p>It’s a great balance between control and ease of use as it integrates seamlessly with identity pools for specific scenarios that require the additional use of IAM roles for granular security but can also work directly with JWTs. In addition to all these advantages, you can also integrate Lambda triggers for different sign-in, sign-up, confirmation, validation, and verification workflows to customize and adapt the user identification process even further.</p> 
+<p>The integration between Amazon Cognito and API Gateway allows great flexibility such that you can implement these different authentication scenarios separately or even use all of them in conjunction (as demonstrated with the sample web application). You can provide access to the different API users and resources based on a specific IdP or multiple providers of your choice.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/apigateway/" rel="tag">apigateway</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cognito/" rel="tag">cognito</a>, <a href="https://aws.amazon.com/blogs/compute/tag/dynamodb/" rel="tag">DynamoDB</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using Amazon SQS Dead-Letter Queues to Control Message Failure</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
+<time property="datePublished" datetime="2017-06-07T13:18:10+00:00">07 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2216" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2216&amp;disqus_title=Using+Amazon+SQS+Dead-Letter+Queues+to+Control+Message+Failure&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2216');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h5><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot.jpg"><img class="alignnone wp-image-2218 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot-150x150.jpg" alt="" width="150" height="150" /></a><strong><br /> Michael G. Khmelnitsky, Senior Programmer Writer</strong></h5> 
+<p>&nbsp;</p> 
+<p>Sometimes, messages can’t be processed because of a variety of possible issues, such as erroneous conditions within the producer or consumer application. For example, if a user places an order within a certain number of minutes of creating an account, the producer might pass a message with an empty string instead of a customer identifier. Occasionally, producers and consumers might fail to interpret aspects of the protocol that they use to communicate, causing message corruption or loss. Also, the consumer’s hardware errors might corrupt message payload. For these reasons, messages that can’t be processed in a timely manner are delivered to a <em>dead-letter message queue</em>.<span id="more-2216"></span></p> 
+<p>The recent post <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> gives an overview of messaging in the microservice architecture of modern applications. This post explains how and when you should use dead-letter queues to gain better control over message handling in your applications. It also offers some resources for configuring a dead-letter <a href="https://aws.amazon.com/message-queue/">message queue in Amazon Simple Queue Service (SQS)</a>.</p> 
+<h3>What are the benefits of dead-letter queues?</h3> 
+<p>The main task of a dead-letter queue is handling message failure. A dead-letter queue lets you set aside and isolate messages that can’t be processed correctly to determine why their processing didn’t succeed. Setting up a dead-letter queue allows you to do the following:</p> 
+<li>Configure an alarm for any messages delivered to a dead-letter queue.</li> 
+<li>Examine logs for exceptions that might have caused messages to be delivered to a dead-letter queue.</li> 
+<li>Analyze the contents of messages delivered to a dead-letter queue to diagnose software or the producer’s or consumer’s hardware issues.</li> 
+<li>Determine whether you have given your consumer sufficient time to process messages.</li> 
+<h3>How do high-throughput, unordered queues handle message failure?</h3> 
+<p>High-throughput, unordered queues (sometimes called <em>standard</em> or <em>storage queues</em>) keep processing messages until the expiration of the retention period. This helps ensure continuous processing of messages, which minimizes the chances of your queue being blocked by messages that can’t be processed. It also ensures fast recovery for your queue.</p> 
+<p>In a system that processes thousands of messages, having a large number of messages that the consumer repeatedly fails to acknowledge and delete might increase costs and place extra load on the hardware. Instead of trying to process failing messages until they expire, it is better to move them to a dead-letter queue after a few processing attempts.</p> 
+<p><strong>Note:</strong> This queue type often allows a high number of in-flight messages. If the majority of your messages can’t be consumed and aren’t sent to a dead-letter queue, your rate of processing valid messages can slow down. Thus, to maintain the efficiency of your queue, you must ensure that your application handles message processing correctly.</p> 
+<h3>How do FIFO queues handle message failure?</h3> 
+<p>FIFO (first-in-first-out) queues (sometimes called <em>service bus queues</em>) help ensure exactly-once processing by consuming messages in sequence from a <em>message group</em>. Thus, although the consumer can continue to retrieve ordered messages from another message group, the first message group remains unavailable until the message blocking the queue is processed successfully.</p> 
+<p><strong>Note:</strong> This queue type often allows a lower number of in-flight messages. Thus, to help ensure that your FIFO queue doesn’t get blocked by a message, you must ensure that your application handles message processing correctly.</p> 
+<h3>When should I use a dead-letter queue?</h3> 
+<li><strong>Do</strong> use dead-letter queues with high-throughput, unordered queues. You should always take advantage of dead-letter queues when your applications don’t depend on ordering. Dead-letter queues can help you troubleshoot incorrect message transmission operations. <strong>Note:</strong> Even when you use dead-letter queues, you should continue to monitor your queues and retry sending messages that fail for transient reasons.</li> 
+<li><strong>Do</strong> use dead-letter queues to decrease the number of messages and to reduce the possibility of exposing your system to <em>poison-pill messages</em> (messages that can be received but can’t be processed).</li> 
+<li><strong>Don’t</strong> use a dead-letter queue with high-throughput, unordered queues when you want to be able to keep retrying the transmission of a message indefinitely. For example, don’t use a dead-letter queue if your program must wait for a dependent process to become active or available.</li> 
+<li><strong>Don’t</strong> use a dead-letter queue with a FIFO queue if you don’t want to break the exact order of messages or operations. For example, don’t use a dead-letter queue with instructions in an Edit Decision List (EDL) for a video editing suite, where changing the order of edits changes the context of subsequent edits.</li> 
+<h3>How do I get started with dead-letter queues in Amazon SQS?</h3> 
+<p>Amazon SQS is a fully managed service that offers reliable, highly scalable hosted queues for exchanging messages between applications or microservices. Amazon SQS moves data between distributed application components and helps you decouple these components. It supports both <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html">standard queues</a> and <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html">FIFO queues</a>. To configure a queue as a dead-letter queue, you can use the <a href="http://console.aws.amazon.com/sqs/home">AWS Management Console</a> or the Amazon SQS <code class="lang-setqueueattributes">SetQueueAttributes</code> API action.</p> 
+<p>To get started with dead-letter queues in Amazon SQS, see the following topics in the <em>Amazon SQS Developer Guide</em>:</p> 
+<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/Welcome.html">What is Amazon SQS?</a></li> 
+<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html">Using Amazon SQS Dead-Letter Queues</a></li> 
+<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/MonitorSQSwithCloudWatch.html">Monitoring Amazon SQS Using CloudWatch</a></li> 
+<p>To start working with dead-letter queues programmatically, see the following resources:</p> 
+<li>Java: <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue.html#configure-dead-letter-queue-java">Configure a Dead-Letter Queue with the Amazon SQS API</a></li> 
+<li>Java: <a href="https://aws.amazon.com/blogs/developer/using-amazon-sqs-dead-letter-queues-2/">Using Amazon SQS Dead-Letter Queues</a></li> 
+<li>C#: <a href="https://aws.amazon.com/blogs/developer/using-amazon-sqs-dead-letter-queues/">Using Amazon SQS Dead-Letter Queues</a></li> 
+<li>Lambda: <a href="https://aws.amazon.com/blogs/compute/robust-serverless-application-design-with-aws-lambda-dlq/">Robust Serverless Application Design with AWS Lambda Dead-Letter Queues</a></li> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-queue-service/" rel="tag">Amazon Simple Queue Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sqs/" rel="tag">Amazon SQS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloud-messaging/" rel="tag">cloud messaging</a>, <a href="https://aws.amazon.com/blogs/compute/tag/decoupling/" rel="tag">decoupling</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-queues/" rel="tag">message queues</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a>, <a href="https://aws.amazon.com/blogs/compute/tag/sqs/" rel="tag">sqs</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2216');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Powering your Amazon ECS Cluster with Amazon EC2 Spot Instances</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -979,864 +1682,6 @@ $ docker push $(REPO\_URI):03.17.03.01</code></pre>
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2123');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Introduction (Part 1 of 4)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-05-30T15:03:34+00:00">30 MAY 2017</time> | 
-<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2102" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2102&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Introduction+%28Part+1+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2102');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
-<p>Deriving insights from data is foundational to nearly every organization, and many customers process high volumes of data every day. One common requirement of customers in life sciences is the need to analyze these data in a high-throughput fashion without sacrificing time-to-insight.</p> 
-<p>Such analyses, which tend to be composed of a series of massively parallel processes (MPP) are well suited to the AWS Cloud. Many AWS customers and partners today, such as <a href="https://aws.amazon.com/solutions/case-studies/illumina/">Illumina</a>, <a href="https://aws.amazon.com/solutions/case-studies/dnanexus/">DNAnexus</a>, <a href="https://aws.amazon.com/solutions/case-studies/seven-bridges-genomics/">Seven Bridges Genomics</a>, <a href="https://www.youtube.com/watch?v=AW_JylyCZLM">AstraZeneca</a>, <a href="https://aws.amazon.com/solutions/case-studies/uc-santa-cruz-genomics-institute/">UCSC Genomics Institute</a>, and <a href="https://www.youtube.com/watch?v=ooMA9J7suh8&amp;index=2&amp;list=PLhr1KZpdzukdeX8mQ2qO73bg6UKQHYsHb">Human Longevity, Inc.</a>, have built scalable and elastic genomics processing solutions on AWS.</p> 
-<p>One such use case is genomic sequencing. Modern DNA sequencers, such as Illumina’s <a href="https://www.illumina.com/systems/sequencing-platforms/novaseq.html">NovaSeq</a>, can produce multiple terabytes of raw data each day. The data must then be processed into meaningful information that clinicians and research can act on in a timely fashion. This processing of genomic data is commonly referred to as “secondary analysis”.</p> 
-<p>Most common secondary analysis workflows take raw reads generated from sequencers and then process them in a multi-step workflow to identify the variation in a biological sample compared to a standard genome reference. The individual steps are normally similar to the following:<span id="more-2102"></span></p> 
-<ol> 
-<li>DNA sequences are mapped to a standard genome reference by use of an alignment algorithm, such as Smith-Waterman or Burrows-Wheeler.</li> 
-<li>After the sequences are mapped to the reference, the differences are identified as single nucleotide variations, insertions, deletions, or complex structural variation in a process known as variant calling.</li> 
-<li>The resulting variants are often combined with other information to identify genomic variants highly correlated with disease or drug response. They might also be analyzed in the context of clinical data such as to identify disease susceptibility or state for a patient.</li> 
-<li>Along the way, quality metrics are collected or computed to ensure that the generated data is of the appropriate quality for use in requisite research or clinical settings.</li> 
-</ol> 
-<p>In this post series, you can build a secondary analysis workflow similar to the one just described. Here is a diagram of the workflow:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png"><img class="aligncenter size-full wp-image-2112" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/secondary_analysis.png" alt="" width="2241" height="554" /></a></p> 
-<hr /> 
-<b id="toc_1">Secondary analysis is a batch workflow</b> 
-<p>At its core, a genomics pipeline is similar to a series of Extract Transform and Load (ETL) steps that convert raw files from a DNA sequencer to a list of variants for one or more individuals. Each step extracts a set of input files from a data source, processes them as a compute-intensive workload (transform), and then loads the output into another location for subsequent storage or analysis.</p> 
-<p>These steps are often chained together to build a flexible genomics processing workflow. The files can then be used for downstream analysis, such as population scale analytics with <a href="https://aws.amazon.com/blogs/big-data/interactive-analysis-of-genomic-datasets-using-amazon-athena/">Amazon Athena</a> or <a href="https://blogs.aws.amazon.com/bigdata/post/Tx1GE3J0NATVJ39/Will-Spark-Power-the-Data-behind-Precision-Medicine">Spark on Amazon EMR</a>. These ETL processes can be represented as individual batch steps in an overall workflow.</p> 
-<p>When we discuss batch processing with customers, we often focus on the following three layers:</p> 
-<p><strong>Jobs (analytical modules):</strong> These jobs are individual units of work that take a set of inputs, run a single process, and produce a set of outputs. In this series, you use Docker containers to define these analytical modules. For genomics, these commonly include alignment, variant calling, quality control, or another module in your workflow. <a href="https://aws.amazon.com/ecs">Amazon ECS</a> is an AWS service that orchestrates and runs these Docker containerized modules on top of <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances.</p> 
-<p><strong><a href="https://aws.amazon.com/batch/">Batch engine</a>:</strong> This is a framework for submitting individual analytical modules with the appropriate requirements for computational resources, such as memory and number of CPUs. Each step of the analysis pipeline requires a definition of how to run a job:</p> 
-<li>Computational resources (disk, memory, CPU)</li> 
-<li>The compute environment to run it in (Docker container, runtime parameters)</li> 
-<li>Information about the priority of different jobs</li> 
-<li>Any dependencies between jobs</li> 
-<p>You can leverage concepts such as container placement and bin packing to maximize performance of your genomic pipeline while concurrently optimizing for cost. We will use <a href="https://aws.amazon.com/batch/">AWS Batch</a> for this layer. AWS Batch dynamically provisions the optimal quantity and type of compute resources (for example, CPU or memory optimized instances) based on the volume and specific resource requirements of the submitted batch jobs.</p> 
-<p><strong>Workflow orchestration:</strong> This layer sits on top of the batch engine and allows you to decouple your workflow definition from the execution of the individual jobs. You can envision this layer as a state machine where you define a series of steps and pass appropriate metadata between states. We will use <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to submit the jobs to AWS Batch and use <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> to define and orchestrate the workflow.</p> 
-<b id="toc_2">Architecture</b> 
-<p>In the next three posts, you build a genome analysis pipeline using the following architecture. You don’t explicitly build the grayed out section, but we wanted to include them in the diagram as they are natural extensions to the core architecture. We discuss these and other extensions, briefly, in the concluding post. All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
-<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2 covers the job layer</a></strong>. We demonstrate how you can package bioinformatics applications in Docker containers, and discuss best practices when developing these containers for use in a multitenant batch environment.</p> 
-<p><strong><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3 dives deep into the batch, or data processing layer</a></strong>. We discuss common considerations for deploying Docker containers to be used in batch analysis as well as demonstrate how you can use AWS Batch for a scalable and elastic batch engine.</p> 
-<p><strong>Part 4 dives into workflow layer orchestration</strong>. We show how you might architect that layer with AWS services. You take the components built in parts 2 and 3 and combine them into an entire secondary analysis workflow. This workflow manages dependencies as well as continually checking the progress of existing jobs. We conclude by running a secondary analysis end-to-end for under $1 and discuss some extensions you can build on top of this core workflow.</p> 
-<b id="toc_3">What you can expect to learn</b> 
-<p>At the end of this series, you will have built a scalable and elastic solution to process genomes on AWS, as well as gained a general understanding of architectural choices available to you. The solution is generally applicable to other workloads, such as image processing. Even non-life science workloads such as trade analytics in financial services can benefit.</p> 
-<p>In your solution, you use <a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot Instances</a> to optimize for cost. Spot Instances allow you to bid on spare EC2 compute capacity, which can save up to 90% off of traditional On-Demand prices. In many cases, this translates into the ability to analyze genomes at scale for as low as $1 per analysis.</p> 
-<p>Let’s get building!</p> 
-<p>Other posts in this four-part series:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
-<p>Please leave any questions and comments below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2102');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Deep Learning on AWS Batch</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
-<time property="datePublished" datetime="2017-05-09T15:53:31+00:00">09 MAY 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-batch/" title="View all posts in AWS Batch*"><span property="articleSection">AWS Batch*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/deep-learning-on-aws-batch/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2058" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2058&amp;disqus_title=Deep+Learning+on+AWS+Batch&amp;disqus_url=https://aws.amazon.com/blogs/compute/deep-learning-on-aws-batch/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2058');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Thanks to my colleague&nbsp;Kiuk Chung for this great post on Deep Learning using AWS Batch.</p> 
-<p>—-</p> 
-<p>GPU instances naturally pair with deep learning as neural network algorithms can take advantage of their massive parallel processing power. AWS provides GPU instance families, such as g2 and p2, which allow customers to run scalable GPU workloads. You can leverage such scalability efficiently with AWS Batch.</p> 
-<p><a href="https://aws.amazon.com/batch">AWS Batch</a> manages the underlying compute resources on-your behalf, allowing you to focus on modeling tasks without the overhead of resource management. Compute environments (that is, clusters) in AWS Batch are pools of instances in your account, which AWS Batch dynamically scales up and down, provisioning and terminating instances with respect to the numbers of jobs. This minimizes idle instances, which in turn optimizes cost.</p> 
-<p>Moreover, AWS Batch ensures that submitted jobs are scheduled and placed onto the appropriate instance, hence managing the lifecycle of the jobs. With the addition of <a href="https://aws.amazon.com/about-aws/whats-new/2017/04/aws-batch-managed-compute-environments-support-customer-provided-amis/">customer-provided AMIs</a>, AWS Batch users can now take advantage of this elasticity and convenience for jobs that require GPU.</p> 
-<p>This post illustrates how you can run GPU-based deep learning workloads on AWS Batch. I walk you through an <a href="http://mxnet.io/tutorials/python/mnist.html">example</a> of training a convolutional neural network (the <a href="http://yann.lecun.com/exdb/lenet/">LeNet</a> architecture), using Apache MXNet to recognize handwritten digits using the MNIST dataset.<span id="more-2058"></span></p> 
-<b>Running an MXNet job in AWS Batch</b> 
-<p>Apache MXNet is a full-featured, flexibly programmable, and highly scalable deep learning framework that supports state-of-the-art deep models, including convolutional neural networks (CNNs) and long short-term memory networks (LSTMs).</p> 
-<p>There are three steps to running an AWS Batch job:</p> 
-<li>Create a custom AMI</li> 
-<li>Create AWS Batch entities</li> 
-<li>Submit a training job</li> 
-<h3>Create a custom AMI</h3> 
-<p>Start by creating an AMI that includes the NVIDIA driver and the Amazon ECS agent. In AWS Batch, instances can be launched with the specific AMI of your choice by specifying <em>imageId</em> when you create your compute environment. Because you are running a job that requires GPU, you need an AMI that has the NVIDIA driver installed.</p> 
-<p>Choose <strong>Launch Stack</strong> to launch the CloudFormation template in us-east-1 in your account: <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Batch&amp;templateURL=https://s3.amazonaws.com/aws-batch-examples/create-ami.yaml"> <img src="https://s3.amazonaws.com/aws-batch-blog/2017-05-09_mxnet-batch/launch_stack_icon.png" /> </a></p> 
-<p>As shown below, take note of the <strong>AMI</strong> value in the <strong>Outputs</strong> tab of the CloudFormation stack. You use this as the <em>imageId</em> value when creating the compute environment in the next section.</p> 
-<p><img src="https://s3.amazonaws.com/aws-batch-blog/2017-05-09_mxnet-batch/ami_cloud_formation_screenshot.png" /></p> 
-<p>Alternatively, you may follow the AWS Batch documentation to <a href="http://docs.aws.amazon.com/batch/latest/userguide/batch-gpu-ami.html">create a GPU-enabled AMI</a>.</p> 
-<h3>Create AWS Batch resources</h3> 
-<p>After you have built the AMI, create the following resources:</p> 
-<li><a href="http://docs.aws.amazon.com/batch/latest/userguide/compute_environments.html">compute environment</a></li> 
-<li><a href="http://docs.aws.amazon.com/batch/latest/userguide/job_queues.html">job queue</a></li> 
-<li><a href="http://docs.aws.amazon.com/batch/latest/userguide/job_definitions.html">job definition</a></li> 
-<p>A compute environment, is a collection of instances (compute resources) of the same or different instance types. In this case, you create a managed compute environment in which the instances are of type p2.xlarge. For imageId, specify the AMI you built in the previous section.</p> 
-<p>Then, create a job queue. In AWS Batch, jobs are submitted to a job queue that are associated to an ordered list of compute environments. After a lower order compute environment is filled, jobs spill over to the next compute environment. For this example, you associate a single compute environment to the job queue.</p> 
-<p>Finally, create a job definition, which is a template for a job specification. For those familiar with Amazon ECS, this is analogous to <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html">task definitions</a>. You mount the directory containing the NVIDIA driver on the host to <strong>/usr/local/nvidia</strong> on the container. You also need to set the <em>privileged</em> flag on the container properties.</p> 
-<p>The following code creates the aforementioned resources in AWS Batch. For more information, see the <a href="http://docs.aws.amazon.com/batch/latest/userguide/what-is-batch.html">AWS Batch User Guide</a>.</p> 
-<pre style="padding-left: 30px">git clone https://github.com/awslabs/aws-batch-helpers
-cd aws-batch-helpers/gpu-example
-python create-batch-entities.py\
---subnets &lt;subnet1,subnet2,…&gt;\
---security-groups &lt;sg1,sg2,…&gt;\
---key-pair &lt;ec2-key-pair&gt;\
---instance-role &lt;instance-role&gt;\
---image-id &lt;custom-AMI-image-id&gt;\
---service-role &lt;service-role-arn&gt; 
-</pre> 
-<h3>Submit a training job</h3> 
-<p>Now you submit a job that trains a convolutional neural network model for handwritten digit recognition. Much like Amazon ECS tasks, jobs in AWS Batch are run as commands in a Docker container. To use MXNet as your deep learning library, you need a Docker image containing MXNet. For this example, use <a href="https://hub.docker.com/r/mxnet/python/">mxnet/python:gpu</a>.</p> 
-<p>The submit-job.py script submits the job, and tails the output from CloudWatch Logs.</p> 
-<pre style="padding-left: 30px"># cd aws-batch-helpers/gpu-example
-python submit-job.py --wait</pre> 
-<p>You should see an output that looks like the following:</p> 
-<pre>Submitted job [train_imagenet - e1bccebc-76d9-4cd1-885b-667ef93eb1f5] to the job queue [gpu_queue]
-Job [train_imagenet - e1bccebc-76d9-4cd1-885b-667ef93eb1f5] is RUNNING.
-Output [train_imagenet/e1bccebc-76d9-4cd1-885b-667ef93eb1f5/12030dd3-0734-42bf-a3d1-d99118b401eb]:
-================================================================================
-[2017-04-25T19:02:57.076Z] INFO:root:Epoch[0] Batch [100]	Speed: 15554.63 samples/sec Train-accuracy=0.861077
-[2017-04-25T19:02:57.428Z] INFO:root:Epoch[0] Batch [200]	Speed: 18224.89 samples/sec Train-accuracy=0.954688
-[2017-04-25T19:02:57.755Z] INFO:root:Epoch[0] Batch [300]	Speed: 19551.42 samples/sec Train-accuracy=0.965313
-[2017-04-25T19:02:58.080Z] INFO:root:Epoch[0] Batch [400]	Speed: 19697.65 samples/sec Train-accuracy=0.969531
-[2017-04-25T19:02:58.405Z] INFO:root:Epoch[0] Batch [500]	Speed: 19705.82 samples/sec Train-accuracy=0.968281
-[2017-04-25T19:02:58.734Z] INFO:root:Epoch[0] Batch [600]	Speed: 19486.54 samples/sec Train-accuracy=0.971719
-[2017-04-25T19:02:59.058Z] INFO:root:Epoch[0] Batch [700]	Speed: 19735.59 samples/sec Train-accuracy=0.973281
-[2017-04-25T19:02:59.384Z] INFO:root:Epoch[0] Batch [800]	Speed: 19631.17 samples/sec Train-accuracy=0.976562
-[2017-04-25T19:02:59.713Z] INFO:root:Epoch[0] Batch [900]	Speed: 19490.74 samples/sec Train-accuracy=0.979062
-[2017-04-25T19:02:59.834Z] INFO:root:Epoch[0] Train-accuracy=0.976774
-[2017-04-25T19:02:59.834Z] INFO:root:Epoch[0] Time cost=3.190
-[2017-04-25T19:02:59.850Z] INFO:root:Saved checkpoint to &quot;/mnt/model/mnist-0001.params&quot;
-[2017-04-25T19:03:00.079Z] INFO:root:Epoch[0] Validation-accuracy=0.969148
-================================================================================
-Job [train_imagenet - e1bccebc-76d9-4cd1-885b-667ef93eb1f5] SUCCEEDED</pre> 
-<p>In reality, you may want to modify the job command to save the trained model artifact to Amazon S3 so that subsequent prediction jobs can generate predictions against the model. For information about how to reference objects in Amazon S3 in your jobs, see the <a href="https://aws.amazon.com/blogs/compute/creating-a-simple-fetch-and-run-aws-batch-job/">Creating a Simple “Fetch &amp; Run” AWS Batch Job</a> post.</p> 
-<b>Conclusion</b> 
-<p>In this post, I walked you through an example of running a GPU-enabled job in AWS Batch, using MXNet as the deep learning library. AWS Batch exposes primitives to allow you to focus on implementing the most efficient algorithm for your workload. It enables you to manage the lifecycle of submitted jobs and dynamically adapt the infrastructure requirements of your jobs within the specified bounds. It’s easy to take advantage of the horizontal scalability of compute instances provided by AWS in a cost-efficient manner.</p> 
-<p>MXNet, on the other hand, provides a rich set of highly optimized and scalable building blocks to start implementing your own deep learning algorithms. Together, you can not only solve problems requiring large neural network models, but also cut down on iteration time by harnessing the seemingly unlimited compute resources in Amazon EC2.</p> 
-<p>With AWS Batch managing the resources on your behalf, you can easily implement workloads such as hyper-parameter optimization to fan out tens or even hundreds of searches in parallel to find the best set of model parameters for your problem space. Moreover, because your jobs are run inside Docker containers, you may choose the tools and libraries that best fit your needs, build a Docker image, and submit your jobs using the image of your choice.</p> 
-<p>We encourage you to try it yourself and let us know what you think!</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2058');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">ServerlessConf and More!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><a href="https://aws.amazon.com/blogs/compute/author/bryan-liston/" title="Posts by Bryan Liston" property="name">Bryan Liston</a></span> | on 
-<time property="datePublished" datetime="2017-04-17T12:01:57+00:00">17 APR 2017</time> | 
-<a href="https://aws.amazon.com/blogs/compute/serverless-conference-and-more/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2036" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2036&amp;disqus_title=ServerlessConf+and+More%21&amp;disqus_url=https://aws.amazon.com/blogs/compute/serverless-conference-and-more/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2036');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<b>ServerlessConf Austin</b> 
-<p><a href="https://austin.serverlessconf.io/"><strong>ServerlessConf Austin</strong></a> is just around the corner! April 26-28th come join us in Austin at the&nbsp;Zach Topfer Theater. Our very own Tim Wagner, Chris Munns and Randall Hunt will be giving some great talks.</p> 
-<blockquote> 
-<p>Serverlessconf is a community led conference focused on sharing experiences building applications using serverless architectures. Serverless architectures enable developers to express their creativity and focus on user needs instead of spending time managing infrastructure and servers.</p> 
-</blockquote> 
-<p><strong>Tim Wagner, GM Serverless Applications</strong>, will be giving a keynote on Friday the 28th, <strong>do not miss this</strong>!!!<br /> <strong>Chris Munns, Sr. Developer Advocate</strong>, will be giving an excellent talk on CI/CD for Serverless Applications.</p> 
-<p>Check out the full agenda <a href="https://austin.serverlessconf.io/agenda.html">here</a>!</p> 
-<b>AWS Serverless Updates and More!</b> 
-<p>Incase you’ve missed out lately on some of our new content such as our new YouTube series “Coding with Sam”, or our new Serverless Special AWS Podcast Series, check them out!</p> 
-<li>Coding with Sam Episode 1:&nbsp;<a href="https://www.youtube.com/watch?v=P7i01eqmzrs">How to Do Continuous Integration and Continuous Deployment with AWS Lambda and AWS CodePipeline</a></li> 
-<li>Serverless Podcast Special Episode #1 (Serverless Architectures): <a href="https://soundcloud.com/amazon-web-services-306355661/171-serverless-special">AWS Podcast #171</a></li> 
-<li>Serverless Podcast Special Episode #2 (Serverless Security): <a href="https://soundcloud.com/amazon-web-services-306355661/178-security-in-serverless-architectures">AWS Podcast #178</a></li> 
-<b>Meet SAM!</b> 
-<p>We’ve recently come out with a new branding for <a href="https://github.com/awslabs/serverless-application-model">AWS SAM</a> (Serverless Application Model), so please join me in welcoming SAM the Squirrel!</p> 
-<p>The goal of AWS SAM is to define a standard application model for serverless applications.</p> 
-<p><img class="alignleft" src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/aws_sam_introduction.png" /></p> 
-<p>Once again, don’t hesitate to reach out if you have questions, comments, or general feedback.</p> 
-<p>Thanks,<br /> <a href="https://twitter.com/listonb">@listonb</a></p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2036');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How to remove boilerplate validation logic in your REST APIs with Amazon API Gateway request validation</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><a href="https://aws.amazon.com/blogs/compute/author/bryan-liston/" title="Posts by Bryan Liston" property="name">Bryan Liston</a></span> | on 
-<time property="datePublished" datetime="2017-04-11T10:54:55+00:00">11 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-api-gateway/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/how-to-remove-boilerplate-validation-logic-in-your-rest-apis-with-amazon-api-gateway-request-validation/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2026" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2026&amp;disqus_title=How+to+remove+boilerplate+validation+logic+in+your+REST+APIs+with+Amazon+API+Gateway+request+validation&amp;disqus_url=https://aws.amazon.com/blogs/compute/how-to-remove-boilerplate-validation-logic-in-your-rest-apis-with-amazon-api-gateway-request-validation/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2026');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img style="width: 15%" src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/logging_rgreen.jpg" alt="" /><br /> <strong>Ryan Green, Software Development Engineer</strong></p> 
-<p>Does your API suffer from code bloat or wasted developer time due to implementation of simple input validation rules? One of the necessary but least exciting aspects of building a robust REST API involves implementing basic validation of input data to your API. In addition to increasing the size of the code base, validation logic may require taking on extra dependencies and requires diligence in ensuring the API implementation doesn’t get out of sync with API request/response models and SDKs.</p> 
-<p>Amazon API Gateway recently announced the release of <a href="http://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-method-request-validation.html">request validators</a>, a simple but powerful new feature that should help to liberate API developers from the undifferentiated effort of implementing basic request validation in their API backends.</p> 
-<p>This feature leverages API Gateway <a href="http://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-create-model.html">models</a> to enable the validation of request payloads against the specified schema, including validation rules as defined in the <a href="http://json-schema.org/latest/json-schema-validation.html">JSON-Schema Validation</a> specification. Request validators also support basic validation of required HTTP request parameters in the URI, query string, and headers.</p> 
-<p>When a validation failure occurs, API Gateway fails the API request with an HTTP 400 error, skips the request to the backend integration, and publishes detailed error results in <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch Logs</a>.</p> 
-<p>In this post, I show two examples using request validators, validating the request body and the request parameters.<span id="more-2026"></span></p> 
-<b id="toc_0">Example: Validating the request body</b> 
-<p>For this example, you build a simple API for a simulated stock trading system. This API has a resource, “/orders”, that represents stock purchase orders. An HTTP POST to this resource allows the client to initiate one or more orders.</p> 
-<p>A sample request might look like this:</p> 
-<p>POST /orders</p> 
-<pre><code class="language-javascript">[
-&nbsp; {
-&nbsp; &nbsp; &quot;account-id&quot;: &quot;abcdef123456&quot;,
-&nbsp; &nbsp; &quot;type&quot;: &quot;STOCK&quot;,
-&nbsp; &nbsp; &quot;symbol&quot;: &quot;AMZN&quot;,
-&nbsp; &nbsp; &quot;shares&quot;: 100,
-&nbsp; &nbsp; &quot;details&quot;: {
-&nbsp; &nbsp; &nbsp; &quot;limit&quot;: 1000
-&nbsp; &nbsp; }
-&nbsp; },
-&nbsp; {
-&nbsp; &nbsp; &quot;account-id&quot;: &quot;zyxwvut987654&quot;,
-&nbsp; &nbsp; &quot;type&quot;: &quot;STOCK&quot;,
-&nbsp; &nbsp; &quot;symbol&quot;: &quot;BA&quot;,
-&nbsp; &nbsp; &quot;shares&quot;: 250,
-&nbsp; &nbsp; &quot;details&quot;: {
-&nbsp; &nbsp; &nbsp; &quot;limit&quot;: 200
-&nbsp; &nbsp; }
-&nbsp; }
-]</code></pre> 
-<p>The JSON-Schema for this request body might look something like this:</p> 
-<pre><code class="language-javascript">{
-&nbsp; &quot;$schema&quot;: &quot;http://json-schema.org/draft-04/schema#&quot;,
-&nbsp; &quot;title&quot;: &quot;Create Orders Schema&quot;,
-&nbsp; &quot;type&quot;: &quot;array&quot;,
-&nbsp; &quot;minItems&quot;: 1,
-&nbsp; &quot;items&quot;: {
-&nbsp; &nbsp; &quot;type&quot;: &quot;object&quot;,
-&nbsp; &nbsp; &quot;required&quot;: [
-&nbsp; &nbsp; &nbsp; &quot;account-id&quot;,
-&nbsp; &nbsp; &nbsp; &quot;type&quot;,
-&nbsp; &nbsp; &nbsp; &quot;symbol&quot;,
-&nbsp; &nbsp; &nbsp; &quot;shares&quot;,
-&nbsp; &nbsp; &nbsp; &quot;details&quot;
-&nbsp; &nbsp; ],
-&nbsp; &nbsp; &quot;properties&quot;: {
-&nbsp; &nbsp; &nbsp; &quot;account_id&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;string&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;pattern&quot;: &quot;[A-Za-z]{6}[0-9]{6}&quot;
-&nbsp; &nbsp; &nbsp; },
-&nbsp; &nbsp; &nbsp; &quot;type&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;string&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;enum&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;STOCK&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;BOND&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;CASH&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; ]
-&nbsp; &nbsp; &nbsp; },
-&nbsp; &nbsp; &nbsp; &quot;symbol&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;string&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;minLength&quot;: 1,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;maxLength&quot;: 4
-&nbsp; &nbsp; &nbsp; },
-&nbsp; &nbsp; &nbsp; &quot;shares&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;number&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;minimum&quot;: 1,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;maximum&quot;: 1000
-&nbsp; &nbsp; &nbsp; },
-&nbsp; &nbsp; &nbsp; &quot;details&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;object&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;required&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;limit&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; ],
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;properties&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;limit&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;number&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; }
-&nbsp; }
-}</code></pre> 
-<p>This schema defines the “shape” of the request model but also defines several constraints on the various properties. Here are the validation rules for this schema:</p> 
-<li>The root array must have at least 1 item</li> 
-<li>All properties are required</li> 
-<li>Account ID must match the regular expression format “[A-Za-z]{6}[0-9]{6}”</li> 
-<li>Type must be one of STOCK, BOND, or CASH</li> 
-<li>Symbol must be a string between 1 and 4 characters</li> 
-<li>Shares must be a number between 1 and 1000</li> 
-<p>I’m sure you can imagine how this would look in your validation library of choice, or at worst, in a hand-coded implementation.</p> 
-<p>Now, try this out with API Gateway request validators. The Swagger definition below defines the REST API, models, and request validators. Its two operations define simple mock integrations to simulate behavior of the stock trading API.</p> 
-<p>Note the request validator definitions under the “<em>x-amazon-apigateway-request-validators</em>” extension, and the references to these validators defined on the operation and on the API.</p> 
-<pre><code class="language-javascript">{
-&quot;swagger&quot;: &quot;2.0&quot;,
-&quot;info&quot;: {
-&quot;title&quot;: &quot;API Gateway - Request Validation Demo - rpgreen@amazon.com&quot;
-},
-&quot;schemes&quot;: [
-&quot;https&quot;
-],
-&quot;produces&quot;: [
-&quot;application/json&quot;
-],
-&quot;x-amazon-apigateway-request-validators&quot; : {
-&quot;full&quot; : {
-&quot;validateRequestBody&quot; : true,
-&quot;validateRequestParameters&quot; : true
-},
-&quot;body-only&quot; : {
-&quot;validateRequestBody&quot; : true,
-&quot;validateRequestParameters&quot; : false
-}
-},
-&quot;x-amazon-apigateway-request-validator&quot; : &quot;full&quot;,
-&quot;paths&quot;: {
-&quot;/orders&quot;: {
-&quot;post&quot;: {
-&quot;x-amazon-apigateway-request-validator&quot;: &quot;body-only&quot;,
-&quot;parameters&quot;: [
-{
-&quot;in&quot;: &quot;body&quot;,
-&quot;name&quot;: &quot;CreateOrders&quot;,
-&quot;required&quot;: true,
-&quot;schema&quot;: {
-&quot;$ref&quot;: &quot;#/definitions/CreateOrders&quot;
-}
-}
-],
-&quot;responses&quot;: {
-&quot;200&quot;: {
-&quot;schema&quot;: {
-&quot;$ref&quot;: &quot;#/definitions/Message&quot;
-}
-},
-&quot;400&quot; : {
-&quot;schema&quot;: {
-&quot;$ref&quot;: &quot;#/definitions/Message&quot;
-}
-}
-},
-&quot;x-amazon-apigateway-integration&quot;: {
-&quot;responses&quot;: {
-&quot;default&quot;: {
-&quot;statusCode&quot;: &quot;200&quot;,
-&quot;responseTemplates&quot;: {
-&quot;application/json&quot;: &quot;{\&quot;message\&quot; : \&quot;Orders successfully created\&quot;}&quot;
-}
-}
-},
-&quot;requestTemplates&quot;: {
-&quot;application/json&quot;: &quot;{\&quot;statusCode\&quot;: 200}&quot;
-},
-&quot;passthroughBehavior&quot;: &quot;never&quot;,
-&quot;type&quot;: &quot;mock&quot;
-}
-},
-&quot;get&quot;: {
-&quot;parameters&quot;: [
-{
-&quot;in&quot;: &quot;header&quot;,
-&quot;name&quot;: &quot;Account-Id&quot;,
-&quot;required&quot;: true
-},
-{
-&quot;in&quot;: &quot;query&quot;,
-&quot;name&quot;: &quot;type&quot;,
-&quot;required&quot;: false
-}
-],
-&quot;responses&quot;: {
-&quot;200&quot; : {
-&quot;schema&quot;: {
-&quot;$ref&quot;: &quot;#/definitions/Orders&quot;
-}
-},
-&quot;400&quot; : {
-&quot;schema&quot;: {
-&quot;$ref&quot;: &quot;#/definitions/Message&quot;
-}
-}
-},
-&quot;x-amazon-apigateway-integration&quot;: {
-&quot;responses&quot;: {
-&quot;default&quot;: {
-&quot;statusCode&quot;: &quot;200&quot;,
-&quot;responseTemplates&quot;: {
-&quot;application/json&quot;: &quot;[{\&quot;order-id\&quot; : \&quot;qrx987\&quot;,\n   \&quot;type\&quot; : \&quot;STOCK\&quot;,\n   \&quot;symbol\&quot; : \&quot;AMZN\&quot;,\n   \&quot;shares\&quot; : 100,\n   \&quot;time\&quot; : \&quot;1488217405\&quot;,\n   \&quot;state\&quot; : \&quot;COMPLETED\&quot;\n},\n{\n   \&quot;order-id\&quot; : \&quot;foo123\&quot;,\n   \&quot;type\&quot; : \&quot;STOCK\&quot;,\n   \&quot;symbol\&quot; : \&quot;BA\&quot;,\n   \&quot;shares\&quot; : 100,\n   \&quot;time\&quot; : \&quot;1488213043\&quot;,\n   \&quot;state\&quot; : \&quot;COMPLETED\&quot;\n}\n]&quot;
-}
-}
-},
-&quot;requestTemplates&quot;: {
-&quot;application/json&quot;: &quot;{\&quot;statusCode\&quot;: 200}&quot;
-},
-&quot;passthroughBehavior&quot;: &quot;never&quot;,
-&quot;type&quot;: &quot;mock&quot;
-}
-}
-}
-},
-&quot;definitions&quot;: {
-&quot;CreateOrders&quot;: {
-&quot;$schema&quot;: &quot;http://json-schema.org/draft-04/schema#&quot;,
-&quot;title&quot;: &quot;Create Orders Schema&quot;,
-&quot;type&quot;: &quot;array&quot;,
-&quot;minItems&quot; : 1,
-&quot;items&quot;: {
-&quot;type&quot;: &quot;object&quot;,
-&quot;$ref&quot; : &quot;#/definitions/Order&quot;
-}
-},
-&quot;Orders&quot; : {
-&quot;type&quot;: &quot;array&quot;,
-&quot;$schema&quot;: &quot;http://json-schema.org/draft-04/schema#&quot;,
-&quot;title&quot;: &quot;Get Orders Schema&quot;,
-&quot;items&quot;: {
-&quot;type&quot;: &quot;object&quot;,
-&quot;properties&quot;: {
-&quot;order_id&quot;: { &quot;type&quot;: &quot;string&quot; },
-&quot;time&quot; : { &quot;type&quot;: &quot;string&quot; },
-&quot;state&quot; : {
-&quot;type&quot;: &quot;string&quot;,
-&quot;enum&quot;: [
-&quot;PENDING&quot;,
-&quot;COMPLETED&quot;
-]
-},
-&quot;order&quot; : {
-&quot;$ref&quot; : &quot;#/definitions/Order&quot;
-}
-}
-}
-},
-&quot;Order&quot; : {
-&quot;type&quot;: &quot;object&quot;,
-&quot;$schema&quot;: &quot;http://json-schema.org/draft-04/schema#&quot;,
-&quot;title&quot;: &quot;Schema for a single Order&quot;,
-&quot;required&quot;: [
-&quot;account-id&quot;,
-&quot;type&quot;,
-&quot;symbol&quot;,
-&quot;shares&quot;,
-&quot;details&quot;
-],
-&quot;properties&quot; : {
-&quot;account-id&quot;: {
-&quot;type&quot;: &quot;string&quot;,
-&quot;pattern&quot;: &quot;[A-Za-z]{6}[0-9]{6}&quot;
-},
-&quot;type&quot;: {
-&quot;type&quot; : &quot;string&quot;,
-&quot;enum&quot; : [
-&quot;STOCK&quot;,
-&quot;BOND&quot;,
-&quot;CASH&quot;]
-},
-&quot;symbol&quot; : {
-&quot;type&quot;: &quot;string&quot;,
-&quot;minLength&quot;: 1,
-&quot;maxLength&quot;: 4
-},
-&quot;shares&quot;: {
-&quot;type&quot;: &quot;number&quot;,
-&quot;minimum&quot;: 1,
-&quot;maximum&quot;: 1000
-},
-&quot;details&quot;: {
-&quot;type&quot;: &quot;object&quot;,
-&quot;required&quot;: [
-&quot;limit&quot;
-],
-&quot;properties&quot;: {
-&quot;limit&quot;: {
-&quot;type&quot;: &quot;number&quot;
-}
-}
-}
-}
-},
-&quot;Message&quot;: {
-&quot;type&quot;: &quot;object&quot;,
-&quot;properties&quot;: {
-&quot;message&quot; : {
-&quot;type&quot; : &quot;string&quot;
-}
-}
-}
-}
-}</code></pre> 
-<p>To create the demo API, run the following commands (requires the <a href="https://aws.amazon.com/cli/">AWS CLI</a>):</p> 
-<pre><code class="language-bash">git clone https://github.com/rpgreen/apigateway-validation-demo.git
-cd apigateway-validation-demo
-aws apigateway import-rest-api --body &quot;file://validation-swagger.json&quot; --region us-east-1
-export API_ID=[API ID from last step]
-aws apigateway create-deployment --rest-api-id $API_ID --stage-name test --region us-east-1</code></pre> 
-<p>Make some requests to this API. Here’s the happy path with valid request body:</p> 
-<pre><code class="language-none">curl -v -H &quot;Content-Type: application/json&quot; -X POST -d ' [&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;{&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;account-id&quot;:&quot;abcdef123456&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;type&quot;:&quot;STOCK&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;symbol&quot;:&quot;AMZN&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;shares&quot;:100,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;details&quot;:{&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;limit&quot;:1000
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
-&nbsp;&nbsp;&nbsp;}
-]' https://$API_ID.execute-api.us-east-1.amazonaws.com/test/orders</code></pre> 
-<p>Response:</p> 
-<p>HTTP/1.1 200 OK</p> 
-<pre><code class="language-none">{&quot;message&quot; : &quot;Orders successfully created&quot;}</code></pre> 
-<p>Put the request validator to the test. Notice the errors in the payload:</p> 
-<pre><code class="language-none">curl -v -H &quot;Content-Type: application/json&quot; -X POST -d '[
-{
-&quot;account-id&quot;: &quot;abcdef123456&quot;,
-&quot;type&quot;: &quot;foobar&quot;,
-&quot;symbol&quot;: &quot;thisstringistoolong&quot;,
-&quot;shares&quot;: 999999,
-&quot;details&quot;: {
-&quot;limit&quot;: 1000
-}
-}
-]' https://$API_ID.execute-api.us-east-1.amazonaws.com/test/orders</code></pre> 
-<p>Response:</p> 
-<p>HTTP/1.1 400 Bad Request</p> 
-<pre><code class="language-none">{&quot;message&quot;: &quot;Invalid request body&quot;}</code></pre> 
-<p>When you inspect the CloudWatch Logs entries for this API, you see the detailed error messages for this payload. Run the following command:</p> 
-<pre><code class="language-none">pip install apilogs
-apilogs get --api-id $API_ID --stage test --watch --region us-east-1`</code></pre> 
-<p>The CloudWatch Logs entry for this request reveals the specific validation errors:</p> 
-<p>“Request body does not match model schema for content type application/json: [numeric instance is greater than the required maximum (maximum: 1000, found: 999999), string “thisstringistoolong” is too long (length: 19, maximum allowed: 4), instance value (“foobar”) not found in enum (possible values: [“STOCK”,”BOND”,”CASH”])]”</p> 
-<p>Note on Content-Type:</p> 
-<p>Request body validation is performed according to the configured request Model which is selected by the value of the request ‘Content-Type’ header. In order to enforce validation and restrict requests to explicitly-defined content types, it’s a good idea to use strict request passthrough behavior (‘”passthroughBehavior”: “never”‘), so that unsupported content types fail with 415 “Unsupported Media Type” response.</p> 
-<b id="toc_1">Example: Validating the request parameters</b> 
-<p>For the next example, add a GET method to the /orders resource that returns the list of purchase orders. This method has an optional query string parameter (type) and a required header parameter (Account-Id).</p> 
-<p>The request validator configured for the GET method is set to validate incoming request parameters. This performs basic validation on the required parameters, ensuring that the request parameters are <em>present and non-blank</em>.</p> 
-<p>Here are some example requests.</p> 
-<p><strong>Happy path:</strong></p> 
-<pre><code class="language-none">curl -v -H &quot;Account-Id: abcdef123456&quot; &quot;https://$API_ID.execute-api.us-east-1.amazonaws.com/test/orders?type=STOCK&quot;</code></pre> 
-<p>Response:</p> 
-<p>HTTP/1.1 200 OK</p> 
-<pre><code class="language-none">[{&quot;order-id&quot; : &quot;qrx987&quot;,
-&quot;type&quot; : &quot;STOCK&quot;,
-&quot;symbol&quot; : &quot;AMZN&quot;,
-&quot;shares&quot; : 100,
-&quot;time&quot; : &quot;1488217405&quot;,
-&quot;state&quot; : &quot;COMPLETED&quot;
-},
-{
-&quot;order-id&quot; : &quot;foo123&quot;,
-&quot;type&quot; : &quot;STOCK&quot;,
-&quot;symbol&quot; : &quot;BA&quot;,
-&quot;shares&quot; : 100,
-&quot;time&quot; : &quot;1488213043&quot;,
-&quot;state&quot; : &quot;COMPLETED&quot;
-}]</code></pre> 
-<p><strong>Omitting optional type parameter:</strong></p> 
-<pre><code class="language-none">curl -v -H &quot;Account-Id: abcdef123456&quot; &quot;https://$API_ID.execute-api.us-east-1.amazonaws.com/test/orders&quot;</code></pre> 
-<p>Response:</p> 
-<p>HTTP/1.1 200 OK</p> 
-<pre><code class="language-none">[{&quot;order-id&quot; : &quot;qrx987&quot;,
-&quot;type&quot; : &quot;STOCK&quot;,
-&quot;symbol&quot; : &quot;AMZN&quot;,
-&quot;shares&quot; : 100,
-&quot;time&quot; : &quot;1488217405&quot;,
-&quot;state&quot; : &quot;COMPLETED&quot;
-},
-{
-&quot;order-id&quot; : &quot;foo123&quot;,
-&quot;type&quot; : &quot;STOCK&quot;,
-&quot;symbol&quot; : &quot;BA&quot;,
-&quot;shares&quot; : 100,
-&quot;time&quot; : &quot;1488213043&quot;,
-&quot;state&quot; : &quot;COMPLETED&quot;
-}]</code></pre> 
-<p><strong>Omitting required Account-Id parameter:</strong></p> 
-<pre><code class="language-none">curl -v &quot;https://$API_ID.execute-api.us-east-1.amazonaws.com/test/orders?type=STOCK&quot;</code></pre> 
-<p>Response:</p> 
-<p>HTTP/1.1 400 Bad Request</p> 
-<pre><code class="language-none">{&quot;message&quot;: &quot;Missing required request parameters: [Account-Id]&quot;}</code></pre> 
-<b id="toc_2">Conclusion</b> 
-<p>Request validators should help API developers to build better APIs by allowing them to remove boilerplate validation logic from backend implementations and focus on actual business logic and deep validation. This should further reduce the size of the API codebase and also help to ensure that API models and validation logic are kept in sync.</p> 
-<p>Please forward any questions or feedback to the API Gateway team through <a href="https://aws.amazon.com/contact-us/">AWS Support</a> or on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=199">AWS Forums</a>.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2026');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Scaling Your Desktop Application Streams with Amazon AppStream 2.0</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><a href="https://aws.amazon.com/blogs/compute/author/bryan-liston/" title="Posts by Bryan Liston" property="name">Bryan Liston</a></span> | on 
-<time property="datePublished" datetime="2017-04-04T06:20:28+00:00">04 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/scaling-your-desktop-application-streams-with-amazon-appstream-2-0/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2016" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2016&amp;disqus_title=Scaling+Your+Desktop+Application+Streams+with+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/scaling-your-desktop-application-streams-with-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2016');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/dsuryan.png" /><br /> <strong>Deepak Sury, Principal Product Manager – Amazon AppStream 2.0</strong></p> 
-<p>Want to stream desktop applications to a web browser, without rewriting them? <a href="https://aws.amazon.com/appstream2/">Amazon AppStream 2.0</a> is a fully managed, secure, application streaming service. An easy way to learn what the service does is to <a href="https://console.aws.amazon.com/appstream2/tryitnow/home">try out the end-user experience, at no cost</a>.</p> 
-<p>In this post, I describe how you can scale your AppStream 2.0 environment, and achieve some cost optimizations. I also add some setup and monitoring tips.<span id="more-2016"></span></p> 
-<h4 id="toc_0">AppStream 2.0 workflow</h4> 
-<p>You import your applications into AppStream 2.0 using an image builder. The image builder allows you to connect to a desktop experience from within the AWS Management Console, and then install and test your apps. Then, create an image that is a snapshot of the image builder.</p> 
-<p>After you have an image containing your applications, select an instance type and launch a fleet of streaming instances. Each instance in the fleet is used by only one user, and you match the instance type used in the fleet to match the needed application performance. Finally, attach the fleet to a stack to set up user access. The following diagram shows the role of each resource in the workflow.</p> 
-<p style="text-align: center"><em>Figure 1: Describing an AppStream 2.0 workflow</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstream_figure11.png" alt="appstreamscaling_1.png" /></p> 
-<b id="toc_1">Setting up AppStream 2.0</b> 
-<p>To get started, <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/getting-started.html">set up an example AppStream 2.0 stack</a> or use the Quick Links on the console. For this example, I named my stack ds-sample, selected a sample image, and chose the stream.standard.medium instance type. You can explore the resources that you set up in the AWS console, or use the describe-stacks and describe-fleets commands as follows:</p> 
-<p style="text-align: center"><em>Figure 2: Describing an AppStream 2.0 stack</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_1.png" alt="appstreamscaling_1.png" /></p> 
-<p style="text-align: center"><em>Figure 3: Describing an AppStream 2.0 fleet</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/figure2.png" alt="appstreamscaling_2.43%20AM" /></p> 
-<p>To set up user access to your streaming environment, you can use your existing <a title="undefined" href="https://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers.html" target="null">SAML 2.0 compliant directory</a>. Your users can then use their existing credentials to log in. Alternatively, to quickly test a streaming connection, or to start a streaming session from your own website, you can create a streaming URL. In the console, choose <strong>Stacks</strong>, <strong>Actions</strong>, <strong>Create URL</strong>, or call create-streaming-url as follows:</p> 
-<p style="text-align: center"><em>Figure 4: Creating a streaming URL</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_3.png" alt="appstreamscaling_3.png" /></p> 
-<p>You can paste the streaming URL into a browser, and open any of the displayed applications.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/figure3_part2.png" alt="appstreamscaling_4.30%20PM" /></p> 
-<p>Now that you have a sample environment set up, here are a few tips on scaling.</p> 
-<b id="toc_2">Scaling and cost optimization for AppStream 2.0</b> 
-<p>To provide an instant-on streaming connection, the instances in an AppStream 2.0 fleet are always running. You are charged for running instances, and each running instance can serve exactly one user at any time. To optimize your costs, match the number of running instances to the number of users who want to stream apps concurrently. This section walks through three options for doing this:</p> 
-<li>Fleet Auto Scaling</li> 
-<li>Fixed fleets based on a schedule</li> 
-<li>Fleet Auto Scaling with schedules</li> 
-<b id="toc_3">Fleet Auto Scaling</b> 
-<p>To dynamically update the number of running instances, you can use Fleet Auto Scaling. This feature allows you to scale the size of the fleet automatically between a minimum and maximum value based on demand. This is useful if you have user demand that changes constantly, and you want to scale your fleet automatically to match this demand. For examples about setting up and managing scaling policies, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/autoscaling.html">Fleet Auto Scaling</a>.</p> 
-<p>You can trigger changes to the fleet through the available Amazon CloudWatch metrics:</p> 
-<li>CapacityUtilization – the percentage of running instances already used.</li> 
-<li>AvailableCapacity – the number of instances that are unused and can receive connections from users.</li> 
-<li>InsufficientCapacityError – an error that is triggered when there is no available running instance to match a user’s request.</li> 
-<p>You can create and attach scaling policies using the AWS SDK or AWS Management Console. I find it convenient to set up the policies using the console. Use the following steps:</p> 
-<ol> 
-<li>In the AWS Management Console, open AppStream 2.0.</li> 
-<li>Choose <strong>Fleets</strong>, select a fleet, and choose <strong>Scaling Policies</strong>.</li> 
-<li>For <strong>Minimum capacity</strong> and <strong>Maximum capacity</strong>, enter values for the fleet.</li> 
-</ol> 
-<p style="text-align: center"><em>Figure 5: Fleets tab for setting scaling policies</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_5.png" alt="appstreamscaling_5.png" /></p> 
-<ol> 
-<li>Create scale out and scale in policies by choosing <strong>Add Policy</strong> in each section.</li> 
-</ol> 
-<p style="text-align: center"><em>Figure 6: Adding a scale out policy</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_6.png" alt="appstreamscaling_6.png" /></p> 
-<p style="text-align: center"><em>Figure 7: Adding a scale in policy</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_7.png" alt="appstreamscaling_7.png" /></p> 
-<p>After you create the policies, they are displayed as part of your fleet details.</p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_8.png" alt="appstreamscaling_8.png" /></p> 
-<p>The scaling policies are triggered by CloudWatch alarms. These alarms are automatically created on your behalf when you create the scaling policies using the console. You can view and modify the alarms via the CloudWatch console.</p> 
-<p style="text-align: center"><em>Figure 8: CloudWatch alarms for triggering fleet scaling</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_9.png" alt="appstreamscaling_9.png" /></p> 
-<b id="toc_4">Fixed fleets based on a schedule</b> 
-<p>An alternative option to optimize costs and respond to predictable demand is to fix the number of running instances based on the time of day or day of the week. This is useful if you have a fixed number of users signing in at different times of the day― scenarios such as a training classes, call center shifts, or school computer labs. You can easily set the number of instances that are running using the AppStream 2.0 update-fleet command. Update the Desired value for the compute capacity of your fleet. The number of Running instances changes to match the Desired value that you set, as follows:</p> 
-<p style="text-align: center"><em>Figure 9: Updating desired capacity for your fleet</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_10.png" alt="appstreamscaling_10.png" /></p> 
-<p>Set up a Lambda function to update your fleet size automatically. Follow the example below to set up your own functions. If you haven’t used Lambda before, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/getting-started-create-function.html">Step 2: Create a HelloWorld Lambda Function and Explore the Console</a>.</p> 
-<p><strong>To create a function to change the fleet size</strong></p> 
-<ol> 
-<li>In the Lambda console, choose <strong>Create a Lambda function</strong>.</li> 
-<li>Choose the <strong>Blank Function</strong> blueprint. This gives you an empty blueprint to which you can add your code.</li> 
-<li>Skip the trigger section for now. Later on, you can add a trigger based on time, or any other input.</li> 
-<li>In the <strong>Configure function</strong> section: 
-<ol> 
-<li>Provide a name and description.</li> 
-<li>For <strong>Runtime</strong>, choose Node.js 4.3.</li> 
-<li>Under <strong>Lambda function handler and role</strong>, choose <strong>Create a custom role</strong>.</li> 
-<li>In the IAM wizard, enter a role name, for example Lambda-AppStream-Admin. Leave the defaults as is.</li> 
-<li>After the IAM role is created, attach an AppStream 2.0 managed policy “AmazonAppStreamFullAccess” to the role. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-using.html">Working with Managed Policies</a>. This allows Lambda to call the AppStream 2.0 API on your behalf. You can edit and attach your own IAM policy, to limit access to only actions you would like to permit. To learn more, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/controlling-access.html">Controlling Access to Amazon AppStream 2.0</a>.</li> 
-<li>Leave the default values for the rest of the fields, and choose <strong>Next</strong>, <strong>Create function</strong>.</li> 
-</ol> </li> 
-<li>To change the AppStream 2.0 fleet size, choose <strong>Code</strong> and add some sample code, as follows: 
-<pre><code class="language-javascript">'use strict';
-/**
-This AppStream2 Update-Fleet blueprint sets up a schedule for a streaming fleet
-**/
-const AWS = require('aws-sdk');
-const appstream = new AWS.AppStream();
-const fleetParams = {
-Name: 'ds-sample-fleet', /* required */
-ComputeCapacity: {
-DesiredInstances: 1 /* required */
-}
-};
-exports.handler = (event, context, callback) =&gt; {
-console.log('Received event:', JSON.stringify(event, null, 2));
-var resource = event.resources[0];
-var increase = resource.includes('weekday-9am-increase-capacity')
-try {
-if (increase) {
-fleetParams.ComputeCapacity.DesiredInstances = 3
-} else {
-fleetParams.ComputeCapacity.DesiredInstances = 1
-}
-appstream.updateFleet(fleetParams, (error, data) =&gt; {
-if (error) {
-console.log(error, error.stack);
-return callback(error);
-}
-console.log(data);
-return callback(null, data);
-});
-} catch (error) {
-console.log('Caught Error: ', error);
-callback(error);
-}
-};</code></pre> 
-<li>Test the code. Choose <strong>Test</strong> and use the “Hello World” test template. The first time you do this, choose <strong>Save and Test</strong>. Create a test input like the following to trigger the scaling update.<img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_11.png" alt="appstreamscaling_11.png" /></li> 
-<li>You see output text showing the result of the update-fleet call. You can also use the CLI to check the effect of executing the Lambda function.</li> 
-</ol> 
-<p>Next, to set up a time-based schedule, set a trigger for invoking the Lambda function.</p> 
-<p><strong>To set a trigger for the Lambda function</strong></p> 
-<ol> 
-<li>Choose <strong>Triggers</strong>, <strong>Add trigger</strong>.</li> 
-<li>Choose <strong>CloudWatch Events – Schedule</strong>.</li> 
-<li>Enter a rule name, such as “weekday-9am-increase-capacity”, and a description. For <strong>Schedule expression</strong>, choose <strong>cron</strong>. You can edit the value for the cron later.</li> 
-<li>After the trigger is created, open the event <strong>weekday-9am-increase-capacity</strong>.</li> 
-<li>In the CloudWatch console, edit the event details. To scale out the fleet at 9 am on a weekday, you can adjust the time to be: 00 17 ? * MON-FRI *. (If you’re not in Seattle (Pacific Time Zone), change this to another specific time zone).</li> 
-<li>You can also add another event that triggers at the end of a weekday.</li> 
-</ol> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/appstreamscaling_12.png" alt="appstreamscaling_12.png" /></p> 
-<p>This setup now triggers scale-out and scale-in automatically, based on the time schedule that you set.</p> 
-<b id="toc_5">Fleet Auto Scaling with schedules</b> 
-<p>You can choose to combine both the fleet scaling and time-based schedule approaches to manage more complex scenarios. This is useful to manage the number of running instances based on business and non-business hours, and still respond to changes in demand. You could programmatically change the minimum and maximum sizes for your fleet based on time of day or day of week, and apply the default scale-out or scale-in policies. This allows you to respond to predictable minimum demand based on a schedule.</p> 
-<p>For example, at the start of a work day, you might expect a certain number of users to request streaming connections at one time. You wouldn’t want to wait for the fleet to scale out and meet this requirement. However, during the course of the day, you might expect the demand to scale in or out, and would want to match the fleet size to this demand.</p> 
-<p>To achieve this, set up the scaling polices via the console, and create a Lambda function to trigger changes to the minimum, maximum, and desired capacity for your fleet based on a schedule. Replace the code for the Lambda function that you created earlier with the following code:</p> 
-<pre><code class="language-javascript">'use strict';
-/**
-This AppStream2 Update-Fleet function sets up a schedule for a streaming fleet
-**/
-const AWS = require('aws-sdk');
-const appstream = new AWS.AppStream();
-const applicationAutoScaling = new AWS.ApplicationAutoScaling();
-const fleetParams = {
-Name: 'ds-sample-fleet', /* required */
-ComputeCapacity: {
-DesiredInstances: 1 /* required */
-}
-};
-var scalingParams = {
-ResourceId: 'fleet/ds-sample-fleet', /* required - fleet name*/
-ScalableDimension: 'appstream:fleet:DesiredCapacity', /* required */
-ServiceNamespace: 'appstream', /* required */
-MaxCapacity: 1,
-MinCapacity: 6,
-RoleARN: 'arn:aws:iam::659382443255:role/service-role/ApplicationAutoScalingForAmazonAppStreamAccess'
-};
-exports.handler = (event, context, callback) =&gt; {
-console.log('Received this event now:', JSON.stringify(event, null, 2));
-var resource = event.resources[0];
-var increase = resource.includes('weekday-9am-increase-capacity')
-try {
-if (increase) {
-//usage during business hours - start at capacity of 10 and scale
-//if required. This implies at least 10 users can connect instantly. 
-//More users can connect as the scaling policy triggers addition of
-//more instances. Maximum cap is 20 instances - fleet will not scale
-//beyond 20. This is the cap for number of users.
-fleetParams.ComputeCapacity.DesiredInstances = 10
-scalingParams.MinCapacity = 10
-scalingParams.MaxCapacity = 20
-} else {
-//usage during non-business hours - start at capacity of 1 and scale
-//if required. This implies only 1 user can connect instantly. 
-//More users can connect as the scaling policy triggers addition of
-//more instances. 
-fleetParams.ComputeCapacity.DesiredInstances = 1
-scalingParams.MinCapacity = 1
-scalingParams.MaxCapacity = 10
-}
-//Update minimum and maximum capacity used by the scaling policies
-applicationAutoScaling.registerScalableTarget(scalingParams, (error, data) =&gt; {
-if (error) console.log(error, error.stack); 
-else console.log(data);                     
-});
-//Update the desired capacity for the fleet. This sets 
-//the number of running instances to desired number of instances
-appstream.updateFleet(fleetParams, (error, data) =&gt; {
-if (error) {
-console.log(error, error.stack);
-return callback(error);
-}
-console.log(data);
-return callback(null, data);
-});
-} catch (error) {
-console.log('Caught Error: ', error);
-callback(error);
-}
-};
-</code></pre> 
-<p>Note: To successfully execute this code, you need to add IAM policies to the role used by the Lambda function. The policies allow Lambda to call the Application Auto Scaling service on your behalf.</p> 
-<p style="text-align: center"><em>Figure 10: Inline policies for using Application Auto Scaling with Lambda</em></p> 
-<pre><code class="language-none">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;iam:PassRole&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: &quot;*&quot;
-&nbsp;&nbsp; }
-]
-}
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;application-autoscaling:*&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: &quot;*&quot;
-&nbsp;&nbsp; }
-]
-}</code></pre> 
-<b id="toc_6">Monitoring usage</b> 
-<p>After you have set up scaling for your fleet, you can use CloudWatch metrics with AppStream 2.0, and create a dashboard for monitoring. This helps optimize your scaling policies over time based on the amount of usage that you see.</p> 
-<p>For example, if you were very conservative with your initial set up and over-provisioned resources, you might see long periods of low fleet utilization. On the other hand, if you set the fleet size too low, you would see high utilization or errors from insufficient capacity, which would block users’ connections. You can view CloudWatch metrics for up to 15 months, and drive adjustments to your fleet scaling policy.</p> 
-<p style="text-align: center"><em>Figure 11: Dashboard with custom Amazon CloudWatch metrics</em></p> 
-<p><img src="https://awscomputeblogimages.s3-us-west-2.amazonaws.com/appstreamscaling/figure6.png" alt="appstreamscaling_13.53%20PM" /></p> 
-<b id="toc_7">Summary</b> 
-<p>These are just a few ideas for scaling AppStream 2.0 and optimizing your costs. Let us know if these are useful, and if you would like to see similar posts. If you have comments about the service, please post your feedback on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=233">AWS forum for AppStream 2.0</a>.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2016');
 });
 </script> 
 </article> 

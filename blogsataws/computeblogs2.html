@@ -191,6 +191,636 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/1-topology.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Automating Security Group Updates with AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
+<time property="datePublished" datetime="2017-10-24T13:38:16+00:00">24 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2861" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2861&amp;disqus_title=Automating+Security+Group+Updates+with+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2861');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Customers often use public endpoints to perform cross-region replication or other application layer communication to remote regions. But a common problem is how do you protect these endpoints? It can be tempting to open up the security groups to the world due to the complexity of keeping security groups in sync across regions with a dynamically changing infrastructure.</p> 
+<p>Consider a situation where you are running large clusters of instances in different regions that all require internode connectivity. One approach would be to use a VPN tunnel between regions to provide a secure tunnel over which to send your traffic. A good example of this is the <a title="undefined" href="https://aws.amazon.com/answers/networking/transit-vpc/" target="null">Transit VPC Solution</a>, which is a published AWS solution to help customers quickly get up and running. However, this adds additional cost and complexity to your solution due to the newly required additional infrastructure.</p> 
+<p>Another approach, which I’ll explore in this post, is to restrict access to the nodes by whitelisting the public IP addresses of your hosts in the opposite region. Today, I’ll outline a solution that allows for cross-region security group updates, can handle remote region failures, and supports external actions such as manually terminating instances or adding instances to an existing <a title="undefined" href="https://aws.amazon.com/autoscaling" target="null">Auto Scaling</a> group.<span id="more-2861"></span></p> 
+<b>Solution overview</b> 
+<p>The overview of this solution is diagrammed below. Although this post covers limiting access to your instances, you should still implement encryption to protect your data in transit.</p> 
+<p><img class="alignnone size-full wp-image-2873" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/1-topology.png" alt="" width="973" height="524" /></p> 
+<p>If your entire infrastructure is running in a single region, you can reference a security group as the source, allowing your IP addresses to change without any updates required. However, if you’re going across the public internet between regions to perform things like application-level traffic or cross-region replication, this is no longer an option. Security groups are regional. When you go across regions it can be tempting to drop security to enable this communication.</p> 
+<p>Although using an Elastic IP address can provide you with a static IP address that you can define as a source for your security groups, this may not always be feasible, especially when automatic scaling is desired.</p> 
+<p>In this example scenario, you have a distributed database that requires full internode communication for replication. If you place a cluster in us-east-1 and us-west-2, you must provide a secure method of communication between the two. Because the database uses cloud best practices, you can add or remove nodes as the load varies.</p> 
+<p>To start the process of updating your security groups, you must know when an instance has come online to trigger your workflow. Auto Scaling groups have the concept of <a title="undefined" href="http://docs.aws.amazon.com/autoscaling/latest/userguide/lifecycle-hooks.html" target="null">lifecycle hooks</a> that enable you to perform custom actions as the group launches or terminates instances.</p> 
+<p>When Auto Scaling begins to launch or terminate an instance, it puts the instance into a wait state (<code>Pending:Wait</code> or <code>Terminating:Wait</code>). The instance remains in this state while you perform your various actions until either you tell Auto Scaling to <code>Continue</code>, <code>Abandon</code>, or the timeout period ends. A lifecycle hook can trigger a CloudWatch event, publish to an Amazon SNS topic, or send to an Amazon SQS queue. For this example, you use <a title="undefined" href="https://aws.amazon.com/cloudwatch" target="null">CloudWatch Events</a> to trigger an <a title="undefined" href="https://aws.amazon.com/lambda" target="null">AWS Lambda</a> function that updates an <a title="undefined" href="https://aws.amazon.com/dynamodb" target="null">Amazon DynamoDB</a> table.</p> 
+<b>Component breakdown</b> 
+<p>Here’s a quick breakdown of the components involved in this solution:</p> 
+<p style="padding-left: 30px">• Lambda function<br /> • CloudWatch event<br /> • DynamoDB table</p> 
+<h3>Lambda function</h3> 
+<p>The Lambda function automatically updates your security groups, in the following way:</p> 
+<p style="padding-left: 30px">1. Determines whether a change was triggered by your Auto Scaling group lifecycle hook or manually invoked for a “true up” functionality, which I discuss later in this post.<br /> 2. Describes the instances in the Auto Scaling group and obtain public IP addresses for each instance.<br /> 3. Updates both local and remote DynamoDB tables.<br /> 4. Compares the list of public IP addresses for both local and remote clusters with what’s already in the local region security group. Update the security group.<br /> 5. Compares the list of public IP addresses for both local and remote clusters with what’s already in the remote region security group. Update the security group<br /> 6. Signals <code>CONTINUE</code> back to the lifecycle hook.</p> 
+<h3>CloudWatch event</h3> 
+<p>The CloudWatch event triggers when an instance passes through either the <code>launching</code> or <code>terminating</code> states. When the Lambda function gets invoked, it receives an event that looks like the following:</p> 
+<pre><code class="lang-json">{
+&quot;account&quot;: &quot;123456789012&quot;,
+&quot;region&quot;: &quot;us-east-1&quot;,
+&quot;detail&quot;: {
+&quot;LifecycleHookName&quot;: &quot;hook-launching&quot;,
+&quot;AutoScalingGroupName&quot;: &quot;&quot;,
+&quot;LifecycleActionToken&quot;: &quot;33965228-086a-4aeb-8c26-f82ed3bef495&quot;,
+&quot;LifecycleTransition&quot;: &quot;autoscaling:EC2_INSTANCE_LAUNCHING&quot;,
+&quot;EC2InstanceId&quot;: &quot;i-017425ec54f22f994&quot;
+},
+&quot;detail-type&quot;: &quot;EC2 Instance-launch Lifecycle Action&quot;,
+&quot;source&quot;: &quot;aws.autoscaling&quot;,
+&quot;version&quot;: &quot;0&quot;,
+&quot;time&quot;: &quot;2017-05-03T02:20:59Z&quot;,
+&quot;id&quot;: &quot;cb930cf8-ce8b-4b6c-8011-af17966eb7e2&quot;,
+&quot;resources&quot;: [
+&quot;arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:d3fe9d96-34d0-4c62-b9bb-293a41ba3765:autoScalingGroupName/&quot;
+]
+}</code></pre> 
+<h3>DynamoDB table</h3> 
+<p>You use DynamoDB to store lists of remote IP addresses in a local table that is updated by the opposite region as a failsafe source of truth. Although you can describe your Auto Scaling group for the local region, you must maintain a list of IP addresses for the remote region.</p> 
+<p>To minimize the number of describe calls and prevent an issue in the remote region from blocking your local scaling actions, we keep a list of the remote IP addresses in a local DynamoDB table. Each Lambda function in each region is responsible for updating the public IP addresses of its Auto Scaling group for both the local and remote tables.</p> 
+<p>As with all the infrastructure in this solution, there is a DynamoDB table in both regions that mirror each other. For example, the following screenshot shows a sample DynamoDB table. The Lambda function in <code>us-east-1</code> would update the DynamoDB entry for <code>us-east-1</code> in both tables in both regions.</p> 
+<p><img class="alignnone size-full wp-image-2878" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/2-ddb.png" alt="" width="975" height="123" /></p> 
+<p>By updating a DynamoDB table in both regions, it allows the local region to gracefully handle issues with the remote region, which would otherwise prevent your ability to scale locally. If the remote region becomes inaccessible, you have a copy of the latest configuration from the table that you can use to continue to sync with your security groups. When the remote region comes back online, it pushes its updated public IP addresses to the DynamoDB table. The security group is updated to reflect the current status by the remote Lambda function.</p> 
+<p>&nbsp;</p> 
+<b>Walkthrough</b> 
+<p><strong>Note: All of the following steps are performed in both regions. The Launch Stack buttons will default to the us-east-1 region.</strong></p> 
+<p>Here’s a quick overview of the steps involved in this process:</p> 
+<p style="padding-left: 30px">1. An instance is launched or terminated, which triggers an Auto Scaling group lifecycle hook, triggering the Lambda function via CloudWatch Events.<br /> 2. The Lambda function retrieves the list of public IP addresses for all instances in the local region Auto Scaling group.<br /> 3. The Lambda function updates the local and remote region DynamoDB tables with the public IP addresses just received for the local Auto Scaling group.<br /> 4. The Lambda function updates the local region security group with the public IP addresses, removing and adding to ensure that it mirrors what is present for the local and remote Auto Scaling groups.<br /> 5. The Lambda function updates the remote region security group with the public IP addresses, removing and adding to ensure that it mirrors what is present for the local and remote Auto Scaling groups.</p> 
+<h3>Prerequisites</h3> 
+<p>To deploy this solution, you need to have Auto Scaling groups, launch configurations, and a base security group in both regions. To expedite this process, <a title="undefined" href="https://github.com/awslabs/aws-automating-security-group-updates/blob/master/templates/prerequisites.yml" target="null">this CloudFormation template</a> can be launched in both regions.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Prerequisites&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/prerequisites.yml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-2719" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" alt="" width="144" height="27" /></a></p> 
+<h3>Step 1: Launch the AWS SAM template in the first region</h3> 
+<p>To make the deployment process easy, I’ve created an <a title="undefined" href="https://github.com/awslabs/serverless-application-model" target="null">AWS Serverless Application Model</a> (AWS SAM) template, which is a new specification that makes it easier to manage and deploy serverless applications on AWS. This template creates the following resources:</p> 
+<p style="padding-left: 30px">• A Lambda function, to perform the various security group actions<br /> • A DynamoDB table, to track the state of the local and remote Auto Scaling groups<br /> • Auto Scaling group lifecycle hooks for instance launching and terminating<br /> • A CloudWatch event, to track the <code>EC2 Instance-Launch Lifecycle-Action</code> and <code>EC2 Instance-terminate Lifecycle-Action</code> events<br /> • A pointer from the CloudWatch event to the Lambda function, and the necessary permissions</p> 
+<p>Download the template from <a title="undefined" href="https://github.com/awslabs/aws-automating-security-group-updates/blob/master/templates/master.yml" target="null">here</a> or click to launch.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Master&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/master.yml" target="_blank" rel="noopener noreferrer"><img class="alignnone size-full wp-image-2719" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" alt="" /></a></p> 
+<p>Upon launching the template, you’ll be presented with a list of parameters which includes the remote/local names for your Auto Scaling Groups, AWS region, Security Group IDs, DynamoDB table names, as well as where the code for the Lambda function is located. Because this is the first region you’re launching the stack in, fill out all the parameters except for the <em>RemoteTable</em> parameter as it hasn’t been created yet (you fill this in later).</p> 
+<p><img class="alignnone size-full wp-image-2880" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/3-cfn.png" alt="" width="1436" height="1322" /></p> 
+<h3>Step 2: Test the local region</h3> 
+<p>After the stack has finished launching, you can test the local region. Open the EC2 console and find the Auto Scaling group that was created when launching the prerequisite stack. Change the desired number of instances from 0 to 1.</p> 
+<p>For both regions, check your security group to verify that the public IP address of the instance created is now in the security group.</p> 
+<p>Local region:</p> 
+<p><img class="alignnone size-full wp-image-2883" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/4-local-sg.png" alt="" width="975" height="117" /></p> 
+<p>Remote region:</p> 
+<p><img class="alignnone size-full wp-image-2884" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/5-remote-sg.png" alt="" width="975" height="129" /></p> 
+<p>Now, change the desired number of instances for your group back to 0 and verify that the rules are properly removed.</p> 
+<p>Local region:</p> 
+<p><img class="alignnone size-full wp-image-2885" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/6-local-sg.png" alt="" width="975" height="78" /></p> 
+<p>Remote region:</p> 
+<p><img class="alignnone size-full wp-image-2886" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/7-remote-sg.png" alt="" width="975" height="87" /></p> 
+<h3>Step 3: Launch in the remote region</h3> 
+<p>When you deploy a Lambda function using CloudFormation, the Lambda zip file needs to reside in the same region you are launching the template. Once you choose your remote region, create an Amazon S3 bucket and upload the <a href="https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/auto-sg-updater.zip">Lambda zip file</a> there. Next, go to the remote region and launch the same SAM template as before, but make sure you update the <strong>CodeBucket</strong> and <strong>CodeKey</strong> parameters. Also, because this is the second launch, you now have all the values and can fill out all the parameters, specifically the <em>RemoteTable</em> value.</p> 
+<p>&nbsp;</p> 
+<h3>Step 4: Update the local region Lambda environment variable</h3> 
+<p>When you originally launched the template in the local region, you didn’t have the name of the DynamoDB table for the remote region, because you hadn’t created it yet. Now that you have launched the remote template, you can perform a CloudFormation stack update on the initial SAM template. This populates the remote DynamoDB table name into the initial Lambda function’s environment variables.</p> 
+<p>In the CloudFormation console in the initial region, select the stack. Under <strong>Actions</strong>, choose <strong>Update Stack</strong>, and select the SAM template used for both regions. Under <strong>Parameters</strong>, populate the remote DynamoDB table name, as shown below. Choose <strong>Next</strong> and let the stack update complete. This updates your Lambda function and completes the setup process.</p> 
+<p><img class="alignnone size-full wp-image-2891" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/8-CFN.png" alt="" width="1454" height="1322" /></p> 
+<p>&nbsp;</p> 
+<h3>Step 5: Final testing</h3> 
+<p>You now have everything fully configured and in place to trigger security group changes based on instances being added or removed to your Auto Scaling groups in both regions. Test this by changing the desired capacity of your group in both regions.</p> 
+<p>True up functionality<br /> If an instance is manually added or removed from the Auto Scaling group, the lifecycle hooks don’t get triggered. To account for this, the Lambda function supports a “true up” functionality in which the function can be manually invoked. If you paste in the following JSON text for your test event, it kicks off the entire workflow. For added peace of mind, you can also have this function fire via a CloudWatch event with a CRON expression for nearly continuous checking.</p> 
+<pre><code class="lang-json">{
+&quot;detail&quot;: {
+&quot;AutoScalingGroupName&quot;: &quot;&lt;your ASG name&gt;&quot;
+},
+&quot;trueup&quot;:true
+}</code></pre> 
+<b>Extra credit</b> 
+<p>Now that all the resources are created in both regions, go back and break down the policy to incorporate resource-level permissions for specific security groups, Auto Scaling groups, and the DynamoDB tables.</p> 
+<p>Although this post is centered around using public IP addresses for your instances, you could instead use a VPN between regions. In this case, you would still be able to use this solution to scope down the security groups to the cluster instances. However, the code would need to be modified to support private IP addresses.</p> 
+<p>&nbsp;</p> 
+<b>Conclusion</b> 
+<p>At this point, you now have a mechanism in place that captures when a new instance is added to or removed from your cluster and updates the security groups in both regions. This ensures that you are locking down your infrastructure securely by allowing access only to other cluster members.</p> 
+<p>Keep in mind that this architecture (lifecycle hooks, CloudWatch event, Lambda function, and DynamoDB table) requires that the infrastructure to be deployed in both regions, to have synchronization going both ways.</p> 
+<p>Because this Lambda function is modifying security group rules, it’s important to have an audit log of what has been modified and who is modifying them. The out-of-the-box function provides logs in CloudWatch for what IP addresses are being added and removed for which ports. As these are all API calls being made, they are logged in CloudTrail and can be traced back to the IAM role that you created for your lifecycle hooks. This can provide historical data that can be used for troubleshooting or auditing purposes.</p> 
+<p>Security is paramount at AWS. We want to ensure that customers are protecting access to their resources. This solution helps you keep your security groups in both regions automatically in sync with your Auto Scaling group resources. Let us know if you have any questions or other solutions you’ve come up with!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-dynamodb/" rel="tag">Amazon DynamoDB</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-ec2/" rel="tag">Amazon EC2</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2861');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger-626x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Implementing Default Directory Indexes in Amazon S3-backed Amazon CloudFront Origins Using Lambda@Edge</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ronnie Eichler</span></span> | on 
+<time property="datePublished" datetime="2017-10-18T07:35:23+00:00">18 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2895" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2895&amp;disqus_title=Implementing+Default+Directory+Indexes+in+Amazon+S3-backed+Amazon+CloudFront+Origins+Using+Lambda%40Edge&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2895');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>With the recent launch of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, it’s now possible for you to provide even more robust functionality to your static websites. <a href="https://aws.amazon.com/cloudfront">Amazon CloudFront</a> is a content distribution network service. In this post, I show how you can use Lambda@Edge along with the CloudFront origin access identity (OAI) for Amazon S3 and still provide simple URLs (such as www.example.com/about/ instead of www.example.com/about/index.html).<span id="more-2895"></span></p> 
+<h3>Background</h3> 
+<p>Amazon S3 is a great platform for <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/WebsiteHosting.html">hosting a static website</a>. You don’t need to worry about managing servers or underlying infrastructure—you just publish your static to content to an S3 bucket. S3 provides a DNS name such as &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com. Use this name for your website by creating a CNAME record in your domain’s DNS environment (or Amazon Route 53) as follows:</p> 
+<blockquote> 
+<p>www.example.com -&gt; &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com</p> 
+</blockquote> 
+<p>You can also put CloudFront in front of S3 to further scale the performance of your site and cache the content closer to your users. CloudFront can enable HTTPS-hosted sites, by either using a custom Secure Sockets Layer (SSL) certificate or a managed certificate from <a href="https://aws.amazon.com/blogs/aws/new-aws-certificate-manager-deploy-ssltls-based-apps-on-aws/">AWS Certificate Manager</a>. In addition, CloudFront also offers integration with <a href="https://aws.amazon.com/waf/">AWS WAF</a>, a web application firewall. As you can see, it’s possible to achieve some robust functionality by using S3, CloudFront, and other managed services and not have to worry about maintaining underlying infrastructure.</p> 
+<p>One of the key concerns that you might have when implementing any type of WAF or CDN is that you want to force your users to go through the CDN. If you implement CloudFront in front of S3, you can achieve this by using an <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html">OAI</a>. However, in order to do this, you cannot use the HTTP endpoint that is exposed by S3’s static website hosting feature. Instead, CloudFront must use the S3 REST endpoint to fetch content from your origin so that the request can be authenticated using the OAI. This presents some challenges in that the REST endpoint does not support redirection to a default index page.</p> 
+<p>CloudFront does allow you to specify a default root object (index.html), but it only works on the root of the website (such as http://www.example.com &gt; http://www.example.com/index.html). It does not work on any subdirectory (such as http://www.example.com/about/). If you were to attempt to request this URL through CloudFront, CloudFront would do a S3 GetObject API call against a key that does not exist.</p> 
+<p>Of course, it is a bad user experience to expect users to always type index.html at the end of every URL (or even know that it should be there). Until now, there has not been an easy way to provide these simpler URLs (equivalent to the DirectoryIndex Directive in an Apache Web Server configuration) to users through CloudFront. Not if you still want to be able to restrict access to the S3 origin using an OAI. However, with the release of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, you can use a JavaScript function running on the CloudFront edge nodes to look for these patterns and request the appropriate object key from the S3 origin.</p> 
+<h3>Solution</h3> 
+<p>In this example, you use the compute power at the CloudFront edge to inspect the request as it’s coming in from the client. Then re-write the request so that CloudFront requests a default index object (index.html in this case) for any request URI that ends in ‘/’.</p> 
+<p>When a request is made against a web server, the client specifies the object to obtain in the request. You can use this URI and apply a regular expression to it so that these URIs get resolved to a default index object before CloudFront requests the object from the origin. Use the following code:</p> 
+<pre><code class="lang-js">'use strict';
+exports.handler = (event, context, callback) =&gt; {
+// Extract the request from the CloudFront event that is sent to Lambda@Edge 
+var request = event.Records[0].cf.request;
+// Extract the URI from the request
+var olduri = request.uri;
+// Match any '/' that occurs at the end of a URI. Replace it with a default index
+var newuri = olduri.replace(/\/$/, '\/index.html');
+// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
+console.log(&quot;Old URI: &quot; + olduri);
+console.log(&quot;New URI: &quot; + newuri);
+// Replace the received URI with the URI that includes the index page
+request.uri = newuri;
+// Return to CloudFront
+return callback(null, request);
+};
+</code></pre> 
+<p>To get started, create an S3 bucket to be the origin for CloudFront:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1.png"><img class="alignnone wp-image-2897 size-large" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1-921x1024.png" alt="Create bucket" width="640" height="712" /></a></p> 
+<p>On the other screens, you can just accept the defaults for the purposes of this walkthrough. If this were a production implementation, I would recommend enabling bucket logging and specifying an existing S3 bucket as the destination for access logs. These logs can be useful if you need to troubleshoot issues with your S3 access.</p> 
+<p>Now, put some content into your S3 bucket. For this walkthrough, create two simple webpages to demonstrate the functionality: &nbsp;A page that resides at the website root, and another that is in a subdirectory.</p> 
+<p><strong>&lt;s3bucketname&gt;/index.html</strong></p> 
+<pre><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Root home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre> 
+<p><strong>&lt;s3bucketname&gt;/subdirectory/index.html</strong></p> 
+<pre><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre> 
+<p>When uploading the files into S3, you can accept the defaults. You add a bucket policy as part of the CloudFront distribution creation that allows CloudFront to access the S3 origin. You should now have an S3 bucket that looks like the following:</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png"><img class="size-full wp-image-2904" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png" alt="" width="974" height="437" /></a> 
+<p class="wp-caption-text">Root of bucket</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png"><img class="size-full wp-image-2905" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png" alt="" width="975" height="387" /></a> 
+<p class="wp-caption-text">Subdirectory in bucket</p> 
+<p>Next, create a CloudFront distribution that your users will use to access the content. Open the CloudFront console, and choose <strong>Create Distribution</strong>. For <strong>Select a delivery method for your content</strong>, under <strong>Web</strong>, choose <strong>Get Started</strong>.</p> 
+<p>On the next screen, you set up the distribution. Below are the options to configure:</p> 
+<li><strong>Origin Domain Name</strong>: &nbsp;Select the S3 bucket that you created earlier.</li> 
+<li><strong>Restrict Bucket Access:&nbsp;</strong>Choose&nbsp;<strong>Yes</strong>.</li> 
+<li><strong>Origin Access Identity:&nbsp;</strong>Create a new identity.</li> 
+<li><strong>Grant Read Permissions on Bucket</strong>: Choose&nbsp;<strong>Yes, Update Bucket Policy</strong>.</li> 
+<li><strong>Object Caching</strong>: Choose&nbsp;<strong>Customize</strong> (I am changing the behavior to avoid having CloudFront cache objects, as this could affect your ability to troubleshoot while implementing the Lambda code). 
+<li><strong>Minimum TTL</strong>: 0</li> 
+<li><strong>Maximum TTL</strong>: 0</li> 
+<li><strong>Default TTL</strong>: 0</li> 
+</ul> </li> 
+<p>You can accept all of the other defaults. Again, this is a proof-of-concept exercise. After you are comfortable that the CloudFront distribution is working properly with the origin and Lambda code, you can re-visit the preceding values and make changes before implementing it in production.</p> 
+<p>CloudFront distributions can take several minutes to deploy (because the changes have to propagate out to all of the edge locations). After that’s done, test the functionality of the S3-backed static website. Looking at the distribution, you can see that CloudFront assigns a domain name:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png"><img class="alignnone size-full wp-image-2908" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png" alt="CloudFront Distribution Settings" width="974" height="518" /></a></p> 
+<p>Try to access the website using a combination of various URLs:</p> 
+<p>http://&lt;domainname&gt;/: &nbsp;<strong>Works</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/
+*   Trying 54.192.192.214...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
+&gt; GET / HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; ETag: &quot;cb7e2634fe66c1fd395cf868087dd3b9&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: -D2FSRwzfcwyKZKFZr6DqYFkIf4t7HdGw2MkUF5sE6YFDxRJgi0R1g==
+&lt; Content-Length: 209
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:16 GMT
+&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Root home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>This is because CloudFront is configured to request a default root object (index.html) from the origin.</p> 
+<p>http://&lt;domainname&gt;/subdirectory/: &nbsp;<strong>Doesn’t work</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
+*   Trying 54.192.192.214...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
+&gt; GET /subdirectory/ HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; ETag: &quot;d41d8cd98f00b204e9800998ecf8427e&quot;
+&lt; x-amz-server-side-encryption: AES256
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: Iqf0Gy8hJLiW-9tOAdSFPkL7vCWBrgm3-1ly5tBeY_izU82ftipodA==
+&lt; Content-Length: 0
+&lt; Content-Type: application/x-directory
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:24 GMT
+&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>If you use a tool such like cURL to test this, you notice that CloudFront and S3 are returning a blank response. The reason for this is that the subdirectory does exist, but it does not resolve to an S3 object. Keep in mind that S3 is an object store, so there are no real directories. User interfaces such as the S3 console present a hierarchical view of a bucket with folders based on the presence of forward slashes, but behind the scenes the bucket is just a collection of keys that represent stored objects.</p> 
+<p>http://&lt;domainname&gt;/subdirectory/index.html: &nbsp;<strong>Works</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/index.html
+*   Trying 54.192.192.130...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.130) port 80 (#0)
+&gt; GET /subdirectory/index.html HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Date: Thu, 20 Jul 2017 20:35:15 GMT
+&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: RefreshHit from cloudfront
+&lt; X-Amz-Cf-Id: bkh6opXdpw8pUomqG3Qr3UcjnZL8axxOH82Lh0OOcx48uJKc_Dc3Cg==
+&lt; Content-Length: 227
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
+&lt; Via: 1.1 3f2788d309d30f41de96da6f931d4ede.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>This request works as expected because you are referencing the object directly. Now, you implement the Lambda@Edge function to return the default index.html page for any subdirectory. Looking at the example JavaScript code, here’s where the magic happens:</p> 
+<pre><code class="lang-js">var newuri = olduri.replace(/\/$/, '\/index.html');
+</code></pre> 
+<p>You are going to use a JavaScript regular expression to match any ‘/’ that occurs at the end of the URI and replace it with ‘/index.html’. This is the equivalent to what S3 does on its own with static website hosting. However, as I mentioned earlier, you can’t rely on this if you want to use a policy on the bucket to restrict it so that users must access the bucket through CloudFront. That way, all requests to the S3 bucket must be authenticated using the S3 REST API. Because of this, you implement a Lambda@Edge function that takes any client request ending in ‘/’ and append a default ‘index.html’ to the request before requesting the object from the origin.</p> 
+<p>In the Lambda console, choose <strong>Create function</strong>. On the next screen, skip the blueprint selection and choose <strong>Author from scratch</strong>, as you’ll use the sample code provided.</p> 
+<p>Next, configure the trigger. Choosing the empty box shows a list of available triggers. Choose <strong>CloudFront</strong> and select your CloudFront distribution ID (created earlier). For this example, leave <strong>Cache Behavior</strong> as <strong>*</strong> and <strong>CloudFront Event</strong> as <strong>Origin Request</strong>. Select the <strong>Enable trigger and replicate box</strong> and choose <strong>Next</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png"><img class="alignnone size-full wp-image-2907" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png" alt="Lambda Trigger" width="974" height="981" /></a></p> 
+<p>Next, give the function a name and a description. Then, copy and paste the following code:</p> 
+<pre><code class="lang-js">'use strict';
+exports.handler = (event, context, callback) =&gt; {
+// Extract the request from the CloudFront event that is sent to Lambda@Edge 
+var request = event.Records[0].cf.request;
+// Extract the URI from the request
+var olduri = request.uri;
+// Match any '/' that occurs at the end of a URI. Replace it with a default index
+var newuri = olduri.replace(/\/$/, '\/index.html');
+// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
+console.log(&quot;Old URI: &quot; + olduri);
+console.log(&quot;New URI: &quot; + newuri);
+// Replace the received URI with the URI that includes the index page
+request.uri = newuri;
+// Return to CloudFront
+return callback(null, request);
+};
+</code></pre> 
+<p>Next, define a role that grants permissions to the Lambda function. For this example, choose <strong>Create new role from template</strong>, <strong>Basic Edge Lambda permissions</strong>. This creates a new IAM role for the Lambda function and grants the following permissions:</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:logs:*:*:*&quot;
+]
+}
+]
+}
+</code></pre> 
+<p>In a nutshell, these are the permissions that the function needs to create the necessary CloudWatch log group and log stream, and to put the log events so that the function is able to write logs when it executes.</p> 
+<p>After the function has been created, you can go back to the browser (or cURL) and re-run the test for the subdirectory request that failed previously:</p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
+*   Trying 54.192.192.202...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.202) port 80 (#0)
+&gt; GET /subdirectory/ HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Date: Thu, 20 Jul 2017 21:18:44 GMT
+&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: rwFN7yHE70bT9xckBpceTsAPcmaadqWB9omPBv2P6WkIfQqdjTk_4w==
+&lt; Content-Length: 227
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
+&lt; Via: 1.1 3572de112011f1b625bb77410b0c5cca.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>You have now configured a way for CloudFront to return a default index page for subdirectories in S3!</p> 
+<h3>Summary</h3> 
+<p>In this post, you used <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-edge.html">Lambda@Edge</a> to be able to use CloudFront with an S3 origin access identity and serve a default root object on subdirectory URLs. To find out some more about this use-case, see <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-the-edge.html">Lambda@Edge integration with CloudFront</a>&nbsp;in&nbsp;our documentation.</p> 
+<p>If you have questions or suggestions, feel free to comment below. For troubleshooting or implementation help, check out the Lambda <a href="https://forums.aws.amazon.com/forum.jspa?forumID=186">forum</a>.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-cloudfront/" rel="tag">Amazon CloudFront</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambdaedge/" rel="tag">Lambda@Edge</a>, <a href="https://aws.amazon.com/blogs/compute/tag/s3/" rel="tag">S3</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2895');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/withoutcold-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Analyzing Performance for Amazon Rekognition Apps Written on AWS Lambda Using AWS X-Ray</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Bharath Kumar</span></span> | on 
+<time property="datePublished" datetime="2017-10-12T11:30:41+00:00">12 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-x-ray/" title="View all posts in AWS X-Ray*"><span property="articleSection">AWS X-Ray*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/analyzing-performance-for-amazon-rekognition-apps-written-on-aws-lambda-using-aws-x-ray/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2975" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2975&amp;disqus_title=Analyzing+Performance+for+Amazon+Rekognition+Apps+Written+on+AWS+Lambda+Using+AWS+X-Ray&amp;disqus_url=https://aws.amazon.com/blogs/compute/analyzing-performance-for-amazon-rekognition-apps-written-on-aws-lambda-using-aws-x-ray/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2975');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/xray/"> AWS X-Ray </a> helps developers analyze and debug production, distributed applications, such as those built using a microservices architecture. With X-Ray, you can understand how your application and its underlying services are performing to identify and troubleshoot the root cause of performance issues and errors. It allows you to view, filter, and gain insights to identify issues and opportunities for optimization.</p> 
+<p>X-Ray helps you to both understand the performance of your app and to annotate important parameters. In this post, I look at a sample <a href="https://aws.amazon.com/rekognition/">Amazon Rekognition</a> app that stores images in <a href="https://aws.amazon.com/s3/">Amazon S3</a>. The app calls the&nbsp;<a href="http://docs.aws.amazon.com/rekognition/latest/dg/API_RecognizeCelebrities.html"><code class="lang-json">RecognizeCelebrities</code></a> action from an <a href="https://aws.amazon.com/lambda/"> AWS Lambda </a> function. The function uses X-Ray features to analyze the app’s performance in recognizing any celebrity in a single image or in multiple images. These features include:</p> 
+<li>Annotations and traces</li> 
+<li>Histogram</li> 
+<li>Metadata</li> 
+<li>Exceptions</li> 
+<p><span id="more-2975"></span></p> 
+<b>Sample app overview</b> 
+<p>In the <a href="https://github.com/awslabs/aws-xray-rekognition-lambda-sample">sample app</a>, you can upload images and store them in the <strong>imagestoragexray</strong> bucket. Then you can choose <strong>Recognize faces</strong> for an individual image. This calls a Lambda function, which then calls <code class="lang-json">RecognizeCelebrities</code> to recognize the celebrities in the image. The Lambda function returns to the client a comma-separated list of celebrities that it found in the image.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/architecture-1024x576-1.png"><img class="wp-image-3045 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/architecture-1024x576-1.png" alt="" width="742" height="544" /></a> 
+<p class="wp-caption-text">Overview of the sample app’s architecture</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/servicemap.png"><img class="wp-image-3001" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/servicemap-1024x472.png" alt="X-Ray service map from the sample app" width="803" height="375" /></a> 
+<p class="wp-caption-text">X-Ray service map from the sample app</p> 
+<p>To search for a celebrity in the collection of images, you can type the celebrity’s name in the text box and choose <strong>Search celeb</strong>. This calls another Lambda function that runs <code class="lang-json">RecognizeCelebrities</code> on all the images in the <strong>imagestoragexray</strong> bucket. The Lambda function then returns the number of times that the celebrity was found in all the images.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/Picture3.png"><img class="wp-image-2978 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/Picture3.png" alt="Example of sample app" width="975" height="434" /></a> 
+<p class="wp-caption-text">Example of a sample app webpage with stored images</p> 
+<b>Annotations and traces</b> 
+<p>Annotations are indexed for grouping traces in the X-Ray console, based on parameters stored in the annotations. Annotations help you determine the performance of particular images.</p> 
+<p>Using annotations to record the celebrity image file name, you can filter to see traces for performance of your app on specific images. For example, all the celebrities recognized in the analyzed images are annotated with the average confidence with which Amazon Rekognition matched the celebrity. The number of faces found in an image is also annotated.</p> 
+<p>Resourceful annotations such as these provide you with a comprehensive outlook about your app’s performance.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/annotations.png"><img class="wp-image-3002 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/annotations-1024x388.png" alt="X-Ray annotation in the sample app" width="834" height="322" /></a> 
+<p class="wp-caption-text">X-Ray annotation in the sample app</p> 
+<h3>Understanding Lambda function cold starts</h3> 
+<p>When a Lambda function is invoked for the first time, or after it’s updated, Lambda launches a container based on the configuration settings that you provided. It takes time to set up a container and do the necessary bootstrapping, also known as a cold start.</p> 
+<p>The latency of a Lambda function is the amount of time between when a request starts and when it completes. Due to the cold start behavior, Lambda function executions may take longer on the first invocation or after a function has been updated. For subsequent invocations, Lambda tries to reuse the container to reduce the latency.</p> 
+<p>X-Ray helps you trace the cold start time as well as the overall latency for a Lambda function. In the following screenshot showing the 3.5-second duration of the Lambda function, you see that it took 473 milliseconds to initialize the function. For more information about execution time, see <a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-introduction.html">AWS Lambda: How It Works</a>.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/coldstart.png"><img class="wp-image-3048 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/coldstart-1024x441.png" alt="X-Ray trace showing initialization time for the Lambda function" width="821" height="354" /></a> 
+<p class="wp-caption-text">X-Ray trace showing initialization time for the Lambda function</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/withoutcold-1.png"><img class="wp-image-3051 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/withoutcold-1-1024x389.png" alt="X-Ray trace on subsequent invocations of the Lambda function without the cold start" width="870" height="330" /></a> 
+<p class="wp-caption-text">X-Ray trace on subsequent invocations of the Lambda function without the cold start</p> 
+<h3>Determining the time for image analysis on celebrities</h3> 
+<p>You can determine that the time Amazon Rekognition takes differs with the number of celebrity images in the photo. For example, a photo without a celebrity takes a shorter time to process, compared to a photo with a celebrity that Amazon Rekognition was able to recognize. In the following screenshots, you can see that the Lambda function that calls Amazon Rekognition to find images with Steve Jobs took 1.7 seconds to complete. This is compared to 858 milliseconds, using the same Lambda function for an image with a random landscape</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/stevejobslandscape.png"><img class="wp-image-3052 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/stevejobslandscape-1024x189.png" alt="X-Ray trace showing the time that a Lambda function takes to call Amazon Rekognition and return" width="933" height="172" /></a> 
+<p class="wp-caption-text">X-Ray trace showing the time that a Lambda function takes to call Amazon Rekognition and return</p> 
+<p>By choosing the particular traces that show up in the trace list for your annotation filter, you can investigate further. Specifically, you can look at the performance of your Amazon Rekognition call.</p> 
+<p>Amazon Rekognition took 1.3 seconds to analyze and provide results for the image with Steve Jobs. However, it took only 829 milliseconds to analyze and provide results for the random landscape image.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/stevejobstrace.png"><img class="wp-image-3053 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/stevejobstrace-1024x424.png" alt="X-Ray trace showing the time that Amazon Rekognition takes to analyze the Steve Jobs image" width="814" height="337" /></a> 
+<p class="wp-caption-text">X-Ray trace showing the time that Amazon Rekognition takes to analyze the Steve Jobs image</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/landscapetrace.png"><img class="wp-image-3054 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/landscapetrace-1024x409.png" alt="X-Ray trace showing the time that Amazon Rekognition takes to analyze the random landscape image" width="825" height="330" /></a> 
+<p class="wp-caption-text">X-Ray trace showing the time that Amazon Rekognition takes to analyze the random landscape image</p> 
+<h3>Determining the time for image analysis on multiple faces</h3> 
+<p>X-Ray can also help you to look at the performance of your app for images with multiple faces. Using the annotations feature, you can record the number of faces that Amazon Rekognition recognized in the image. Through this annotation, you can filter traces for images with a specific number of face counts that were recognized or not recognized in Amazon Rekognition, as shown in the following screenshot.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/multiplefaces-facecount.png"><img class="wp-image-3056 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/multiplefaces-facecount-1024x221.png" alt="X-Ray annotations for face counts in images recognized by Amazon Rekognition" width="807" height="174" /></a> 
+<p class="wp-caption-text">X-Ray annotations for face counts in images recognized by Amazon Rekognition</p> 
+<p>In the images below, notice that Amazon Rekognition takes more time to analyze images that contain more faces. For example, Amazon Rekognition took 8.9 seconds to analyze an image with 15 faces compared to only 6.0 seconds for an image with 5 faces. You can use the filter expression <em>Annotation.Facecount &gt; “5”</em> to view requests for which Amazon Rekognition recognized more than 5 faces.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/facecount15trace-1.png"><img class="wp-image-3061 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/facecount15trace-1-1024x405.png" alt="X-Ray traces for an image with 15 face counts" width="815" height="322" /></a> 
+<p class="wp-caption-text">X-Ray traces for an image with 15 face counts</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/facecount5trace.png"><img class="wp-image-3060 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/facecount5trace-1024x430.png" alt="X-Ray traces for an image with 10 face counts" width="788" height="331" /></a> 
+<p class="wp-caption-text">X-Ray traces for an image with 5 face counts</p> 
+<b>Histograms</b> 
+<p>When you select a node or edge on an X-Ray service map, the console shows a latency distribution histogram. It shows duration on the x-axis, and the percentage of requests that match each duration on the y-axis. Using this histogram, you can look at calls that have a high latency and try to improve their performance.</p> 
+<h3>Using the latency histogram</h3> 
+<p>In your service map, you can choose individual nodes to look at the response latency for calls. When you choose the Amazon Rekognition node AWS::rekognition in the service map, you can see the corresponding response latency from Amazon Rekognition, as shown in the following screenshot.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/xraylatency.png"><img class="wp-image-3017 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/xraylatency-1024x783.png" alt="X-Ray response distribution histogram for response latency" width="757" height="571" /></a> 
+<p class="wp-caption-text">X-Ray response distribution histogram for response latency</p> 
+<p>Notice that the response latency increases with the number of face counts in the image. As you noted previously, image analysis time also increases with the face count increase.</p> 
+<p>For example, the random landscape image’s response latency is less than 1 second, whereas calls to Amazon Rekognition for images with one face count have a response latency between 1 second and 1.5 seconds. Images with multiple face counts have a much higher response latency, greater than 1.5 seconds.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/between1and15.png"><img class="wp-image-3013 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/between1and15-1024x485.png" alt="X-Ray traces for images with a response latency between 1 second and 1.5 seconds" width="769" height="374" /></a> 
+<p class="wp-caption-text">X-Ray traces for images with a response latency between 1 second and 1.5 seconds</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/highlatencyxraytraces.png"><img class="wp-image-3019 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/highlatencyxraytraces-1024x784.png" alt="X-Ray response distribution histogram for a higher response latency" width="769" height="537" /></a> 
+<p class="wp-caption-text">X-Ray response distribution histogram for a higher response latency</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/histogram.png"><img class="wp-image-3012 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/histogram-1024x490.png" alt="X-Ray traces for images with multiple face counts that have a higher response latency" width="795" height="392" /></a> 
+<p class="wp-caption-text">X-Ray traces for images with multiple face counts that have a higher response latency</p> 
+<b>Metadata</b> 
+<p>The metadata feature in X-Ray enables you to store app information for later reference. However, you cannot filter out traces based on the metadata. The sample app stores the response from Amazon Rekognition in metadata for your reference.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/metadata.png"><img class="wp-image-3011 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/10/metadata-1024x549.png" alt="X-Ray metadata in the sample app" width="807" height="439" /></a> 
+<p class="wp-caption-text">X-Ray metadata in the sample app</p> 
+<b>Exceptions</b> 
+<p>X-Ray also provides information on exceptions from other AWS services in the trace. For the sample app, Amazon Rekognition responded back with an exception when the RecognizeCelebrities call was made on a non-image file. You can also filter requests that had an exception in Amazon Rekognition, using the following expression:<br /> <code>service(&quot;rekognition&quot;) { error = true }</code></p> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/xray/latest/devguide/xray-console-filters.html">Searching for Traces in the AWS X-Ray Console with Filter Expressions</a>.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/exceptiontrace.png"><img class="wp-image-3062 " src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/exceptiontrace-1024x448.png" alt="X-Ray trace showing an error from Amazon Rekognition" width="809" height="354" /></a> 
+<p class="wp-caption-text">X-Ray trace showing an error from Amazon Rekognition</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/exceptioninfo.png"><img class="wp-image-3063 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/exceptioninfo.png" alt="X-Ray trace showing the Amazon Rekognition exception in more detail" width="640" height="429" /></a> 
+<p class="wp-caption-text">X-Ray trace showing the Amazon Rekognition exception in more detail</p> 
+<b>Summary</b> 
+<p>X-Ray helps you analyze your app and its performance. Through the annotations feature, you can index and filter specific traces. Annotating specific parameters in your app helps you get a comprehensive overview of your app’s performance specific to these parameters. The histogram helps you analyze calls with high response latency and gives you visibility into the time that individual services take. The metadata feature helps you store any relevant information that might be useful to improve your app’s performance. X-Ray also provides information on exceptions that happened on a particular trace to an AWS service.</p> 
+<p>Overall, by using X-Ray you can both improve performance of your app and understand the underlying services that your app uses. Use this information to troubleshoot and improve specific portions of your app, and save both time and money.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-rekognition/" rel="tag">Amazon Rekognition</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-x-ray/" rel="tag">AWS X-Ray</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2975');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Clean up Your Container Images with Amazon ECR Lifecycle Policies</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-10-11T16:33:49+00:00">11 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/clean-up-your-container-images-with-amazon-ecr-lifecycle-policies/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3025" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3025&amp;disqus_title=Clean+up+Your+Container+Images+with+Amazon+ECR+Lifecycle+Policies&amp;disqus_url=https://aws.amazon.com/blogs/compute/clean-up-your-container-images-with-amazon-ecr-lifecycle-policies/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3025');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post comes from the desk of Brent Langston.</em></p> 
+<p>—</p> 
+<p>Starting today, customers can keep their container image repositories tidy by automatically removing old or unused images using <strong>lifecycle policies</strong>, now available as part of <a href="https://aws.amazon.com/ecr">Amazon EC2 Container Registry (Amazon ECR)</a>.</p> 
+<p>Amazon ECR is a fully managed Docker container registry that makes it easy to store manage and deploy Docker container images without worrying about the typical challenges of scaling a service to handle pulling hundreds of images at one time. This scale means that development teams using Amazon ECR actively often find that their repositories fill up with many container image versions. This makes it difficult to find the code changes that matter and incurs unnecessary storage costs. Previously, cleaning up your repository meant spending time to manually delete old images, or writing and executing scripts.</p> 
+<p>Now, lifecycle policies allow you to define a set of rules to remove old container images automatically. You can also preview rules to see exactly which container images are affected when the rule runs. This allows repositories to be better organized, makes it easier to find the code revisions that matter, and lowers storage costs.</p> 
+<p>Let’s take a look&nbsp;at how lifecycle policies work.</p> 
+<p><span id="more-3025"></span></p> 
+<p><img class="aligncenter size-full wp-image-3065" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/ecr-lifecyclepolicies.png" alt="" width="907" height="605" /></p> 
+<b>Ground&nbsp;Rules</b> 
+<p>One of the biggest benefits of deploying code in containers is the ability to quickly and easily roll back to a previous version. You can deploy with less risk because, if something goes wrong, it is easy to revert back to the previous container version and know that your application will run like it did before the failed deployment. Most people probably never roll back past a few versions. If your situation is similar, then one simple lifecycle rule might be to just keep the last 30 images.</p> 
+<h3>Last 30 Images</h3> 
+<p>In your ECR registry, choose <strong>Dry-Run Lifecycle Rules, Add</strong>.</p> 
+<li>For <strong>Image Status</strong>, select <strong>Untagged</strong>.</li> 
+<li>Under <strong>Match criteria</strong>, for <strong>Count Type</strong>, enter <strong>Image Count More Than</strong>.</li> 
+<li>For <strong>Count Number</strong>, enter <strong>30</strong>.</li> 
+<li>For <strong>Rule action</strong>, choose <strong>expire</strong>.</li> 
+<p>Choose <strong>Save</strong>. To see which images would be cleaned up, <strong>Save and dry-run rules</strong>.</p> 
+<p>Of course, there are teams who, for compliance reasons, might prefer to keep certain images for a period of time, rather than keeping by count. For that situation, you can choose to clean up images older than 90 days.</p> 
+<h3>Last 90 Days</h3> 
+<p>Select the rule that you just created and choose Edit. Change the parameters to keep only 90 days of untagged images:</p> 
+<li>Under <strong>Match criteria</strong>, for <strong>Count Type</strong>, enter <strong>Since Image Pushed</strong></li> 
+<li>For <strong>Count Number</strong>, enter <strong>90</strong>.</li> 
+<li>For <strong>Count Unit</strong>, enter <strong>days</strong>.</li> 
+<b>Tags</b> 
+<p>Certainly 90 days is an arbitrary timeframe, and your team might have policies in place that would require a longer timeframe for certain kinds of images. If that’s the case, but you still want to continue with the spring cleaning, you can consider getting rid of images that are tag prefixed.</p> 
+<p>Here is the list of rules I came up with to groom untagged, development, staging, and production images:</p> 
+<li>Remove untagged images over 90 days old</li> 
+<li>Remove development tagged images over 90 days old</li> 
+<li>Remove staging tagged images over 180 days old</li> 
+<li>Remove production tagged images over 1 year old</li> 
+<p>As you can see, the new Amazon ECR lifecycle policies are powerful, and help you easily keep the images you need, while cleaning out images you may never use again. This feature is available starting today, in all <a href="https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/">regions where Amazon ECR is available</a>, at no extra charge. For more information, see <a href="http://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html">Amazon ECR Lifecycle Policies</a> in the AWS&nbsp;technical documentation.</p> 
+<p>— Brent<br /> <a href="https://twitter.com/brentContained">@brentContained</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/container/" rel="tag">container</a>, <a href="https://aws.amazon.com/blogs/compute/tag/containers/" rel="tag">Containers</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/image-repository/" rel="tag">Image Repository</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3025');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3-629x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Improved Testing on the AWS Lambda Console</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Orr Weinstein</span></span> | on 
+<time property="datePublished" datetime="2017-10-02T11:10:46+00:00">02 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/improved-testing-on-the-aws-lambda-console/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2928" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2928&amp;disqus_title=Improved+Testing+on+the+AWS+Lambda+Console&amp;disqus_url=https://aws.amazon.com/blogs/compute/improved-testing-on-the-aws-lambda-console/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2928');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>(This post has been written by Chris Tate, SDE on the Lambda Console team)</p> 
+<p>Today, <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> released three console enhancements:</p> 
+<li>A quicker creation flow that lets you quickly create a function with the minimum working configuration, so that you can start iterating faster.</li> 
+<li>A streamlined configuration page with Lambda function settings logically grouped into cards, which makes locating and making changes much easier.</li> 
+<li>Persisting multiple events to help test your function.</li> 
+<p>This post focuses on persisting test events, and I discuss how I’ve been using this new feature. Now when you are testing on the Lambda console, you can save up to 10 test events per function, and each event can be up to 6 megabytes in size, the maximum payload size for synchronous invocations. The events are saved for the logged-in user, so that two different users in the same account have their own set of events.</p> 
+<b>Testing Lambda functions</b> 
+<p>As a Lambda console developer, when I work on side projects at home, I sometimes use our development server. I’ve been using this new feature to test a Lambda function in one of my projects. The function is probably more complicated than it should be, because it can be triggered by an Alexa skill, Amazon CloudWatch schedule, or an Amazon API Gateway API. If you have had a similarly complicated function, you may have run into the same problem I did: &nbsp;How do you test?</p> 
+<p>For quick testing, I used the console but the console used to save only one test event at a time. To work around this, my solution was a text file with three different JSON events, one for each trigger. I would copy whatever event I needed into the Lambda console, tweak it, and choose Test. This would become particularly annoying when I wanted to quickly test all three.</p> 
+<p>I also switch between my laptop and desktop depending on my mood. For that reason, I needed to make sure this text file with the events were shared in some way, as the console only locally saved one test event to the current browser. But now you don’t have to worry about any of that.</p> 
+<b>Walkthrough</b> 
+<p>In the Lambda console, go to the detail page of any function, and select <strong>Configure test events</strong> from the test events dropdown (the dropdown beside the orange test button). In the dialog box, you can manage 10 test events for your function. First, paste your Alexa trigger event in the dialog box and type an event name, such as AlexaTrigger.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture2-2.png"><img class="alignnone wp-image-2930 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture2-2.png" alt="" width="973" height="1066" /></a></p> 
+<p>Choose <strong>Create</strong>. After it saves, you see AlexaTrigger in the Test list.</p> 
+<p>When you open the dialog box again by choosing <strong>Configure test events</strong>, you are in edit mode.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3.png"><img class="alignnone wp-image-2931 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3.png" alt="" width="973" height="974" /></a></p> 
+<p>To add another event, choose <strong>Create new test event</strong>. Now you can choose from a list of templates or any of your previously saved test events. This is very useful for a couple of reasons:</p> 
+<li>First, when you want to slightly tweak one of your existing events and still keep the earlier version intact.</li> 
+<li>Second, when you are not sure how to structure a particular event from an event source. You can use one of the sample event templates and tweak them to your needs. Skip it when you know what your event should be.</li> 
+<p>Paste in your CloudWatch schedule event, give it a name, and choose <strong>Create</strong>. Repeat for API Gateway.</p> 
+<p>Now that you have three events saved, you can quickly switch between them and repeatedly test. Furthermore, if you’re on your desktop but you created the test events on your laptop, there’s no problem. You can still see all your events and you can switch back and forth seamlessly between different computers.</p> 
+<b>Conclusion</b> 
+<p>This feature should allow you to more easily test your Lambda functions through the console. If you have more suggestions, add a comment to this post or submit feedback through the console. We actually read the feedback, believe it!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2928');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Creating a Cost-Efficient Amazon ECS Cluster for Scheduled Tasks</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -848,740 +1478,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2819');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Delivering Graphics Apps with Amazon AppStream 2.0</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Deepak Suryanarayanan</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T10:02:21+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming*"><span property="articleSection">Desktop &amp; App Streaming*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2792" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2792&amp;disqus_title=Delivering+Graphics+Apps+with+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2792');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><strong>Sahil Bahri, Sr. Product Manager, Amazon AppStream 2.0</strong></p> 
-<p><strong><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6.png"><img class="alignright wp-image-2811 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6-300x207.png" alt="" width="300" height="207" /></a></strong></p> 
-<p>Do you need to provide a workstation class experience for users who run graphics apps? With Amazon AppStream 2.0, you can stream graphics apps from AWS to a web browser running on any supported device. AppStream 2.0 offers a choice of GPU instance types. The range includes the newly launched Graphics Design instance, which allows you to offer a fast, fluid user experience at a fraction of the cost of using a graphics workstation, without upfront investments or long-term commitments.</p> 
-<p>In this post, I discuss the Graphics Design instance type in detail, and how you can use it to deliver a graphics application such as Siemens NX―a popular CAD/CAM application that we have been testing on AppStream 2.0 with engineers from Siemens PLM.</p> 
-<h3>Graphics Instance Types on AppStream 2.0</h3> 
-<p>First, a quick recap on the GPU&nbsp;instance types available with AppStream 2.0. In July, 2017, we launched graphics support for AppStream 2.0 with <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-graphics-applications/">two new instance types</a> that Jeff Barr discussed on the <a href="https://aws.amazon.com/blogs/aws/new-gpu-powered-streaming-instances-for-amazon-appstream-2-0/">AWS Blog</a>:</p> 
-<li>Graphics Desktop</li> 
-<li>Graphics Pro</li> 
-<p>Many customers in industries such as engineering, media, entertainment, and oil and gas are using these instances to deliver high-performance graphics applications to their users. These instance types are based on dedicated NVIDIA GPUs and can run the most demanding graphics applications, including those that rely on CUDA graphics API libraries.</p> 
-<p>Last week, we added a new lower-cost instance type: <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/introducing-amazon-appstream-2-graphics-design-a-new-lower-cost-instance-type-for-streaming-graphics-applications/">Graphics Design</a>. This instance type is a great fit for engineers, 3D modelers, and designers who use graphics applications that rely on the hardware acceleration of DirectX, OpenGL, or OpenCL APIs, such as Siemens NX, Autodesk AutoCAD, or Adobe Photoshop. The Graphics Design instance is based on AMD’s FirePro S7150x2 Server GPUs and equipped with AMD Multiuser GPU technology. The instance type uses virtualized GPUs to achieve lower costs, and is available in four instance sizes to scale and match the requirements of your applications.</p> 
-<table style="border: 2px solid black;border-collapse: collapse;margin-left: auto;margin-right: auto"> 
-<tbody> 
-<tr style="border-bottom: 1px solid black;background-color: #e0e0e0"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>Instance</b></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>vCPUs</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Instance RAM (GiB)</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center"><strong>GPU Memory (GiB)</strong></td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>stream.graphics-design.large</b></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">7.5 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">15.3 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.2xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">30.5 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.4xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">16</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">61 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>The following table compares all three graphics instance types on AppStream 2.0, along with example applications you could use with each.</p> 
-<table style="border: 2px solid black;border-collapse: collapse;margin-left: auto;margin-right: auto"> 
-<tbody> 
-<tr style="border-bottom: 1px solid black;background-color: #e0e0e0"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>&nbsp;</b></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics Design</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics Desktop</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center"><strong>Graphics Pro</strong></td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>Number of instance sizes</b></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">3</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>GPU memory range<br /> </strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1–8 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8–32 GiB</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>vCPU range</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2–16</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">16–32</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Memory range</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">7.5–61 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">15 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">122–488 GiB</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics libraries supported</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AMD FirePro S7150x2</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">NVIDIA GRID K520</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">NVIDIA Tesla M60</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Price range (N. Virginia AWS Region)</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$0.25 – $2.00/hour</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$0.5/hour</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$2.05 – $8.20/hour</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Example applications</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">Adobe Premiere Pro, AutoDesk Revit, Siemens NX</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AVEVA E3D, SOLIDWORKS</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AutoDesk Maya, Landmark DecisionSpace, Schlumberger Petrel</td> 
-</tr> 
-</tbody> 
-</table> 
-<h3>Example graphics instance set up with Siemens NX</h3> 
-<p>In the section, I walk through setting up Siemens NX with Graphics Design instances on AppStream 2.0. After set up is complete, users can able to access NX from within their browser and also access their design files from a file share. You can also use these steps to set up and test your own graphics applications on AppStream 2.0. Here’s the workflow:</p> 
-<ol> 
-<li>Create a file share to load and save design files.</li> 
-<li>Create an AppStream 2.0 image with Siemens NX installed.</li> 
-<li>Create an AppStream 2.0 fleet and stack.</li> 
-<li>Invite users to access Siemens NX through a browser.</li> 
-<li>Validate the setup.</li> 
-</ol> 
-<p>To learn more about AppStream 2.0 concepts and set up, see the previous post <a href="https://aws.amazon.com/blogs/compute/scaling-your-desktop-application-streams-with-amazon-appstream-2-0/">Scaling Your Desktop Application Streams with Amazon AppStream 2.0</a>. For a deeper review of all the setup and maintenance steps, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/what-is-appstream.html">Amazon AppStream 2.0 Developer Guide</a>.</p> 
-<h4><span style="color: #000080"><strong>Step 1: Create a file share to load and save design files</strong></span></h4> 
-<p><strong>To launch and configure the file server</strong></p> 
-<ol> 
-<li>Open the EC2 console and choose <strong>Launch Instance</strong>.</li> 
-<li>Scroll to the <strong>Microsoft Windows Server 2016 Base Image</strong> and choose <strong>Select</strong>.</li> 
-<li>Choose an instance type and size for your file server (I chose the general purpose m4.large instance). Choose <strong>Next: Configure Instance Details</strong>.</li> 
-<li>Select a VPC and subnet. You launch AppStream 2.0 resources in the same VPC. Choose <strong>Next: Add Storage.</strong></li> 
-<li>If necessary, adjust the size of your EBS volume. Choose <strong>Review and Launch, Launch</strong>.</li> 
-<li>On the Instances page, give your file server a name, such as My File Server.</li> 
-<li>Ensure that the security group associated with the file server instance allows for incoming traffic from the security group that you select for your AppStream 2.0 fleets or image builders. You can use the default security group and select the same group while creating the image builder and fleet in later steps.</li> 
-</ol> 
-<p>Log in to the file server using a remote access client such as Microsoft Remote Desktop. For more information about connecting to an EC2 Windows instance, see&nbsp;<a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/connecting_to_windows_instance.html#connect-rdp">Connect to Your Windows Instance</a>.</p> 
-<p><strong>To enable file sharing</strong></p> 
-<ol> 
-<li>Create a new folder (such as C:\My Graphics Files) and upload the shared files to make available to your users.</li> 
-<li>From the Windows control panel, enable network discovery.</li> 
-<li>Choose <strong>Server Manager</strong>, <strong>File and Storage Services, Volumes</strong>.</li> 
-<li>Scroll to Shares and choose <strong>Start the</strong> <strong>Add Roles and Features Wizard</strong>. Go through the wizard to install the <strong>File Server and Share</strong> role.</li> 
-<li>From the left navigation menu, choose <strong>Shares</strong>.</li> 
-<li>Choose <strong>Start the New Share Wizard</strong> to set up your folder as a file share.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture1.png"><img class="aligncenter wp-image-2803" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture1.png" alt="" width="728" height="419" /></a></li> 
-<li>Open the context (right-click) menu on the share and choose <strong>Properties, Permissions, Customize Permissions</strong>.</li> 
-<li>Choose <strong>Permissions, Add</strong>. Add <strong>Read</strong> and <strong>Execute</strong> permissions for everyone on the network.</li> 
-</ol> 
-<h4><span style="color: #000080"><strong>Step 2: &nbsp;Create an AppStream 2.0 image with Siemens NX installed</strong></span></h4> 
-<p><strong>To connect to the image builder and install applications</strong></p> 
-<ol> 
-<li>Open the <a href="https://us-west-2.console.aws.amazon.com/appstream2/home?region=us-west-2#/stacks">AppStream 2.0 management console</a> and choose <strong>Images</strong>,<strong> Image Builder</strong>,<strong> Launch Image Builder</strong>.</li> 
-<li>Create a graphics design image builder in the same VPC as your file server.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture2.png"><img class="size-full wp-image-2802 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture2.png" alt="" width="910" height="368" /></a></li> 
-<li>From the <strong>Image builder</strong> tab, select your image builder and choose <strong>Connect</strong>. This opens a new browser tab and display a desktop to log in to.</li> 
-<li>Log in to your image builder as ImageBuilderAdmin.</li> 
-<li>Launch the <strong>Image Assistant</strong>.</li> 
-<li>Download and install Siemens NX and other applications on the image builder. I added Blender and Firefox, but you could replace these with your own applications.</li> 
-<li>To verify the user experience, you can test the application performance on the instance.</li> 
-</ol> 
-<p>Before you finish creating the image, you must mount the file share by enabling a few Microsoft Windows services.</p> 
-<p><strong>To mount the file share</strong></p> 
-<ol> 
-<li>Open services.msc and check the following services:</li> 
-</ol> 
-<li>DNS Client</li> 
-<li>Function Discovery Resource Publication</li> 
-<li>SSDP Discovery</li> 
-<li>UPnP Device H</li> 
-<ol start="2"> 
-<li>If any of the preceding services have <strong>Startup Type</strong> set to <strong>Manual</strong>, open the context (right-click) menu on the service and choose <strong>Start</strong>. Otherwise, open the context (right-click) menu on the service and choose <strong>Properties</strong>. For <strong>Startup Type</strong>, choose <strong>Manual</strong>, <strong>Apply</strong>. To start the service, choose <strong>Start</strong>.</li> 
-<li>From the Windows control panel, enable network discovery.</li> 
-<li>Create a batch script that mounts a file share from the storage server set up earlier. The file share is mounted automatically when a user connects to the AppStream 2.0 environment.</li> 
-</ol> 
-<p style="padding-left: 90px"><strong>Logon Script Location:</strong> C:\Users\Public\logon.bat</p> 
-<p style="padding-left: 90px"><strong>Script Contents: </strong></p> 
-<p style="padding-left: 90px">:loop</p> 
-<p style="padding-left: 90px">net use H: <em>\\path\to\network\share</em><em>&nbsp;</em></p> 
-<p style="padding-left: 90px">PING localhost -n 30 &gt;NUL</p> 
-<p style="padding-left: 90px">IF NOT EXIST H:\ GOTO loop</p> 
-<ol start="5"> 
-<li>Open gpedit.msc and choose <strong>User Configuration</strong>, <strong>Windows Settings</strong>, <strong>Scripts</strong>. Set logon.bat as the user logon script.</li> 
-<li>Next, create a batch script that makes the mounted drive visible to the user.</li> 
-</ol> 
-<p style="padding-left: 90px"><strong>Logon Script Location:</strong> C:\Users\Public\startup.bat</p> 
-<p style="padding-left: 90px"><strong>Script Contents: </strong><br /> REG DELETE “HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer” /v “NoDrives” /f</p> 
-<ol start="7"> 
-<li>Open <strong>Task Scheduler</strong> and choose <strong>Create Task</strong>.</li> 
-<li>Choose <strong>General</strong>, provide a task name, and then choose <strong>Change User or Group</strong>.</li> 
-<li>For <strong>Enter the object name to select</strong>, enter <strong>SYSTEM</strong> and choose <strong>Check Names</strong>, <strong>OK</strong>.</li> 
-<li>Choose <strong>Triggers</strong>, <strong>New</strong>. For <strong>Begin the task</strong>, choose <strong>At startup</strong>. Under <strong>Advanced Settings</strong>, change <strong>Delay task for</strong> to 5 minutes. Choose <strong>OK</strong>.</li> 
-<li>Choose <strong>Actions</strong>, <strong>New</strong>. Under <strong>Settings</strong>, for <strong>Program/script</strong>, enter <strong>C:\Users\Public\startup.bat</strong>. Choose <strong>OK</strong>.</li> 
-<li>Choose <strong>Conditions</strong>. Under <strong>Power</strong>, clear the <strong>Start the task only if the computer is on AC power</strong> Choose <strong>OK</strong>.</li> 
-<li>To view your scheduled task, choose <strong>Task Scheduler Library</strong>. Close Task Scheduler when you are done.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture3.png"><img class="alignnone size-full wp-image-2801" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture3.png" alt="" width="710" height="328" /></a></li> 
-</ol> 
-<h4><span style="color: #000080">Step 3: &nbsp;Create an AppStream 2.0 fleet and stack</span></h4> 
-<p><strong>To create a fleet and stack</strong></p> 
-<ol> 
-<li>In the AppStream 2.0 management console, choose <strong>Fleets, Create Fleet. </strong></li> 
-<li>Give the fleet a name, such as Graphics-Demo-Fleet, that uses the newly created image and the same VPC as your file server.</li> 
-<li>Choose <strong>Stacks</strong>, <strong>Create Stack</strong>. Give the stack a name, such as Graphics-Demo-Stack.</li> 
-<li>After the stack is created, select it and choose <strong>Actions</strong>, <strong>Associate Fleet</strong>. Associate the stack with the fleet you created in step 1.</li> 
-</ol> 
-<h4><span style="color: #000080">Step 4: &nbsp;Invite users to access Siemens NX through a browser</span></h4> 
-<p><strong>To invite users</strong></p> 
-<ol> 
-<li>Choose <strong>User Pools</strong>, <strong>Create User</strong> to create users.</li> 
-<li>Enter a name and email address for each user.</li> 
-<li>Select the users just created, and choose <strong>Actions</strong>,<strong> Assign Stack</strong> to provide access to the stack created in step 2. You can also provide access using SAML 2.0 and connect to your Active Directory if necessary. For more information, see the <a href="https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/">Enabling Identity Federation with AD FS 3.0 and Amazon AppStream 2.0</a> post.</li> 
-</ol> 
-<p>Your user receives an email invitation to set up an account and use a web portal to access the applications that you have included in your stack.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture4.png"><img class="alignnone size-full wp-image-2800" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture4.png" alt="" width="585" height="336" /></a></p> 
-<h4><span style="color: #000080">Step 5: &nbsp;Validate the setup</span></h4> 
-<p><strong>Time for a test drive with Siemens NX on AppStream 2.0!</strong></p> 
-<ol> 
-<li>Open the link for the AppStream 2.0 web portal shared through the email invitation. The web portal opens in your default browser. You must sign in with the temporary password and set a new password. After that, you get taken to your app catalog.</li> 
-<li>Launch Siemens NX and interact with it using the demo files available in the shared storage folder – My Graphics Files.<em>&nbsp;</em></li> 
-</ol> 
-<p>After I launched NX, I captured the screenshot below. The Siemens PLM team also recorded a <a href="https://www.youtube.com/watch?v=lOWPcFjwkCE">video with NX running on AppStream 2.0</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png"><img class="alignnone size-full wp-image-2799" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" alt="" width="863" height="588" /></a></p> 
-<h3>Summary</h3> 
-<p>In this post, I discussed the GPU instances available for delivering rich graphics applications to users in a web browser. While I demonstrated a simple setup, you can scale this out to launch a production environment with users signing in using <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-microsoft-active-directory-domains/">Active Directory credentials,&nbsp;</a> accessing <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/amazon-appstream-2-0-now-offers-persistent-storage-for-end-users-files-backed-by-amazon-s3/">persistent storage with Amazon S3</a>, and using other commonly requested features reviewed in the <a href="https://aws.amazon.com/blogs/aws/amazon-appstream-2-0-launch-recap-domain-join-simple-network-setup-and-lots-more/">Amazon AppStream 2.0 Launch Recap – Domain Join, Simple Network Setup, and Lots More</a> post.</p> 
-<p>To learn more about AppStream 2.0 and capabilities added this year, see <a href="https://aws.amazon.com/appstream2/resources/">Amazon AppStream 2.0 Resources</a>.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2792');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Provision Complex, On-Demand Infrastructures by Using Amazon API Gateway and AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ben Eichorst</span></span> and 
-<span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T07:11:20+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2714" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2714&amp;disqus_title=How+to+Provision+Complex%2C+On-Demand+Infrastructures+by+Using+Amazon+API+Gateway+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2714');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Many AWS customers are using the power of AWS CloudFormation to customize complex infrastructures. At the same time, they are moving towards self-service for their expanding customer bases. How can complex infrastructure be provisioned on-demand while minimizing customer use of the AWS Management Console?</p> 
-<p>Let’s say AnyCompany uses AWS services to process sensitive datasets owned by its customers. These customers need to be able to provision their own processing infrastructure on demand. However, AnyCompany doesn’t want the customers to access <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> directly, or see how customer data is processed. How can AnyCompany create resources with CloudFormation templates without exposing proprietary processing methods?</p> 
-<p>You can use <a href="https://aws.amazon.com/api-gateway/">Amazon API Gateway</a> and <a href="https://aws.amazon.com/lambda/">AWS Lambda </a>to provide complex, on-demand, data-processing infrastructure to users who have no need to access the AWS Management Console. In this post, we walk through the setup and configuration of working code examples that you (and your customers) can use to provision on-demand infrastructure. This post’s solution combines principles of immutable computing with a method to provide granular access to powerful capabilities available in the AWS Cloud. In this post, you create immutability for an Amazon EC2 instance by provisioning it without an SSH key or any other access mechanism. The instance can’t be altered after it’s launched.</p> 
-<p><span id="more-2714"></span></p> 
-<b>Solution architecture</b> 
-<p>API Gateway simplifies the creation, management, and deployment of APIs. Integration of API Gateway with Lambda, the AWS serverless compute service, allows for further interaction with the larger family of AWS services. In this post, the Lambda function provisions on-demand CloudFormation infrastructure stacks for our example service’s primary business function: &nbsp;the calculation of pi.</p> 
-<p>Two CloudFormation templates are used to provision infrastructure stacks:</p> 
-<li>The <em>primary</em> template</li> 
-<li>The <em>business-function</em> template</li> 
-<p>The primary CloudFormation template creates the base infrastructure that is shown in the following diagram.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png"><img class="alignnone wp-image-2718 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" alt="Architecture Diagram" width="890" height="302" /></a></p> 
-<p>The primary template creates a stack of resources:</p> 
-<li>API Gateway resources</li> 
-<li>The associated AWS Identity and Access Management (IAM) security roles</li> 
-<li>An <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket for the results of the data processed by the business-function template</li> 
-<li>A Lambda function specifically for the purpose of creating multiple iterations of a second <em>repeatable infrastructure</em>. This repeatable infrastructure, contained within the second CloudFormation template, is referred to as the business-function template.</li> 
-<p>The API created by the primary template allows system users to pass selected parameters to the business-function template, such as cost-center tags, a unique name, and data-processing parameters. The ability to pass parameters allows the business-function infrastructure to adapt to the specific needs of each request. In this post’s example—calculating the first 15,000 digits of pi—the number of digits calculated can be specified in the request initiated by the customer. For your own business function templates, this could be the location of input data or an email address to which results are sent.</p> 
-<p>In the example business-function template, the template provisions an immutable EC2 instance that calculates a specified number of digits of pi and uploads the results to the S3 bucket. The business-function stack then self-terminates, reducing any potential extra costs.</p> 
-<p>This architecture allows you, at multiple points, to control access, processing parameters, and workflow.</p> 
-<p>In the earlier diagram, (1) all access to the AWS Management Console and API for your account’s infrastructure is segregated through the use of API Gateway. Then, (2) IAM role–based restrictions are in place for API Gateway to call the Lambda function. The Lambda function serves to selectively add, subtract, or alter input parameters from external users. The code for this function is embedded in the primary CloudFormation template. You can modify the code to add specific tags for billing information or call other AWS services such as <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB </a>or <a href="https://aws.amazon.com/rds">Amazon RDS</a> to keep a record of which infrastructure is instantiated by which API users.</p> 
-<p>In our example template, the Lambda function is populated to pass only the required parameters for the business-function template’s calculation of pi. The use of the function restricts the ability of customers to inject unexpected or undesirable parameters. The solution then (3) uses a Lambda execution role to control the Lambda function’s access. Finally, (4) the Lambda function initiates the CloudFormation business-function template by using another IAM role that is restricted to instantiating only the resources required.</p> 
-<p>The use of an intermediate Lambda function here allows for heavy customization and filtering of the input requests from the customer-facing API Gateway.</p> 
-<b>Solution Features</b> 
-<p>By using this API Gateway–based solution, you can benefit in a number of ways:</p> 
-<li> <h4>User requests are decoupled from the infrastructure that fulfills those requests.</h4> <p>This post’s solution removes the need for users to have access to the AWS Management Console. Users can accomplish their infrastructure-backed requests on demand without having any direct access to the console. Additionally, processing methods and infrastructure can be switched in and out without any change to the external appearance of your service. For example, in this post, I could have a containerized solution such as <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Services (Amazon ECS) </a>process my pi-calculation service without any visibility to users.</p></li> 
-<li> <h4>Proprietary processing methods and infrastructure are obscured from users.</h4> <p>The solution in this post can protect the proprietary secrets of your company’s data processing service by obscuring which processing methods you are using and which infrastructure performs the processing. The solution also isolates users from viewing each other’s operations. Without having console access, users cannot determine which running processing stacks are initiated by other users.</p></li> 
-<li> <h4>On-demand infrastructure in specific configurations is created without allowing users to provision arbitrary infrastructure.</h4> <p>The solution in this post complements the functionality of the <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a>. Beyond allowing only preapproved infrastructure and preventing unapproved resources from executing outside your company’s policies, this API Gateway–driven method delivers a specific, processed result. For ease of troubleshooting and integration with DevOps workflows, you can standardize, version, and deploy complicated CloudFormation stacks for networking, compute, storage, and big data processing.</p></li> 
-<li> <h4>Simplification of the user experience.</h4> <p>This solution also simplifies the user experience. Commands that request a specific result are limited to a single, familiar REST API interface call that delivers only that result.</p></li> 
-<li> <h4>Cost savings through self-terminating infrastructure.</h4> <p>The architecture of this solution is augmented through the use of self-terminating CloudFormation stacks. Stacks can spin up expensive infrastructure to perform data processing on demand, and self-terminate as soon as the task has completed. This can save you infrastructure costs associated with idle resources.</p></li> 
-<b>Walkthrough: Deploy the solution</b> 
-<p>This post’s example templates create the base infrastructure and a business-function process. The business-function process can instantiate a single EC2 instance to calculate a specified number of digits of pi and deposit the results in an S3 bucket. As noted previously, this example includes built-in logic to automatically self-terminate the business-function template’s CloudFormation stacks after instantiation.</p> 
-<p>The following steps walk through how to provision this solution for creating on-demand business-function CloudFormation stacks through API Gateway. You can modify the business-function template code for your specialized infrastructure needs. However, you must upload the modified template to your own S3 bucket before completing Step 1 because the business-function template location is required for the primary template’s parameters.</p> 
-<p>Both templates are designed for use in the us-west-2 region and may require minor modifications to function properly in other regions.</p> 
-<h3>Costs</h3> 
-<p>API Gateway costs are based on the number of API calls requested, and the single call here leads to a near-zero cost. For current pricing, see <a href="https://aws.amazon.com/api-gateway/pricing/">Amazon API Gateway Pricing</a>. The associated <a href="https://aws.amazon.com/s3/pricing/">S3 costs</a> and <a href="https://aws.amazon.com/lambda/pricing/">Lambda costs</a> for this post also are negligible because you are not transferring much data or spending a significant amount of time processing serverless code. The most expensive part of this post’s solution is the <a href="https://aws.amazon.com/ec2/pricing/on-demand/">on-demand EC2 instance cost</a> invoked in each business-function template instantiation. This cost is approximately $0.012 per hour for each run with the default t2.micro EC2 instance. In total, running the solution as presented in this post should cost you less than $0.10 in order to test multiple calculations of pi.</p> 
-<p>&nbsp;</p> 
-<h3>1. Deploy the CloudFormation template</h3> 
-<p>First, deploy the primary CloudFormation template for API Gateway and other resources. This template creates IAM policies, IAM roles, API Gateway resources, a new S3 bucket, and a Lambda function.</p> 
-<p>The primary template requires you to have enabled <a href="https://aws.amazon.com/blogs/aws/new-usage-plans-for-amazon-api-gateway/">API Gateway Usage Plans</a>.</p> 
-<p>You can deploy the primary template and launch the primary stack in the us-west-2 region by selecting the following button. Aside from <strong>Stack name</strong>, the only required parameters are the exact location of the business-function template in S3 and a unique S3 bucket name as a location for template results.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=DemoAPIGControlCFStack&amp;templateURL=https://s3.amazonaws.com/awsiammedia/public/sample/APIGatewayWrapper/PrimaryAPIGatewayWrapperTemplate.yaml"><img class="alignnone wp-image-2719 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" alt="" width="144" height="27" /></a></p> 
-<ol> 
-<li>In the CloudFormation console, on the <strong>Specify Details</strong> page, type a stack name.</li> 
-<li>For <strong>NewS3BucketName</strong>, type a unique name.</li> 
-<li>For <strong>S3CFTLocation</strong>, leave the default value. If you adapt the primary template for your own customized business-function template, be sure to include the entire URI of the S3 location (for example, <em>https://s3-us-west-2.amazonaws.com/mys3bucket/businessFunctionTemplate.yaml</em>).</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png"><img class="alignnone wp-image-2720 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png" alt="Create Stack Screen" width="1106" height="571" /></a></p> 
-<ol> 
-<li>On the <strong>Options</strong> page, no changes are required, but you can specify additional tags if desired.</li> 
-<li>On the <strong>Capabilities</strong> page, acknowledge that CloudFormation might create IAM resources, as shown in the following screenshot. To finish creating the stack, choose <strong>Create</strong>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<h3>2. Create an API key for the API Gateway</h3> 
-<p>Though you could modify the example primary template for public use, this example restricts access to execute API calls through the use of API keys. After you create the API key, you must associate the new API key with the usage plan created by the primary template.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/apigateway/home">API Gateway console</a>, choose <strong>API Keys</strong>.</li> 
-<li>Choose <strong>Actions</strong>, <strong>Create API key</strong>.</li> 
-<li>For <strong>Name</strong>, type a name for the key. For <strong>API Key</strong>, leave the default <strong>Auto Generate</strong></li> 
-<li>(Optional) For <strong>Description</strong>, type a value.</li> 
-<li>Choose <strong>Save</strong>.</li> 
-<li>Choose <strong>Add to Usage Plan</strong> and type WrappingApiUsagePlan. This usage plan defaults your Stage to PROD because it is the only configured stage.</li> 
-<li>To add the key to the usage plan, choose the green check icon. Your key should resemble the following screenshot.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png"><img class="alignnone size-full wp-image-2721" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png" alt="" width="976" height="471" /></a></li> 
-<li>Choose <strong>Show</strong> and note the API key value for the next step.</li> 
-</ol> 
-<h3>3. Initiate a REST API query</h3> 
-<p>Now, initiate a REST API query against the API that you created. in the example curl command below, replace the placeholder API key specified in the x-api-key HTTP header with your API key.</p> 
-<p>You also need to replace the example URI path with your API’s specific URI. Create the full URI by concatenating the base URI listed in the CloudFormation output for the primary template stack with the primary template’s API call path, which is /PROD/PerRunExecute. This full URI for your specific API call should closely resemble the <strong>URI path&nbsp;</strong>(e.g.&nbsp;<em>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</em>) in the following example curl command.</p> 
-<pre><code class="lang-bash">curl -v -X POST -i -H &quot;x-api-key: 012345ABCDefGHIjkLMS20tGRJ7othuyag&quot; <strong>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</strong> -d '{
-&quot;StackName&quot;:&quot;MyCalculatePiStack&quot;,
-&quot;CostCenter&quot;:&quot;12345&quot;,
-&quot;DigitsToCalculate&quot;: &quot;15000&quot;
-}'</code></pre> 
-<p>When you run the curl command, it executes a POST query to the REST API to instantiate the business-function template and calculate the first 15,000 digits of pi. A successful API query returns information on the curl request as well as CloudFormation API output similar to the following, indicating an “HTTPStatusCode” of 200.</p> 
-<pre><code class="lang-json">{&quot;StackId&quot;: &quot;arn:aws:cloudformation:us-west-2:123456789012:stack/MyCalculatePiStack/1234debf-9423-11e7-9a08-50399b8d8a8c&quot;, &quot;ResponseMetadata&quot;: {&quot;RetryAttempts&quot;: 0, &quot;HTTPStatusCode&quot;: 200, &quot;RequestId&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;HTTPHeaders&quot;: {&quot;x-amzn-requestid&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;date&quot;: &quot;Thu, 07 Sep 2017 23:19:52 GMT&quot;, &quot;content-length&quot;: &quot;388&quot;, &quot;content-type&quot;: &quot;text/xml&quot;}}}</code></pre> 
-<pre></pre> 
-<h3>4. Examine the output</h3> 
-<p>After the EC2 instance completes its processing and uploads the results to the S3 bucket created by the primary template, you can examine the output. Using the configured t2.micro EC2 instance, instantiation and calculation for the first 15,000 digits of pi takes approximately 5–10 minutes. You can monitor progress in the <a href="https://console.aws.amazon.com/ec2/v2/home">EC2 console</a> (where you see a new EC2 instance running) or the <a href="https://console.aws.amazon.com/cloudformation/home">CloudFormation console</a> (where you see the provisioned stack in a “created” state).</p> 
-<p>After the first 15,000 digits of pi have been uploaded to the S3 bucket, the EC2 instance self-terminates the stack. You can then download the results file from the S3 bucket, as shown below. The naming convention for pi calculating runs is “PiCalculation” concatenated with an epoch timestamp from the time of execution.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png"><img class="alignnone size-full wp-image-2785" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png" alt="" width="915" height="409" /></a></p> 
-<p>This file contains the instance ID that performed the processing, a time stamp, and the first 15,000 digits of pi. The output should look similar to the following screenshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png"><img class="alignnone size-full wp-image-2784" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png" alt="" width="619" height="225" /></a></p> 
-<p>&nbsp;</p> 
-<h3>5. Clean up</h3> 
-<p>To help minimize your costs, clean up any infrastructure that resulted from following the solution in this post. Remember that you first have to detach the API key that you created from the usage plan in order to delete the primary CloudFormation stack. You can do this by clicking the <strong>X</strong> for associated usage plans for your API key, as shown in the following screenshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png"><img class="alignnone size-full wp-image-2723" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png" alt="" width="909" height="521" /></a></p> 
-<p>You also must empty the S3 results bucket of all files for the bucket to be deleted when the CloudFormation stack self-terminates.</p> 
-<p>This solution can be adapted to any CloudFormation template encompassing a business function for your service.</p> 
-<b>Adapt to Your Services</b> 
-<p>To adapt this example to your own business-function:</p> 
-<ol> 
-<li>Write a CloudFormation template that implements your new business function.</li> 
-<li>In the primary template, customize the Lambda resource object code for “PerRunCloudFormationExecutionLambda” to accept and pass on the specific parameters needed by your business function template. Save it with a new name.</li> 
-<li>Upload your custom business-function CloudFormation template developed in step 1 to an S3 bucket with permissions that allow the CloudFormation service to access the template objects. For more information about S3 access control, see Managing Access Permissions to Your Amazon S3 Resource.</li> 
-<li>Start your new stack with the modified primary CloudFormation template. Pass it, as a parameter, the name of your new business function template as a parameter. You can reuse the same API Gateway usage plan created previously, if desired.</li> 
-<li>Test, using your new stack name in place of the bolded content above, and posting an API Gateway query with parameters needed by your new business function.</li> 
-</ol> 
-<b>Conclusion</b> 
-<p>By using API Gateway, you can control complex, on-demand CloudFormation stacks that create AWS infrastructure. When you combine this functionality with self-terminating templates, you can realize significant cost savings. API Gateway also allows for standardization of infrastructure. It can enable your users to instantiate complex and costly architectures on demand and only for as long as your users need them.</p> 
-<p>Though the solution in this post assumes that the business function is to calculate the first 15,000 digits of pi (a less than profitable venture these days), you can adopt the solution to deliver significant cost savings. For example, instead of a single EC2 instance, the business-function template could instantiate <a href="https://aws.amazon.com/redshift/">Amazon Redshift</a> (a petabyte-scale data warehouse), <a href="https://aws.amazon.com/emr/">Amazon EMR</a>, or any complex processing infrastructure. As with all on-demand AWS services, you pay for the infrastructure only when it is running.</p> 
-<p>If you have comments about any of this content, submit them in the “Comments” section below. If you have questions about implementing this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=199">API Gateway forum</a>.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2714');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Parallel Processing in Python with&nbsp;AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Oz Akan</span></span> | on 
-<time property="datePublished" datetime="2017-09-11T07:29:32+00:00">11 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2746" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2746&amp;disqus_title=Parallel+Processing+in+Python+with%C2%A0AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2746');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>If you develop an AWS Lambda function with Node.js, you can call multiple web services without waiting for a response due to its asynchronous nature. &nbsp;All requests are initiated almost in parallel, so you can get results much faster than a series of sequential calls to each web service. Considering the maximum execution duration for Lambda, it is beneficial for I/O bound tasks to run in parallel.</p> 
-<p>If you develop a Lambda function with Python, parallelism doesn’t come by default. Lambda supports Python 2.7 and Python 3.6, both of which have multiprocessing and threading modules. The multiprocessing module supports multiple cores so it is a better choice, especially for CPU intensive workloads. With the threading module, all threads are going to run on a single core though performance difference is negligible for network-bound tasks.</p> 
-<p>In this post, I demonstrate how the Python multiprocessing module can be used within a Lambda function to run multiple I/O bound tasks in parallel.</p> 
-<b>Example use case</b> 
-<p>In this example, you call Amazon EC2 and Amazon EBS API operations to find the total EBS volume size for all your EC2 instances in a region.</p> 
-<p>This is a two-step process:</p> 
-<li>The Lambda function calls EC2 to list all EC2 instances</li> 
-<li>The function calls EBS for each instance to find attached EBS volumes</li> 
-<h3>Sequential Execution</h3> 
-<p>If you make these calls sequentially, during the second step, your code has to loop over all the instances and wait for each response before moving to the next request.</p> 
-<p>The class named VolumesSequential has the following methods:</p> 
-<li>__init__ creates an EC2 resource.</li> 
-<li>total_size returns all EC2 instances and passes these to the instance_volumes method.</li> 
-<li>instance_volumes finds the total size of EBS volumes for the instance.</li> 
-<li>total_size adds all sizes from all instances to find total size for the EBS volumes.</li> 
-<h4>Source Code for Sequential Execution</h4> 
-<pre><code class="lang-python">import time
-import boto3
-class VolumesSequential(object):
-&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;Finds total volume size for all EC2 instances&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;def __init__(self):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.ec2 = boto3.resource('ec2')
-&nbsp;&nbsp;&nbsp;def instance_volumes(self, instance):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Finds total size of the EBS volumes attached
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;to an EC2 instance
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total = 0
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for volume in instance.volumes.all():
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total += volume.size
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instance_total
-&nbsp;&nbsp;&nbsp;def total_size(self):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lists all EC2 instances in the default region
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and sums result of instance_volumes
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;print &quot;Running sequentially&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances = self.ec2.instances.all()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total = 0
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for instance in instances:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total += self.instance_volumes(instance)
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instances_total
-def lambda_handler(event, context):
-&nbsp;&nbsp;&nbsp;&nbsp;volumes = VolumesSequential()
-&nbsp;&nbsp;&nbsp;&nbsp;_start = time.time()
-&nbsp;&nbsp;&nbsp;&nbsp;total = volumes.total_size()
-&nbsp;&nbsp;&nbsp;print &quot;Total volume size:&nbsp;%s&nbsp;GB&quot; % total
-&nbsp;&nbsp;&nbsp;print &quot;Sequential execution time:&nbsp;%s&nbsp;seconds&quot; % (time.time() - _start)</code></pre> 
-<h3>Parallel Execution</h3> 
-<p>The multiprocessing module that comes with Python 2.7 lets you run multiple processes in parallel. Due to the Lambda execution environment not having /dev/shm (shared memory for processes) support, you can’t use multiprocessing.Queue or multiprocessing.Pool.</p> 
-<p>If you try to use multiprocessing.Queue, you get an error similar to the following:</p> 
-<pre><code class="lang-bash">[Errno 38] Function not implemented: OSError
-…
-&nbsp;&nbsp;&nbsp;sl = self._semlock = _multiprocessing.SemLock(kind, value, maxvalue)
-OSError: [Errno 38] Function not implemented
-</code></pre> 
-<p>On the other hand, you can use multiprocessing.Pipe instead of multiprocessing.Queue to accomplish what you need without getting any errors during the execution of the Lambda function.</p> 
-<p>The class named VolumeParallel has the following methods:</p> 
-<li>__init__ creates an EC2 resource</li> 
-<li>instance_volumes finds the total size of EBS volumes attached to an instance</li> 
-<li>total_size finds all instances and runs instance_volumes for each to find the total size of all EBS volumes attached to all EC2 instances.</li> 
-<h4>Source Code for Parallel Execution</h4> 
-<pre><code class="lang-python">import time
-from multiprocessing import Process, Pipe
-import boto3
-class VolumesParallel(object):
-&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;Finds total volume size for all EC2 instances&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;def __init__(self):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.ec2 = boto3.resource('ec2')
-&nbsp;&nbsp;&nbsp;def instance_volumes(self, instance, conn):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Finds total size of the EBS volumes attached
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;to an EC2 instance
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total = 0
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for volume in instance.volumes.all():
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total += volume.size
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;conn.send([instance_total])
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;conn.close()
-&nbsp;&nbsp;&nbsp;def total_size(self):
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lists all EC2 instances in the default region
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and sums result of instance_volumes
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;print &quot;Running in parallel&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# get all EC2 instances
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances = self.ec2.instances.all()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a list to keep all processes
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;processes = []
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a list to keep connections
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_connections = []
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a process per instance
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for instance in instances: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a pipe for communication
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_conn, child_conn = Pipe()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_connections.append(parent_conn)
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create the process, pass instance and connection
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process = Process(target=self.instance_volumes, args=(instance, child_conn,))
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;processes.append(process)
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# start all processes
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for process in processes:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process.start()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# make sure that all processes have finished
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for process in processes:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process.join()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total = 0
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for parent_connection in parent_connections:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total += parent_connection.recv()[0]
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instances_total
-def lambda_handler(event, context):
-&nbsp;&nbsp;&nbsp;&nbsp;volumes = VolumesParallel()
-&nbsp;&nbsp;&nbsp;&nbsp;_start = time.time()
-&nbsp;&nbsp;&nbsp;&nbsp;total = volumes.total_size()
-&nbsp;&nbsp;&nbsp;print &quot;Total volume size:&nbsp;%s&nbsp;GB&quot; % total
-&nbsp;&nbsp;&nbsp;print &quot;Sequential execution time:&nbsp;%s&nbsp;seconds&quot; % (time.time() - _start)
-</code></pre> 
-<b>Performance</b> 
-<p>There are a few differences between two Lambda functions when it comes to the execution environment. The parallel function requires more memory than the sequential one. You may run the parallel Lambda function with a relatively large memory setting to see how much memory it uses. The amount of memory required by the Lambda function depends on what the function does and how many processes it runs in parallel. To restrict maximum memory usage, you may want to limit the number of parallel executions.</p> 
-<p>In this case, when you give 1024 MB for both Lambda functions, the parallel function runs about two times faster than the sequential function. I have a handful of EC2 instances and EBS volumes in my account so the test ran way under the maximum execution limit for Lambda. Remember that parallel execution doesn’t guarantee that the runtime for the Lambda function will be under the maximum allowed duration but does speed up the overall execution time.</p> 
-<h4>Sequential Run Time Output</h4> 
-<pre><code class="lang-bash">START RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e Version: $LATEST
-Running sequentially
-Total volume size: 589 GB
-Sequential execution time: 3.80066084862 seconds
-END RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e
-REPORT RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e Duration: 4091.59 ms Billed Duration: 4100 ms &nbsp;Memory Size: 1024 MB Max Memory Used: 46 MB</code></pre> 
-<h4>Parallel Run Time Output</h4> 
-<pre><code class="lang-bash">START RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d Version: $LATEST
-Running in parallel
-Total volume size: 589 GB
-Sequential execution time: 1.89170885086 seconds
-END RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d
-REPORT RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d Duration: 2069.33 ms Billed Duration: 2100 ms &nbsp;Memory Size: 1024 MB Max Memory Used: 181 MB&nbsp;
-</code></pre> 
-<h3>Summary</h3> 
-<p>In this post, I demonstrated how to run multiple I/O bound tasks in parallel by developing a Lambda function with the Python multiprocessing module. With the help of this module, you freed the CPU from waiting for I/O and fired up several tasks to fit more I/O bound operations into a given time frame. This might be the trick to reduce the overall runtime of a Lambda function especially when you have to run so many and don’t want to split the work into smaller chunks.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2746');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Disabling Intel Hyper-Threading Technology on Amazon EC2 Windows Instances</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Brian Beach</span></span> | on 
-<time property="datePublished" datetime="2017-09-06T13:18:39+00:00">06 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2352" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2352&amp;disqus_title=Disabling+Intel+Hyper-Threading+Technology+on+Amazon+EC2+Windows+Instances&amp;disqus_url=https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2352');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>In a prior post, <a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-linux/">Disabling Intel Hyper-Threading on Amazon Linux</a>, I investigated how the Linux kernel enumerates CPUs. I also discussed the options to disable Intel Hyper-Threading (HT Technology) in Amazon Linux running on <a href="https://aws.amazon.com/ec2">Amazon EC2</a>.</p> 
-<p>In this post, I do the same for Microsoft Windows Server 2016 running on EC2 instances. I begin with a quick review of HT Technology and the reasons you might want to disable it. I also recommend that you take a moment to review the prior post for a more thorough foundation.</p> 
-<b>HT Technology</b> 
-<p>HT Technology makes a single physical processor appear as multiple logical processors. Each core in an Intel Xeon processor has two threads of execution. Most of the time, these threads can progress independently; one thread executing while the other is waiting on a relatively slow operation (for example, reading from memory) to occur. However, the two threads do share resources and occasionally one thread is forced to wait while the other is executing.</p> 
-<p>There a few unique situations where disabling HT Technology can improve performance. One example is high performance computing (HPC) workloads that rely heavily on floating point operations. In these rare cases, it can be advantageous to disable HT Technology. However, these cases are rare, and for the overwhelming majority of workloads you should leave it enabled. I recommend that you test with and without HT Technology enabled, and only disable threads if you are sure it will improve performance.</p> 
-<p><span id="more-2352"></span></p> 
-<b>Exploring HT Technology on Microsoft Windows</b> 
-<p>Here’s how Microsoft Windows enumerates CPUs. As before, I am running these examples on an m4.2xlarge. I also chose to run Windows Server 2016, but you can walk through these exercises on any version of Windows. Remember that the m4.2xlarge has eight vCPUs, and each vCPU is a thread of an Intel Xeon core. Therefore, the m4.2xlarge has four cores, each of which run two threads, resulting in eight vCPUs.</p> 
-<p>Windows does not have a built-in utility to examine CPU configuration, but you can download the <a href="https://technet.microsoft.com/en-us/sysinternals/cc835722.aspx">Sysinternals coreinfo utility</a> from Microsoft’s website. This utility provides useful information about the system CPU and memory topology. For this walkthrough, you enumerate the individual CPUs, which you can do by running <code class="lang-powershell">coreinfo -c</code>. For example:</p> 
-<pre><code class="lang-powershell">C:\Users\Administrator &gt;coreinfo -c
-Coreinfo v3.31 - Dump information on system CPU and memory topology
-Copyright (C) 2008-2014 Mark Russinovich
-Sysinternals - www.sysinternals.com
-Logical to Physical Processor Map:
-**------ Physical Processor 0 (Hyperthreaded)
---**---- Physical Processor 1 (Hyperthreaded)
-----**-- Physical Processor 2 (Hyperthreaded)
-------** Physical Processor 3 (Hyperthreaded)</code></pre> 
-<p>As you can see from the screenshot, the coreinfo utility displays a table where each row is a physical core and each column is a logical CPU. In other words, the two asterisks on the first line indicate that CPU 0 and CPU 1 are the two threads in the first physical core. Therefore, my m4.2xlarge has for four physical processors and each processor has two threads resulting in eight total CPUs, just as expected.</p> 
-<p>It is interesting to note that Windows Server 2016 enumerates CPUs in a different order than Linux. Remember from the prior post that Linux enumerated the first thread in each core, followed by the second thread in each core. You can see from the output earlier that Windows Server 2016, enumerates both threads in the first core, then both threads in the second core, and so on. The diagram below shows the relationship of CPUs to cores and threads in both operating systems.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin1-1.png"><img class="aligncenter size-full wp-image-2601" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin1-1.png" alt="" width="940" height="604" /></a></p> 
-<p>In the Linux post, I disabled CPUs 4–6, leaving one thread per core, and effectively disabling HT Technology. You can see from the diagram that you must disable the odd-numbered threads (that is, 1, 3, 5, and 7) to achieve the same result in Windows. Here’s how to do that.</p> 
-<b>Disabling HT Technology on Microsoft Windows</b> 
-<p>In Linux, you can globally disable CPUs dynamically. In Windows, there is no direct equivalent that I could find, but there are a few alternatives.</p> 
-<p>First, you can disable CPUs using the msconfig.exe tool. If you choose <strong>Boot, Advanced Options</strong>, you have the option to set the number of processors. In the example below, I limit my m4.2xlarge to four CPUs. Restart for this change to take effect.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin2-1.png"><img class="aligncenter size-full wp-image-2602" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin2-1.png" alt="" width="571" height="400" /></a></p> 
-<p>Unfortunately, Windows does not disable hyperthreaded CPUs first and then real cores, as Linux does. As you can see in the following output, coreinfo reports that my c4.2xlarge has two real cores and four hyperthreads, after rebooting. Msconfig.exe is useful for disabling cores, but it does not allow you to disable HT Technology.</p> 
-<p><strong>Note:</strong> If you have been following along, you can re-enable all your CPUs by unselecting the <strong>Number of processors</strong> check box and rebooting your system.</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-powershell">C:\Users\Administrator &gt;coreinfo -c
-Coreinfo v3.31 - Dump information on system CPU and memory topology
-Copyright (C) 2008-2014 Mark Russinovich
-Sysinternals - www.sysinternals.com
-Logical to Physical Processor Map:
-**-- Physical Processor 0 (Hyperthreaded)
---** Physical Processor 1 (Hyperthreaded)</code></pre> 
-<p>While you cannot disable HT Technology systemwide, Windows does allow you to associate a particular process with one or more CPUs. Microsoft calls this, “processor affinity”. To see an example, use the following steps.</p> 
-<ol> 
-<li>Launch an instance of Notepad.</li> 
-<li>Open Windows Task Manager and choose <strong>Processes</strong>.</li> 
-<li>Open the context (right click) menu on notepad.exe and choose <strong>Set Affinity…</strong>.</li> 
-</ol> 
-<p>This brings up the Processor Affinity dialog box.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin3-1.png"><img class="aligncenter size-full wp-image-2603" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin3-1.png" alt="" width="305" height="321" /></a></p> 
-<p>As you can see, all the CPUs are allowed to run this instance of notepad.exe. You can uncheck a few CPUs to exclude them. Windows is smart enough to allow any scheduled operations to continue to completion on disabled CPUs. It then saves its state at the next scheduling event, and resumes those operations on another CPU. To ensure that only one thread in each core is able to run a process, you uncheck every other core. This effectively disables HT Technology for this process. For example:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin4-1.png"><img class="aligncenter size-full wp-image-2604" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin4-1.png" alt="" width="305" height="321" /></a></p> 
-<p>Of course, this can be tedious when you have a large number of cores. Remember that the x1.32xlarge has 128 CPUs. Luckily, you can set the affinity of a running process from PowerShell using the <code class="lang-powershell">Get-Process</code> cmdlet. For example:</p> 
-<pre><code class="lang-powershell">PS C:\&amp;gt; (Get-Process -Name 'notepad').ProcessorAffinity = 0x55;</code></pre> 
-<p>The <strong>ProcessorAffinity</strong> attribute takes a bitmask in hexadecimal format. 0x55 in hex is equivalent to 01010101 in binary. Think of the binary encoding as 1=enabled and 0=disabled. This is slightly confusing, but we work left to right so that CPU 0 is the rightmost bit and CPU 7 is the leftmost bit. Therefore, 01010101 means that the first thread in each CPU is enabled just as it was in the diagram earlier.</p> 
-<p>The calculator built into Windows includes a “programmer view” that helps you convert from hexadecimal to binary. In addition, the ProcessorAffinity attribute is a 64-bit number. Therefore, you can only configure the processor affinity on systems up to 64 CPUs. At the moment, only the x1.32xlarge has more than 64 vCPUs.</p> 
-<p>In the preceding examples, you changed the processor affinity of a running process. Sometimes, you want to start a process with the affinity already configured. You can do this using the start command. The start command includes an affinity flag that takes a hexadecimal number like the PowerShell example earlier.</p> 
-<pre><code class="lang-powershell">C:\Users\Administrator&amp;gt;start /affinity 55 notepad.exe</code></pre> 
-<p>It is interesting to note that a child process inherits the affinity from its parent. For example, the following commands create a batch file that launches Notepad, and starts the batch file with the affinity set. If you examine the instance of Notepad launched by the batch file, you see that the <strong>affinity</strong> has been applied to as well.</p> 
-<pre><code class="lang-powershell">C:\Users\Administrator&amp;gt;echo notepad.exe &gt; test.bat
-C:\Users\Administrator&amp;gt;start /affinity 55 test.bat</code></pre> 
-<p>This means that you can set the affinity of your task scheduler and any tasks that the scheduler starts inherits the affinity. So, you can disable every other thread when you launch the scheduler and effectively disable HT Technology for all of the tasks as well. Be sure to test this point, however, as some schedulers override the normal inheritance behavior and explicitly set processor affinity when starting a child process.</p> 
-<b>Conclusion</b> 
-<p>While the Windows operating system does not allow you to disable logical CPUs, you can set processor affinity on individual processes. You also learned that Windows Server 2016 enumerates CPUs in a different order than Linux. Therefore, you can effectively disable HT Technology by restricting a process to every other CPU. Finally, you learned how to set affinity of both new and running processes using Task Manager, PowerShell, and the start command.</p> 
-<p>Note: this technical approach has nothing to do with control over software licensing, or licensing rights, which are sometimes linked to the number of “CPUs” or “cores.” For licensing purposes, those are legal terms, not technical terms. This post did not cover anything about software licensing or licensing rights.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2352');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Messaging Fanout Pattern for Serverless Architectures Using Amazon SNS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> and 
-<span property="author" typeof="Person"><span property="name">Sam Dengler</span></span> | on 
-<time property="datePublished" datetime="2017-08-22T15:52:19+00:00">22 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2554" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2554&amp;disqus_title=Messaging+Fanout+Pattern+for+Serverless+Architectures+Using+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2554');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<table> 
-<tbody> 
-<tr> 
-<td valign="center"><img class="alignleft size-thumbnail wp-image-2571" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/26/fsd-150x150.jpg" alt="" width="150" height="150" /></td> 
-<td valign="center"> <h5>Sam Dengler, Amazon Web Services Solutions Architect</h5> </td> 
-</tr> 
-</tbody> 
-</table> 
-<p>Serverless architectures allow solution builders to focus on solving challenges particular to their business, without assuming the overhead of managing infrastructure in AWS. <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> is a service that lets you run code without provisioning or managing servers.</p> 
-<p>When using Lambda in a serverless architecture, the goal should be to design tightly focused functions that do one thing and do it well. When these functions are composed to accomplish larger goals in microservice architectures, the complexity shifts from the internal components to the external communication between components. It’s all too easy to accidentally back into an architecture that is rigid to change because components are too knowledgeable of each other via the communication paths between them.</p> 
-<p>Solution builders can address this architectural challenge by using messaging patterns, resulting in loosely coupled communication between highly cohesive components to manage complexity in serverless architectures. As introduced in the recent <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> post, a common approach when one component wishes to deliver the same message to multiple receivers is to use the fanout <a href="https://aws.amazon.com/pub-sub-messaging/">publish/subscribe messaging pattern</a>.</p> 
-<p>The fanout pattern for message communication can be implemented in code. However, depending on your requirements, alternative solutions exist to offload this undifferentiated responsibility from the application. <a href="https://aws.amazon.com/sns/">Amazon SNS</a> is a fully managed pub/sub messaging service that lets you fan out messages to large numbers of recipients.</p> 
-<p>In this post, I review a serverless architecture from PlayOn! Sports as a case study for migration of fanout functionality from application code to SNS.<span id="more-2554"></span></p> 
-<b>PlayOn! Sports serverless video processing platform</b> 
-<p><a href="http://www.playonsports.com/" target="_blank" rel="noopener noreferrer">PlayOn! Sports</a> is one of the nation’s leading high school sports media companies. They operate a comprehensive technology platform, enabling high-quality, low-cost productions of live sports events for the <a href="http://www.nfhsnetwork.com/" target="_blank" rel="noopener noreferrer">NFHS High School Sports Network</a>.</p> 
-<p>At the 2014 AWS re:Invent conference, Lambda was announced. The PlayOn! Sports technology team recognized the parallels between serverless demos featuring image processing using ImageMagick to video processing using ffmpeg.</p> 
-<p>At the time, PlayOn! Sports was broadcasting live video with adaptive bit rates, requiring a transcoding of the video stream to multiple quality levels for consumption on desktop, mobile, and connected devices. This is not unusual for an internet media company. However, with over 50,000 live broadcasts produced in 2014, the traditional media and entertainment technological approaches and pricing models would not work.</p> 
-<p>After some consultation with the Lambda team to validate support for custom binary execution, PlayOn! Sports moved forward with the development of a new serverless video processing platform according to the architecture diagram below.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram1.png"><img class="aligncenter size-large wp-image-2558" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram1-1024x615.png" alt="" width="640" height="384" /></a></p> 
-<p>In the architecture, a laptop in the field captures the video from a camera source and divides it into small fragments, according to the <a href="https://en.wikipedia.org/wiki/HTTP_Live_Streaming" target="_blank" rel="noopener noreferrer">HLS protocol</a>. The fragments are published to <a href="https://aws.amazon.com/s3">Amazon S3</a>, through an <a href="https://aws.amazon.com/cloudfront">Amazon CloudFront</a> distribution for accelerated upload. When the file has been written to S3, it triggers a Lambda function to initiate the video segment processing.</p> 
-<b>Video transcoding fanout implementation in Lambda</b> 
-<p>Given Lambda’s integration growth across AWS, it’s easy to forget that it did not include managed integration with SNS when it was announced in November 2014.</p> 
-<p>PlayOn! Sports was actively experimenting with approaches to video processing to address quality control, audience growth, and cost constraints. Lambda was a great tool for rapid innovation. A goal of the architecture design was the ability to add and remove video processing alternatives to the workflow, using the fanout pattern to identify optimal solutions. Below is example code from the initial implementation:</p> 
-<pre><code class="lang-python">import json
-import logging
-import boto3
-logger = logging.getLogger('boto3')
-logger.setLevel(logging.INFO)
-client = boto3.client('lambda')
-fanout_functions = ['media_info', 'transcode_audio']
-def lambda_handler(event, context):
-logger.info(json.dumps(event))
-logger.info('fanout_functions: %s', fanout_functions)
-for fanout_function in fanout_functions:
-logger.info('invoke: %s', fanout_function)
-response = client.invoke(
-FunctionName=fanout_function,
-InvocationType='Event',
-Payload=json.dumps(event)
-)
-logger.info('response: %s', response)
-return 'done'</code></pre> 
-<p>Each Lambda function is invoked asynchronously, injecting the same S3 event that triggered the original Lambda function. For example, the media_info Lambda function could be scaffolded similar to the following code snippet:</p> 
-<pre><code class="lang-python">import json
-import logging
-import boto3
-logger = logging.getLogger('boto3')
-logger.setLevel(logging.INFO)
-def lambda_handler(event, context):
-logger.info(json.dumps(event))
-# MediaInfo Processing
-# see: https://aws.amazon.com/blogs/compute/extracting-video-metadata-using-lambda-and-mediainfo/
-return 'done'</code></pre> 
-<b>Refactoring fanout implementation using SNS</b> 
-<p>The PlayOn! Sports development team was familiar with SNS, but had not used it previously to support system-to-system messaging patterns. After <a href="https://aws.amazon.com/about-aws/whats-new/2015/04/amazon-sns-now-integrates-with-aws-lambda/">the announcement of SNS triggering of Lambda functions</a>, the PlayOn! Sports team planned to migrate to the new feature to offload the overhead of managing the fanout Lambda function.</p> 
-<p>When invoking a Lambda function, SNS wraps the original event with SNSEvent. The Lambda function can be refactored by adding a function to parse the S3 event from SNSEvent, as seen in the following code:</p> 
-<pre><code class="lang-python">import json
-import logging
-import boto3
-logger = logging.getLogger('boto3')
-logger.setLevel(logging.INFO)
-def lambda_handler(event, context):
-s3_event = parse_event(event)
-logger.info(json.dumps(s3_event))
-# MediaInfo Processing
-# see: https://aws.amazon.com/blogs/compute/extracting-video-metadata-using-lambda-and-mediainfo/
-return 'done'
-def parse_event(event):
-record = event['Records'][0]
-if 'EventSource' in record and record['EventSource'] == 'aws:sns':
-return json.loads(record['Sns']['Message'])
-return event</code></pre> 
-<p>This Lambda function modification can be authored, tested, and deployed before enabling the SNS integration to verify that the existing Lambda fanout execution path continues to operate as before. The Lambda function invocation can now be transferred from the fanout Lambda function to SNS without disruption to S3 processing.</p> 
-<p>As the diagram below shows, the resulting architecture is similar to the original. The exception is that objects written to S3 now trigger a message to be published to an SNS topic. This sends the S3 event to multiple Lambda functions to be processed independently.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram2.png"><img class="aligncenter size-large wp-image-2559" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram2-1024x615.png" alt="" width="640" height="384" /></a></p> 
-<b>Sample architecture deployment using AWS CloudFormation</b> 
-<p><a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> gives developers and system administrators an easy way to create and manage a collection of related AWS resources. CloudFormation provisions and updates resources in an orderly and predictable fashion. To launch the CloudFormation stack for the sample fanout architecture, choose the following button:</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=serverless-sns-fanout&amp;templateURL=https://s3.amazonaws.com/aws-serverless-sns-fanout/template-inline.yml"><img class="alignleft size-full wp-image-2565" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/launch-stack-button-1.png" alt="" width="133" height="25" /></a></p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>Follow these steps to complete the architecture deployment:</p> 
-<ol> 
-<li>If necessary, sign into the console for your account when prompted.</li> 
-<li>On the <strong>Select Template</strong> page, choose <strong>Next</strong>.</li> 
-<li>Under <strong>Parameters</strong>, for <strong>S3BucketName</strong>, enter a globally unique name.</li> 
-<li>For <strong>SnsTopicName</strong>, enter a region-unique name.</li> 
-<li>Choose <strong>Next</strong>, <strong>Next</strong>.</li> 
-<li>Select the checkbox for <strong>I acknowledge that AWS CloudFormation might create IAM resources</strong>, and choose <strong>Create</strong>.</li> 
-</ol> 
-<p>After the stack has completed creation, you can test both paths of execution by uploading files to the S3 bucket that you created. Uploading a file to the “/uploads/lambda/” directory in S3 triggers the Lambda fanout function. Uploading a file to the “/uploads/sns/” directory in S3 triggers the SNS fanout execution path. You can verify execution by monitoring the Lambda function outputs in CloudWatch Logs.</p> 
-<b>Conclusion</b> 
-<p>In this post, I reviewed the fanout messaging pattern and options for its inclusion in a serverless architectures using Lambda application code and SNS. Using the PlayOn! Sports serverless video processing pipeline use case, I demonstrated how easy it is to refactor an existing application to use the SNS fanout approach.</p> 
-<p>I also provided a sample architecture in CloudFormation that you can run in your own account. Try it out and expand the sample architecture by adding other Lambda functions to the SNS topic, to demonstrate the flexibility of the fanout messaging pattern!</p> 
-<p>You can get started with SNS using the <a href="https://us-west-2.console.aws.amazon.com/sns/v2/">AWS Management Console</a>, or the SDK of your choice. For more information about how to use SNS fanout messaging, see the following resources:</p> 
-<li>10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">How to Send Fanout Event Notifications</a></li> 
-<li>Amazon SNS Developer Guide: 
-<li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messaging to Amazon SQS Queues</a></li> 
-<li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToHttp.html">Sending Amazon SNS Messaging to HTTP/HTTPS Endpoints</a></li> 
-</ul> </li> 
-<li>AWS Compute Blog: &nbsp;<a href="https://aws.amazon.com/blogs/compute/fanout-s3-event-notifications-to-multiple-endpoints/">Fanout S3 Event Notifications to Multiple Endpoints</a></li> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-sns/" rel="tag">Amazon SNS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/sns/" rel="tag">SNS</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2554');
 });
 </script> 
 </article> 
