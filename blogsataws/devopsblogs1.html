@@ -191,6 +191,375 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Enable Caching for AWS CodeBuild</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Karthik Thirugnanasambandam</span></span> | on 
+<time property="datePublished" datetime="2017-11-21T11:35:36+00:00">21 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/new-stuff/" title="View all posts in New stuff"><span property="articleSection">New stuff</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/how-to-enable-caching-for-aws-codebuild/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> is a fully managed build service. There are no servers to provision and scale, or software to install, configure, and operate. You just specify the location of your source code, choose your build settings, and CodeBuild runs build scripts for compiling, testing, and packaging your code.</p> 
+<p>A typical application build process includes phases like preparing the environment, updating the configuration, downloading dependencies, running unit tests, and finally, packaging the built artifact.</p> 
+<p>Downloading dependencies is a critical phase in the build process.&nbsp;These dependent files can range in size from a few KBs to multiple MBs. Because most of the dependent files do not change frequently between builds, you can noticeably reduce your build time by caching dependencies.</p> 
+<p>In this post, I will show you how to enable caching for AWS CodeBuild.</p> 
+<b>Requirements</b> 
+<li>Create an <a href="http://docs.aws.amazon.com/AmazonS3/latest/gsg/CreatingABucket.html">Amazon S3</a> bucket&nbsp;for storing cache archives (You can use existing s3 bucket as well).</li> 
+<li>Create a <a href="https://github.com/">GitHub account</a>&nbsp;(if you don’t have one).</li> 
+<b>Create a sample build project:</b> 
+<p>1. Open the AWS CodeBuild console at&nbsp;<a href="https://console.aws.amazon.com/codebuild/">https://console.aws.amazon.com/codebuild/</a>.</p> 
+<p>2. If a welcome page is displayed, choose&nbsp;<strong>Get started</strong>.</p> 
+<p>If a welcome page is not displayed, on the navigation pane, choose&nbsp;<strong>Build projects</strong>, and then choose&nbsp;<strong>Create project</strong>.</p> 
+<p>3. On the&nbsp;<strong>Configure your project</strong>&nbsp;page, for&nbsp;<strong>Project name</strong>, type a name for this build project. Build project names must be unique across each AWS account.</p> 
+<p><img class="alignnone wp-image-1899 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/project.png" alt="" width="618" height="215" /></p> 
+<p>4. <strong>In&nbsp;Source</strong>: <strong>What to build</strong>, for&nbsp;<strong>Source provider</strong>, choose <strong>GitHub</strong>.</p> 
+<li><strong>For Repository</strong>,&nbsp;select <strong>Use a public repository</strong></li> 
+<li>For&nbsp;<strong>Repository URL</strong>, type <a href="https://github.com/jenkinsci/aws-codebuild-plugin">https://github.com/jenkinsci/aws-codebuild-plugin</a></li> 
+<p><img class="alignnone wp-image-1918 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/Screen-Shot-2017-11-18-at-12.12.01-PM.png" alt="" width="745" height="366" /></p> 
+<p>5. <strong>In&nbsp;Environment</strong>: <strong>How to build</strong>, for&nbsp;<strong>Environment image</strong>, select <strong>Use an image managed by AWS CodeBuild</strong>.</p> 
+<li>For <strong>Operating system</strong>, choose <strong>Ubuntu</strong>.</li> 
+<li>For <strong>Runtime</strong>, choose <strong>Java</strong>.</li> 
+<li>For <strong>Version</strong>, &nbsp;choose <strong>aws/codebuild/java:openjdk-8</strong>.</li> 
+<li>For <strong>Build specification</strong>, select <strong>Insert build commands</strong>.</li> 
+<p><strong>Note:</strong> The&nbsp;build specification file (<strong>buildspec.yml</strong>) can be configured in two ways. You can package it along with your source root directory, or you can override it by using a project environment configuration. In this example, I will use the override option and will use the console editor to specify the build specification.</p> 
+<p><img class="alignnone wp-image-1909 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/environment.png" alt="" width="750" height="539" /></p> 
+<p>6. Under <strong>Build commands</strong>, click <strong>Switch to editor</strong> to enter the build specification.</p> 
+<p>Copy the following text.</p> 
+<pre><code class="lang-yaml">version: 0.2
+phases:
+build:
+commands:
+- mvn install
+cache:
+paths:
+- '/root/.m2/**/*'</code></pre> 
+<p><strong>Note:</strong> The cache section in the build specification instructs AWS CodeBuild about the paths to be cached. Like the&nbsp;artifacts section, the cache paths are relative to&nbsp;$CODEBUILD_SRC_DIR and specify the directories to be cached. In this example, Maven stores the downloaded dependencies to the /root/.m2/ folder, but other tools use different folders. For example, pip uses the /root/.cache/pip folder, and Gradle uses the /root/.gradle/caches folder. You might need to configure the cache paths based on your language platform.</p> 
+<p>7. <strong>In Artifacts:&nbsp;</strong>Where to put the artifacts from this build project:</p> 
+<li>For <strong>Type</strong>, choose <strong>No artifacts</strong>.</li> 
+<p><img class="alignnone wp-image-1911 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/Screen-Shot-2017-11-18-at-12.08.08-PM.png" alt="" width="675" height="136" /></p> 
+<p>8. In <strong>Cache</strong>:</p> 
+<li>For <strong>Type</strong>, choose <strong>Amazon S3</strong>.</li> 
+<li>For <strong>Bucket</strong>, choose your S3 bucket.</li> 
+<li>For <strong>Path prefix</strong>, type cache/archives/</li> 
+<p><img class="alignnone wp-image-1913 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/cache.png" alt="" width="675" height="262" /></p> 
+<p>9. In&nbsp;<strong>Service role</strong>, the <strong>Create a service role in your account option</strong> will display a default role name. &nbsp;You can accept the default name or type your own.</p> 
+<p>If you already have an AWS CodeBuild service role, choose&nbsp;<strong>Choose an existing service role from your account</strong>.</p> 
+<p>10. Choose&nbsp;<strong>Continue</strong>.</p> 
+<p>11. On the&nbsp;<strong>Review</strong>&nbsp;page, to run a build, choose&nbsp;<strong>Save and build</strong>.</p> 
+<pre><code class="lang-yaml"></code></pre> 
+<b>Review build and cache behavior:</b> 
+<p>Let us review our first build for the project.</p> 
+<p>In the first run, where no cache exists, overall build time would look something like&nbsp;below (notice the time for <strong>DOWNLOAD_SOURCE</strong>, <strong>BUILD</strong> and <strong>POST_BUILD</strong>):</p> 
+<p><img class="alignnone wp-image-1914 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/pre-build-img.png" alt="" width="1493" height="370" /></p> 
+<p>If you check the build logs, you will see log entries for dependency downloads. The dependencies are downloaded directly from&nbsp;configured&nbsp;external repositories. At the end of the log, you will see an entry for the cache uploaded to your S3 bucket.</p> 
+<p>Let’s review the S3 bucket for the cached archive. You’ll see the cache from our first successful build is uploaded to the configured S3 path.</p> 
+<p><img class="alignnone wp-image-1916 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/s3-preview.png" alt="" width="873" height="298" /></p> 
+<p>Let’s try another build with the same CodeBuild project. This time the build should pick up the dependencies from the cache.</p> 
+<p>In the second run, there was a cache hit (cache was generated from the first run):</p> 
+<p><img class="alignnone wp-image-1917 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/post-build-img.png" alt="" width="1491" height="384" /></p> 
+<p>You’ll notice a few things:</p> 
+<ol> 
+<li><strong>DOWNLOAD_SOURCE</strong> took slightly longer. Because, in addition to the source code, this time the build also downloaded the cache from user’s s3 bucket.</li> 
+<li><strong>BUILD</strong> time was faster. As the dependencies didn’t need to get downloaded, but were reused from cache.</li> 
+<li><strong>POST_BUILD</strong> took slightly longer, but was relatively the same.</li> 
+</ol> 
+<p>Overall, build duration was improved with cache.</p> 
+<b>Best practices for cache</b> 
+<li style="text-align: left">By default, the cache archive is encrypted on the server side with the customer’s artifact <a href="https://aws.amazon.com/kms/">KMS</a> key.</li> 
+<li style="text-align: left">You can expire the cache by manually removing the cache archive from S3. Alternatively, you can expire the cache by using an <a href="http://docs.aws.amazon.com/AmazonS3/latest/user-guide/create-lifecycle.html">S3 lifecycle policy</a>.</li> 
+<li style="text-align: left">You can override cache behavior by updating the project. You can use the AWS CodeBuild <a href="https://aws.amazon.com/Users/allysona/AppData/Local/Temp/docs.aws.amazon.com/codebuild/latest/userguide/change-project.html">the AWS CodeBuild console, AWS CLI, or AWS SDKs</a> to update the project. You can also invalidate cache setting by using the new <strong>InvalidateProjectCache</strong> API. This API forces a new InvalidationKey to be generated, ensuring that future builds receive an empty cache. This API does&nbsp;not&nbsp;remove the existing cache, because this could cause inconsistencies with builds currently in flight.</li> 
+<li style="text-align: left">The cache can be enabled for any folders in the build environment, but we recommend you only cache dependencies/files that will not change frequently between builds. Also, to avoid unexpected application behavior, don’t cache configuration and sensitive information.</li> 
+<b>Conclusion</b> 
+<p>In this blog post, I showed you how to enable and configure cache setting for AWS CodeBuild. As you see, this can save considerable build time. It also improves resiliency by avoiding external network connections to an artifact repository.</p> 
+<p>I hope you found this post useful. Feel free to leave your feedback or suggestions in the comments.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/aws-codebuild/" rel="tag">AWS CodeBuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/dependency-cache/" rel="tag">dependency cache</a>, <a href="https://aws.amazon.com/blogs/devops/tag/devops/" rel="tag">DevOps</a>, <a href="https://aws.amazon.com/blogs/devops/tag/how-to/" rel="tag">How-to</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Access Resources in a VPC from AWS CodeBuild Builds</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">John Pignata</span></span> | on 
+<time property="datePublished" datetime="2017-11-21T11:32:09+00:00">21 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/access-resources-in-a-vpc-from-aws-codebuild-builds/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-1886" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=1886&amp;disqus_title=Access+Resources+in+a+VPC+from+AWS+CodeBuild+Builds&amp;disqus_url=https://aws.amazon.com/blogs/devops/access-resources-in-a-vpc-from-aws-codebuild-builds/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-1886');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>John Pignata, Startup Solutions Architect, Amazon Web Services</em></p> 
+<p>In this blog post we’re going to discuss a new <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> feature that is available starting today. CodeBuild&nbsp;builds can now access resources in a VPC&nbsp;directly without these resources being exposed to the public internet. These resources include <a href="https://aws.amazon.com/rds">Amazon Relational Database Service (Amazon RDS)</a>&nbsp;databases, <a href="https://aws.amazon.com/elasticache">Amazon ElastiCache</a> clusters, internal services running on <a href="https://aws.amazon.com/ec2/">Amazon Elastic Compute Cloud (Amazon EC2)</a>, and <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service (Amazon ECS)</a>, or any service endpoints that are only reachable from within a specific VPC.</p> 
+<p>CodeBuild is a fully managed build service that compiles source code, runs tests, and produces software packages that are ready to deploy. As part of the build process, developers often require access to resources that should be isolated from the public Internet. Now CodeBuild builds can be optionally configured to have VPC connectivity and access these resources directly.</p> 
+<p><strong>Accessing Resources in a VPC</strong></p> 
+<p>You can configure builds to have access to a VPC when you create a CodeBuild project or you can update an existing CodeBuild project with VPC configuration attributes. Here’s how it looks in the console:</p> 
+<p><img class="alignnone size-full wp-image-1894" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture1.png" alt="" width="878" height="658" border="1" /></p> 
+<p>&nbsp;</p> 
+<p>To configure VPC connectivity: select a VPC, one or more subnets within that VPC, and one or more VPC security groups that CodeBuild should apply when attaching to your VPC. Once configured, commands running as part of your build will be able to access resources in your VPC without transiting across the public Internet.</p> 
+<p><strong>Use Cases</strong></p> 
+<p>The availability of VPC connectivity from CodeBuild builds unlocks many potential uses. For example, you can:</p> 
+<li>Run integration tests from your build against data in an Amazon RDS instance that’s isolated on a private subnet.</li> 
+<li>Query data in an ElastiCache cluster directly from tests.</li> 
+<li>Interact with internal web services hosted on Amazon EC2, Amazon ECS, or services that use internal Elastic Load Balancing.</li> 
+<li>Retrieve dependencies from self-hosted, internal artifact repositories such as PyPI for Python, Maven for Java, npm for Node.js, and so on.</li> 
+<li>Access objects in an Amazon S3 bucket configured to allow access only through a VPC endpoint.</li> 
+<li>Query external web services that require fixed IP addresses through the Elastic IP address of the NAT gateway associated with your subnet(s).</li> 
+<p>… and more! Your builds can now access any resource that’s hosted in your VPC without any compromise on network isolation.</p> 
+<p><strong>Internet Connectivity</strong></p> 
+<p>CodeBuild requires access to resources on the public Internet to successfully execute builds. At a minimum, it must be able to reach your source repository system (such as <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a>, <a href="https://github.com">GitHub</a>, <a href="https://www.bitbucket.org">Bitbucket</a>), <a href="https://aws.amazon.com/s3/">Amazon Simple Storage Service (Amazon S3)</a> to deliver build artifacts, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html">Amazon CloudWatch Logs</a> to stream logs from the build process. The interface attached to your VPC will not be assigned a public IP address so to enable Internet access from your builds, you will need to set up a managed <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html">NAT Gateway</a> or <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html">NAT instance</a> for the subnets you configure. You must also ensure your security groups allow outbound access to these services.</p> 
+<p><strong>IP Address Space</strong></p> 
+<p>Each running build will be assigned an IP address from one of the subnets in your VPC that you designate for CodeBuild to use. As CodeBuild scales to meet your build volume, ensure that you select subnets with enough address space to accommodate your expected number of concurrent builds.</p> 
+<p><strong>Service Role Permissions</strong></p> 
+<p>CodeBuild requires new permissions in order to manage network interfaces on your VPCs. If you create a service role for your new projects, these permissions will be included in that role’s policy automatically. For existing service roles, you can edit the policy document to include the additional actions. For the full policy document to apply to your service role, see <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/setting-up.html#setting-up-service-permissions-group">Advanced Setup</a> in the CodeBuild documentation.</p> 
+<p>For more information, see <a href="https://docs.aws.amazon.com/codebuild/latest/userguide/vpc-support.html">VPC Support</a> in the CodeBuild documentation. We hope you find the ability to access internal resources on a VPC useful&nbsp;in your build processes! If you have any questions or feedback, feel free to reach out to us through the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=230">AWS CodeBuild forum</a> or leave a comment!</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-1886');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS CodeCommit Pull Requests to request code reviews and discuss code</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
+<time property="datePublished" datetime="2017-11-20T13:27:15+00:00">20 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codecommit/" title="View all posts in AWS CodeCommit*"><span property="articleSection">AWS CodeCommit*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/using-aws-codecommit-pull-requests-to-request-code-reviews-and-discuss-code/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Thank you to Michael Edge, Senior Cloud Architect, for a great blog on CodeCommit pull requests.</p> 
+<p>~~~~~~~</p> 
+<p><a href="http://aws.amazon.com/codecommit">AWS CodeCommit</a> is a fully managed service for securely hosting private Git repositories. CodeCommit now supports pull requests, which allows repository users to review, comment upon, and interactively iterate on code changes. Used as a collaboration tool between team members, pull requests help you to review potential changes to a CodeCommit repository before merging those changes into the repository. Each pull request goes through a simple lifecycle, as follows:</p> 
+<li>The new features to be merged are added as one or more commits to a feature branch. The commits are not merged into the destination branch.</li> 
+<li>The pull request is created, usually from the difference between two branches.</li> 
+<li>Team members review and comment on the pull request. The pull request might be updated with additional commits that contain changes made in response to comments, or include changes made to the destination branch.</li> 
+<li>Once team members are happy with the pull request, it is merged into the destination branch. The commits are applied to the destination branch in the same order they were added to the pull request.</li> 
+<p>Commenting is an integral part of the pull request process, and is used to collaborate between the developers and the reviewer. Reviewers add comments and questions to a pull request during the review process, and developers respond to these with explanations. Pull request comments can be added to the overall pull request, a file within the pull request, or a line within a file.</p> 
+<p>To make the comments more useful, sign in to the AWS Management Console as an AWS Identity and Access Management (IAM) user. The username will then be associated with the comment, indicating the owner of the comment. Pull request comments are a great quality improvement tool as they allow the entire development team visibility into what reviewers are looking for in the code. They also serve as a record of the discussion between team members at a point in time, and shouldn’t be deleted.</p> 
+<p>AWS CodeCommit is also introducing the ability to add comments to a commit, another useful collaboration feature that allows team members to discuss code changed as part of a commit. This helps you discuss changes made in a repository, including why the changes were made, whether further changes are necessary, or whether changes should be merged. As is the case with pull request comments, you can comment on an overall commit, on a file within a commit, or on a specific line or change within a file, and other repository users can respond to your comments. Comments are not restricted to commits, they can also be used to comment on the differences between two branches, or between two tags. Commit comments are separate from pull request comments, i.e. you will not see commit comments when reviewing a pull request – you will only see pull request comments.</p> 
+<b>A pull request example</b> 
+<p>Let’s get started by running through an example. We’ll take a typical pull request scenario and look at how we’d use CodeCommit and the AWS Management Console for each of the steps.</p> 
+<p>To try out this scenario, you’ll need:</p> 
+<li>An AWS CodeCommit repository with some sample code in the master branch. We’ve provided sample code below.</li> 
+<li>Two AWS Identity and Access Management (IAM) users, both with the <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/auth-and-access-control-iam-identity-based-access-control.html#managed-policies">AWSCodeCommitPowerUser managed policy</a> applied to them.</li> 
+<li>Git installed on your local computer, and access configured for AWS CodeCommit.</li> 
+<li>A clone of the AWS CodeCommit repository on your local computer.</li> 
+<p>In the course of this example, you’ll sign in to the AWS CodeCommit console as one IAM user to create the pull request, and as the other IAM user to review the pull request. To learn more about how to set up your IAM users and how to connect to AWS CodeCommit with Git, see the following topics:</p> 
+<li>Information on <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html#id_users_create_console">creating an IAM user</a> with AWS Management Console access.</li> 
+<li>Instructions on how to <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html">access CodeCommit using Git</a>.</li> 
+<li>If you’d like to use the same ‘hello world’ application as used in this article, here is the source code:</li> 
+<pre><code class="lang-java">package com.amazon.helloworld;
+public class Main {
+public static void main(String[] args) {
+System.out.println(&quot;Hello, world&quot;);
+}
+}</code></pre> 
+<p>The scenario below uses the us-east-2 region.</p> 
+<h3>Creating the branches</h3> 
+<p>Before we jump in and create a pull request, we’ll need at least two branches. In this example, we’ll follow a branching strategy similar to the one <a href="https://datasift.github.io/gitflow/IntroducingGitFlow.html">described in GitFlow</a>. We’ll create a new branch for our feature from the main development branch (the default branch). We’ll develop the feature in the feature branch. Once we’ve written and tested the code for the new feature in that branch, we’ll create a pull request that contains the differences between the feature branch and the main development branch. Our team lead (the second IAM user) will review the changes in the pull request. Once the changes have been reviewed, the feature branch will be merged into the development branch.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/pull-request-1a.png" /></p> 
+<p style="text-align: center">Figure 1: Pull request link</p> 
+<p>Sign in to the AWS CodeCommit console with the IAM user you want to use as the developer. You can use an existing repository or you can go ahead and <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-create-repository.html#how-to-create-repository-console">create a new one</a>. We won’t be merging any changes to the master branch of your repository, so it’s safe to use an existing repository for this example. You’ll find the Pull requests link has been added just above the Commits link (see Figure 1), and below Commits you’ll find the Branches link. Click <strong>Branches</strong> and create a new branch called ‘develop’, branched from the ‘master’ branch. Then create a new branch called ‘feature1’, branched from the ‘develop’ branch. You’ll end up with three branches, as you can see in Figure 2. (Your repository might contain other branches in addition to the three shown in the figure).</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture2.png" /></p> 
+<p style="text-align: center">Figure 2: Create a feature branch</p> 
+<p>If you haven’t cloned your repo yet, go to the <strong>Code</strong> link in the CodeCommit console and click the <strong>Connect</strong> button. Follow the instructions to clone your repo (<a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-connect.html">detailed instructions are here</a>). Open a terminal or command line and paste the git clone command supplied in the Connect instructions for your repository. The example below shows cloning a repository named codecommit-demo:</p> 
+<pre><code class="lang-bash">git clone https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo</code></pre> 
+<p>If you’ve previously cloned the repo you’ll need to update your local repo with the branches you created. Open a terminal or command line and make sure you’re in the root directory of your repo, then run the following command:</p> 
+<pre><code class="lang-bash">git remote update origin</code></pre> 
+<p>You’ll see your new branches pulled down to your local repository.</p> 
+<pre><code class="lang-bash">$ git remote update origin
+Fetching origin
+From https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
+* [new branch]      develop    -&gt; origin/develop
+* [new branch]      feature1   -&gt; origin/feature1</code></pre> 
+<p>You can also see your new branches by typing:</p> 
+<pre><code class="lang-bash">git branch --all
+$ git branch --all
+* master
+remotes/origin/develop
+remotes/origin/feature1
+remotes/origin/master</code></pre> 
+<p>Now we’ll make a change to the ‘feature1’ branch. Open a terminal or command line and check out the feature1 branch by running the following command:</p> 
+<pre><code class="lang-bash">git checkout feature1
+$ git checkout feature1
+Branch feature1 set up to track remote branch feature1 from origin.
+Switched to a new branch 'feature1'</code></pre> 
+<h3>Make code changes</h3> 
+<p>Edit a file in the repo using your favorite editor and save the changes. Commit your changes to the local repository, and push your changes to CodeCommit. For example:</p> 
+<pre><code class="lang-bash">git commit -am 'added new feature'
+git push origin feature1
+$ git commit -am 'added new feature'
+[feature1 8f6cb28] added new feature
+1 file changed, 1 insertion(+), 1 deletion(-)
+$ git push origin feature1
+Counting objects: 9, done.
+Delta compression using up to 4 threads.
+Compressing objects: 100% (4/4), done.
+Writing objects: 100% (9/9), 617 bytes | 617.00 KiB/s, done.
+Total 9 (delta 2), reused 0 (delta 0)
+To https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
+2774a53..8f6cb28  feature1 -&gt; feature1</code></pre> 
+<h3>Creating the pull request</h3> 
+<p>Now we have a ‘feature1’ branch that differs from the ‘develop’ branch. At this point we want to merge our changes into the ‘develop’ branch. We’ll create a pull request to notify our team members to review our changes and check whether they are ready for a merge.</p> 
+<p>In the AWS CodeCommit console, click <strong>Pull requests</strong>. Click <strong>Create pull request</strong>. On the next page select ‘develop’ as the destination branch and ‘feature1’ as the source branch. Click <strong>Compare</strong>. CodeCommit will check for merge conflicts and highlight whether the branches can be automatically merged using the fast-forward option, or whether a manual merge is necessary. A pull request can be created in both situations.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture3.png" /></p> 
+<p style="text-align: center">Figure 3: Create a pull request</p> 
+<p>After comparing the two branches, the CodeCommit console displays the information you’ll need in order to create the pull request. In the ‘Details’ section, the ‘Title’ for the pull request is mandatory, and you may optionally provide comments to your reviewers to explain the code change you have made and what you’d like them to review. In the ‘Notifications’ section, there is an option to set up notifications to notify subscribers of changes to your pull request. Notifications will be sent on creation of the pull request as well as for any pull request updates or comments. And finally, you can review the changes that make up this pull request. This includes both the individual commits (a pull request can contain one or more commits, available in the Commits tab) as well as the changes made to each file, i.e. the diff between the two branches referenced by the pull request, available in the Changes tab. After you have reviewed this information and added a title for your pull request, click the <strong>Create</strong> button. You will see a confirmation screen, as shown in Figure 4, indicating that your pull request has been successfully created, and can be merged without conflicts into the ‘develop’ branch.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture4.png" /></p> 
+<p style="text-align: center">Figure 4: Pull request confirmation page</p> 
+<h3>Reviewing the pull request</h3> 
+<p>Now let’s view the pull request from the perspective of the team lead. If you set up notifications for this CodeCommit repository, creating the pull request would have sent an email notification to the team lead, and he/she can use the links in the email to navigate directly to the pull request. In this example, sign in to the AWS CodeCommit console as the IAM user you’re using as the team lead, and click <strong>Pull requests</strong>. You will see the same information you did during creation of the pull request, plus a record of activity related to the pull request, as you can see in Figure 5.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture5.png" /></p> 
+<p style="text-align: center">Figure 5: Team lead reviewing the pull request</p> 
+<h3>Commenting on the pull request</h3> 
+<p>You now perform a thorough review of the changes and make a number of comments using the new pull request comment feature. To gain an overall perspective on the pull request, you might first go to the Commits tab and review how many commits are included in this pull request. Next, you might visit the Changes tab to review the changes, which displays the differences between the feature branch code and the develop branch code. At this point, you can add comments to the pull request as you work through each of the changes. Let’s go ahead and review the pull request. During the review, you can add review comments at three levels:</p> 
+<li>The overall pull request</li> 
+<li>A file within the pull request</li> 
+<li>An individual line within a file</li> 
+<p><strong>The overall pull request</strong><br /> In the Changes tab near the bottom of the page you’ll see a ‘Comments on changes’ box. We’ll add comments here related to the overall pull request. Add your comments as shown in Figure 6 and click the <strong>Save</strong> button.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture6.png" /></p> 
+<p style="text-align: center">Figure 6: Pull request comment</p> 
+<p><strong>A specific file in the pull request</strong><br /> Hovering your mouse over a filename in the Changes tab will cause a blue ‘comments’ icon to appear to the left of the filename. Clicking the icon will allow you to enter comments specific to this file, as in the example in Figure 7. Go ahead and add comments for one of the files changed by the developer. Click the <strong>Save</strong> button to save your comment.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture7.png" /></p> 
+<p style="text-align: center">Figure 7: File comment</p> 
+<p><strong>A specific line in a file in the pull request</strong><br /> A blue ‘comments’ icon will appear as you hover over individual lines within each file in the pull request, allowing you to create comments against lines that have been added, removed or are unchanged. In Figure 8, you add comments against a line that has been added to the source code, encouraging the developer to review the naming standards. Go ahead and add line comments for one of the files changed by the developer. Click the <strong>Save</strong> button to save your comment.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture8.png" /></p> 
+<p style="text-align: center">Figure 8: Line comment</p> 
+<p>A pull request that has been commented at all three levels will look similar to Figure 9. The pull request comment is shown expanded in the ‘Comments on changes’ section, while the comments at file and line level are shown collapsed. A ‘comment’ icon indicates that comments exist at file and line level. Clicking the icon will expand and show the comment. Since you are expecting the developer to make further changes based on your comments, you won’t merge the pull request at this stage, but will leave it open awaiting feedback. Each comment you made results in a notification being sent to the developer, who can respond to the comments. This is great for remote working, where developers and team lead may be in different time zones.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture9.png" /></p> 
+<p style="text-align: center">Figure 9: Fully commented pull request</p> 
+<h3>Adding a little complexity</h3> 
+<p>A typical development team is going to be creating pull requests on a regular basis. It’s highly likely that the team lead will merge other pull requests into the ‘develop’ branch while pull requests on feature branches are in the review stage. This may result in a change to the ‘Mergable’ status of a pull request. Let’s add this scenario into the mix and check out how a developer will handle this.</p> 
+<p>To test this scenario, we could create a new pull request and ask the team lead to merge this to the ‘develop’ branch. But for the sake of simplicity we’ll take a shortcut. Clone your CodeCommit repo to a new folder, switch to the ‘develop’ branch, and make a change to one of the same files that were changed in your pull request. Make sure you change a line of code that was also changed in the pull request. Commit and push this back to CodeCommit. Since you’ve just changed a line of code in the ‘develop’ branch that has also been changed in the ‘feature1’ branch, the ‘feature1’ branch cannot be cleanly merged into the ‘develop’ branch. Your developer will need to resolve this merge conflict.</p> 
+<p>A developer reviewing the pull request would see the pull request now looks similar to Figure 10, with a ‘Resolve conflicts’ status rather than the ‘Mergable’ status it had previously (see Figure 5).</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture10.png" /></p> 
+<p style="text-align: center">Figure 10: Pull request with merge conflicts</p> 
+<h3>Reviewing the review comments</h3> 
+<p>Once the team lead has completed his review, the developer will review the comments and make the suggested changes. As a developer, you’ll see the list of review comments made by the team lead in the pull request Activity tab, as shown in Figure 11. The Activity tab shows the history of the pull request, including commits and comments. You can reply to the review comments directly from the Activity tab, by clicking the Reply button, or you can do this from the Changes tab. The Changes tab shows the comments for the latest commit, as comments on previous commits may be associated with lines that have changed or been removed in the current commit. Comments for previous commits are available to view and reply to in the Activity tab.</p> 
+<p>In the Activity tab, use the shortcut link (which looks like this &lt;/&gt;) to move quickly to the source code associated with the comment. In this example, you will make further changes to the source code to address the pull request review comments, so let’s go ahead and do this now. But first, you will need to resolve the ‘Resolve conflicts’ status.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture11.png" /></p> 
+<p style="text-align: center">Figure 11: Pull request activity</p> 
+<h3>Resolving the ‘Resolve conflicts’ status</h3> 
+<p>The ‘Resolve conflicts’ status indicates there is a merge conflict between the ‘develop’ branch and the ‘feature1’ branch. This will require manual intervention to restore the pull request back to the ‘Mergable’ state. We will resolve this conflict next.</p> 
+<p>Open a terminal or command line and check out the develop branch by running the following command:</p> 
+<pre><code class="lang-bash">git checkout develop
+$ git checkout develop
+Switched to branch 'develop'
+Your branch is up-to-date with 'origin/develop'.</code></pre> 
+<p>To incorporate the changes the team lead made to the ‘develop’ branch, merge the remote ‘develop’ branch with your local copy:</p> 
+<pre><code class="lang-bash">git pull
+$ git pull
+remote: Counting objects: 9, done.
+Unpacking objects: 100% (9/9), done.
+From https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
+af13c82..7b36f52  develop    -&gt; origin/develop
+Updating af13c82..7b36f52
+Fast-forward
+src/main/java/com/amazon/helloworld/Main.java | 2 +-
+1 file changed, 1 insertion(+), 1 deletion(-)</code></pre> 
+<p>Then checkout the ‘feature1’ branch:</p> 
+<pre><code class="lang-bash">git checkout feature1
+$ git checkout feature1
+Switched to branch 'feature1'
+Your branch is up-to-date with 'origin/feature1'.</code></pre> 
+<p>Now merge the changes from the ‘develop’ branch into your ‘feature1’ branch:</p> 
+<pre><code class="lang-bash">git merge develop
+$ git merge develop
+Auto-merging src/main/java/com/amazon/helloworld/Main.java
+CONFLICT (content): Merge conflict in src/main/java/com/amazon/helloworld/Main.java
+Automatic merge failed; fix conflicts and then commit the result.</code></pre> 
+<p>Yes, this fails. The file Main.java has been changed in both branches, resulting in a merge conflict that can’t be resolved automatically. However, Main.java will now contain markers that indicate where the conflicting code is, and you can use these to resolve the issues manually. Edit Main.java using your favorite IDE, and you’ll see it looks something like this:</p> 
+<pre><code class="lang-java">package com.amazon.helloworld;
+import java.util.*;
+/**
+* This class prints a hello world message
+*/
+public class Main {
+public static void main(String[] args) {
+&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+Date todaysdate = Calendar.getInstance().getTime();
+System.out.println(&quot;Hello, earthling. Today's date is: &quot; + todaysdate);
+=======
+System.out.println(&quot;Hello, earth&quot;);
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; develop
+}
+}</code></pre> 
+<p>The code between HEAD and ‘===’ is the code the developer added in the ‘feature1’ branch (HEAD represents ‘feature1’ because this is the current checked out branch). The code between ‘===’ and ‘&gt;&gt;&gt; develop’ is the code added to the ‘develop’ branch by the team lead. We’ll resolve the conflict by manually merging both changes, resulting in an updated Main.java:</p> 
+<pre><code class="lang-java">package com.amazon.helloworld;
+import java.util.*;
+/**
+* This class prints a hello world message
+*/
+public class Main {
+public static void main(String[] args) {
+Date todaysdate = Calendar.getInstance().getTime();
+System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysdate);
+}
+}</code></pre> 
+<p>After saving the change you can add and commit it to your local repo:</p> 
+<pre><code class="lang-bash">git add src/
+git commit -m 'fixed merge conflict by merging changes'</code></pre> 
+<h3>Fixing issues raised by the reviewer</h3> 
+<p>Now you are ready to address the comments made by the team lead. If you are no longer pointing to the ‘feature1’ branch, check out the ‘feature1’ branch by running the following command:</p> 
+<pre><code class="lang-bash">git checkout feature1
+$ git checkout feature1
+Branch feature1 set up to track remote branch feature1 from origin.
+Switched to a new branch 'feature1'</code></pre> 
+<p>Edit the source code in your favorite IDE and make the changes to address the comments. In this example, the developer has updated the source code as follows:</p> 
+<pre><code class="lang-java">package com.amazon.helloworld;
+import java.util.*;
+/**
+*  This class prints a hello world message
+*
+* @author Michael Edge
+* @see HelloEarth
+* @version 1.0
+*/
+public class Main {
+public static void main(String[] args) {
+Date todaysDate = Calendar.getInstance().getTime();
+System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysDate);
+}
+}</code></pre> 
+<p>After saving the changes, commit and push to the CodeCommit ‘feature1’ branch as you did previously:</p> 
+<pre><code class="lang-bash">git commit -am 'updated based on review comments'
+git push origin feature1</code></pre> 
+<h3>Responding to the reviewer</h3> 
+<p>Now that you’ve fixed the code issues you will want to respond to the review comments. In the AWS CodeCommit console, check that your latest commit appears in the pull request Commits tab. You now have a pull request consisting of more than one commit. The pull request in Figure 12 has four commits, which originated from the following activities:</p> 
+<li>8th Nov: the original commit used to initiate this pull request</li> 
+<li>10th Nov, 3 hours ago: the commit by the team lead to the ‘develop’ branch, merged into our ‘feature1’ branch</li> 
+<li>10th Nov, 24 minutes ago: the commit by the developer that resolved the merge conflict</li> 
+<li>10th Nov, 4 minutes ago: the final commit by the developer addressing the review comments</li> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture12.png" /></p> 
+<p style="text-align: center">Figure 12: Pull request with multiple commits</p> 
+<p>Let’s reply to the review comments provided by the team lead. In the Activity tab, reply to the pull request comment and save it, as shown in Figure 13.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture13.png" /></p> 
+<p style="text-align: center">Figure 13: Replying to a pull request comment</p> 
+<p>At this stage, your code has been committed and you’ve updated your pull request comments, so you are ready for a final review by the team lead.</p> 
+<h3>Final review</h3> 
+<p>The team lead reviews the code changes and comments made by the developer. As team lead, you own the ‘develop’ branch and it’s your decision on whether to merge the changes in the pull request into the ‘develop’ branch. You can close the pull request with or without merging using the Merge and Close buttons at the bottom of the pull request page (see Figure 13). Clicking Close will allow you to add comments on why you are closing the pull request without merging. Merging will perform a fast-forward merge, incorporating the commits referenced by the pull request. Let’s go ahead and click the Merge button to merge the pull request into the ‘develop’ branch.</p> 
+<p><img class="aligncenter" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture14.png" /></p> 
+<p style="text-align: center">Figure 14: Merging the pull request</p> 
+<p>After merging a pull request, development of that feature is complete and the feature branch is no longer needed. It’s common practice to delete the feature branch after merging. CodeCommit provides a check box during merge to automatically delete the associated feature branch, as seen in Figure 14. Clicking the <strong>Merge</strong> button will merge the pull request into the ‘develop’ branch, as shown in Figure 15. This will update the status of the pull request to ‘Merged’, and will close the pull request.</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/20/Picture16.png" /></p> 
+<b>Conclusion</b> 
+<p>This blog has demonstrated how pull requests can be used to request a code review, and enable reviewers to get a comprehensive summary of what is changing, provide feedback to the author, and merge the code into production. For more information on pull requests, <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/pull-requests.html">see the documentation</a>.</p> 
+<footer> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/10/12/codepipeline_statemachine-1-1260x623.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Using AWS Step Functions State Machines to Handle Workflow-Driven AWS CodePipeline Actions</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1159,843 +1528,6 @@ s3Client.putObject(targetS3Bucket, key, file);
 <p>In this blog, I’ve demonstrated three example solutions built using these tools, however AWS CodeCommit’s integration with AWS CloudWatch Events allows you to integrate with other AWS CloudWatch Events targets, like Amazon SQS or AWS Step Functions.</p> 
 <p>I encourage you to visit the GitHub repository (<a href="https://github.com/awslabs/serverless-codecommit-examples">https://github.com/awslabs/serverless-codecommit-examples</a>), which has instructions to launch these examples in your own AWS account. Please share your ideas and questions in the comments below, or submit pull requests and issues to the GitHub repository!</p> 
 <footer> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Create Multiple Builds from the Same Source Using Different AWS CodeBuild Build Specification Files</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
-<time property="datePublished" datetime="2017-08-01T14:25:49+00:00">01 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/create-multiple-builds-from-the-same-source-using-different-aws-codebuild-build-specification-files/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>In June 2017, <a href="https://forums.aws.amazon.com/ann.jspa?annID=4762" target="_blank" rel="noopener noreferrer">AWS CodeBuild announced</a> you can now specify an alternate build specification file name or location in an AWS CodeBuild project.</p> 
-<p>In this post, I’ll show you how to use different build specification files in the same repository to create different builds. You’ll find the source code for this post in our&nbsp;<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec" target="_blank" rel="noopener noreferrer">GitHub repo</a>.</p> 
-<h3>Requirements</h3> 
-<p>The <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS CLI</a> must be installed and configured.</p> 
-<h3>Solution Overview</h3> 
-<p>I have created a C program (cbsamplelib.c) that will be used to create a shared library and another utility program (cbsampleutil.c) to use that library. I’ll use a Makefile to compile these files.</p> 
-<p>I need to put this sample application in RPM and DEB packages so end users can easily deploy them. I have created a build specification file for RPM. It will use make to compile this code and the RPM specification file (cbsample.rpmspec) configured in the build specification to create the RPM package. Similarly, I have created a build specification file for DEB. It will create the DEB package based on the control specification file (cbsample.control) configured in this build specification.</p> 
-<p><span id="more-1464"></span></p> 
-<h4>RPM Build Project:</h4> 
-<p>The following build specification file (<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-rpm.yml</a>) uses build specification version 0.2. As described in <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html#build-spec-ref-versions" target="_blank" rel="noopener noreferrer">the documentation</a>, this version has different syntax for environment variables. This build specification includes multiple phases:</p> 
-<li>As part of the install phase, the required packages is installed using yum.</li> 
-<li>During the pre_build phase, the required directories are created and the required files, including the RPM build specification file, are copied to the appropriate location.</li> 
-<li>During the build phase, the code is compiled, and then the RPM package is created based on the RPM specification.</li> 
-<p>As defined in the artifact section, the RPM file will be uploaded as a build artifact.</p> 
-<pre><code class="lang-yaml">version: 0.2
-env:
-&nbsp; variables:
-&nbsp; &nbsp; build_version: &quot;0.1&quot;
-phases:
-&nbsp; install:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
-&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
-&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-$build_version&quot;
-&nbsp; &nbsp; &nbsp; - echo $filename
-&nbsp; &nbsp; &nbsp; - mkdir -p $filename
-&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
-&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
-&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
-&nbsp; &nbsp; &nbsp; - cp cbsample.rpmspec ./SPECS/
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
-&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample.rpmspec
-&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
-artifacts:
-&nbsp; files:
-&nbsp; &nbsp; - RPMS/x86_64/cbsample*.rpm
-&nbsp; discard-paths: yes
-</code></pre> 
-<p>Using cb-centos-project.json as a reference, create the input JSON file for the CLI command. This project uses an AWS CodeCommit repository named codebuild-multispec and a file named buildspec-rpm.yml as the build specification file. To create the RPM package, we need to specify a custom image name. I’m using the latest CentOS 7 image available in the Docker Hub. I’m using a role named CodeBuildServiceRole. It contains permissions similar to those defined in CodeBuildServiceRole.json. (You need to change the resource fields in the policy, as appropriate.)</p> 
-<pre><code class="lang-json">{
-&nbsp; &nbsp; &quot;name&quot;: &quot;rpm-build-project&quot;,
-&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build RPM from the source.&quot;,
-&nbsp; &nbsp; &quot;source&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;artifacts&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;environment&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
-&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
-&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
-&nbsp; &nbsp; &quot;tags&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;RPM Demo Build&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; ]
-}
-</code></pre> 
-<p>After the <code class="lang-bash">cli-input-json</code> file is ready, execute the following command to create the build project.</p> 
-<pre><code class="lang-json">$ aws codebuild create-project --name CodeBuild-RPM-Demo --cli-input-json file://cb-centos-project.json
-{
-&quot;project&quot;: {
-&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;, 
-&quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;, 
-&quot;tags&quot;: [
-{
-&quot;value&quot;: &quot;RPM Demo Build&quot;, 
-&quot;key&quot;: &quot;Name&quot;
-}
-], 
-&quot;artifacts&quot;: {
-&quot;namespaceType&quot;: &quot;NONE&quot;, 
-&quot;packaging&quot;: &quot;NONE&quot;, 
-&quot;type&quot;: &quot;S3&quot;, 
-&quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;, 
-&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;
-}, 
-&quot;lastModified&quot;: 1500559811.13, 
-&quot;timeoutInMinutes&quot;: 15, 
-&quot;created&quot;: 1500559811.13, 
-&quot;environment&quot;: {
-&quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;, 
-&quot;privilegedMode&quot;: false, 
-&quot;image&quot;: &quot;centos:7&quot;, 
-&quot;type&quot;: &quot;LINUX_CONTAINER&quot;, 
-&quot;environmentVariables&quot;: []
-}, 
-&quot;source&quot;: {
-&quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;, 
-&quot;type&quot;: &quot;CODECOMMIT&quot;, 
-&quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
-}, 
-&quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;, 
-&quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:project/CodeBuild-RPM-Demo&quot;, 
-&quot;description&quot;: &quot;Project which will build RPM from the source.&quot;
-}
-}</code></pre> 
-<p>When the project is created, run the following command to start the build. After the build has started, get the build ID. You can use the build ID to get the status of the build.</p> 
-<pre><code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo
-{
-&nbsp; &nbsp; &quot;build&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1: 012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
-&nbsp; &nbsp; }
-}
-$ aws codebuild list-builds-for-project --project-name CodeBuild-RPM-Demo
-{
-&nbsp; &nbsp; &quot;ids&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
-&nbsp; &nbsp; ]
-}
-$ aws codebuild batch-get-builds --ids CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc
-{
-&nbsp; &nbsp; &quot;buildsNotFound&quot;: [],&nbsp;
-&nbsp; &nbsp; &quot;builds&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: true,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phases&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560157.164,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;SUBMITTED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PROVISIONING&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 24,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560157.164,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560182.066
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;DOWNLOAD_SOURCE&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 15,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560182.066,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560197.906
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;INSTALL&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 19,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560197.906,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.515
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PRE_BUILD&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.515,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.662
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;BUILD&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.662,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.995
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;POST_BUILD&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.995,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.074
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;UPLOAD_ARTIFACTS&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.074,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.542
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;FINALIZING&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 4,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.542,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;COMPLETED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560223.128
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ],&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;logs&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;groupName&quot;: &quot;/aws/codebuild/CodeBuild-RPM-Demo&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;deepLink&quot;: &quot;https://console.aws.amazon.com/cloudwatch/home?region=eu-west-1#logEvent:group=/aws/codebuild/CodeBuild-RPM-Demo;stream=57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;streamName&quot;: &quot;57a36755-4d37-4b08-9c11-1468e1682abc&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;COMPLETED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; ]
-}</code></pre> 
-<h4>DEB Build Project:</h4> 
-<p>In this project, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-deb.yml" target="_blank" rel="noopener noreferrer">buildspec-deb.yml</a>. Like the RPM build project, this specification includes multiple phases. Here I use a Debian control file to create the package in DEB format. After a successful build, the DEB package will be uploaded as build artifact.</p> 
-<pre><code class="lang-yaml">version: 0.2
-env:
-&nbsp; variables:
-&nbsp; &nbsp; build_version: &quot;0.1&quot;
-phases:
-&nbsp; install:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - apt-get install gcc make -y
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/DEBIAN
-&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/lib
-&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/include
-&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/bin
-&nbsp; &nbsp; &nbsp; - cp -f cbsample.control ./cbsample-$build_version/DEBIAN/control
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Building the application&quot;
-&nbsp; &nbsp; &nbsp; - make
-&nbsp; &nbsp; &nbsp; - cp libcbsamplelib.so ./cbsample-$build_version/usr/lib
-&nbsp; &nbsp; &nbsp; - cp cbsamplelib.h ./cbsample-$build_version/usr/include
-&nbsp; &nbsp; &nbsp; - cp cbsampleutil ./cbsample-$build_version/usr/bin
-&nbsp; &nbsp; &nbsp; - chmod +x ./cbsample-$build_version/usr/bin/cbsampleutil
-&nbsp; &nbsp; &nbsp; - dpkg-deb --build ./cbsample-$build_version
-artifacts:
-&nbsp; files:
-&nbsp; &nbsp; - cbsample-*.deb</code></pre> 
-<p>Here we use cb-ubuntu-project.json as a reference to create the CLI input JSON file. This project uses the same AWS CodeCommit repository (codebuild-multispec) but a different buildspec file in the same repository (buildspec-deb.yml). We use the default CodeBuild image to create the DEB package. We use the same IAM role (CodeBuildServiceRole).</p> 
-<pre><code class="lang-json">{
-&nbsp; &nbsp; &quot;name&quot;: &quot;deb-build-project&quot;,
-&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build DEB from the source.&quot;,
-&nbsp; &nbsp; &quot;source&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-deb.yml&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;artifacts&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;environment&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;aws/codebuild/ubuntu-base:14.04&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
-&nbsp; &nbsp; },
-&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
-&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
-&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
-&nbsp; &nbsp; &quot;tags&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;Debian Demo Build&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; ]
-}</code></pre> 
-<p>Using the CLI input JSON file, create the project, start the build, and check the status of the project.</p> 
-<pre><code class="lang-bash">$ aws codebuild create-project --name CodeBuild-DEB-Demo --cli-input-json file://cb-ubuntu-project.json
-$ aws codebuild list-builds-for-project --project-name CodeBuild-DEB-Demo
-$ aws codebuild batch-get-builds --ids CodeBuild-DEB-Demo:e535c4b0-7067-4fbe-8060-9bb9de203789</code></pre> 
-<p>After successful completion of the RPM and DEB builds, check the S3 bucket configured in the artifacts section for the build packages. Build projects will create a directory in the name of the build project and copy the artifacts inside it.</p> 
-<pre><code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
-2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
-$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-DEB-Demo/
-2017-07-20 16:37:22 &nbsp; &nbsp; &nbsp; 5420 cbsample-0.1.deb</code></pre> 
-<h4>Override Buildspec During Build Start:</h4> 
-<p>It’s also possible to override the build specification file of an existing project when starting a build. If we want to create the libs RPM package instead of the whole RPM, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-libs-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-libs-rpm.yml</a>. This build specification file is similar to the earlier RPM build. The only difference is that it uses a different RPM specification file to create libs RPM.</p> 
-<pre><code class="lang-yaml">version: 0.2
-env:
-&nbsp; variables:
-&nbsp; &nbsp; build_version: &quot;0.1&quot;
-phases:
-&nbsp; install:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
-&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
-&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-libs-$build_version&quot;
-&nbsp; &nbsp; &nbsp; - echo $filename
-&nbsp; &nbsp; &nbsp; - mkdir -p $filename
-&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
-&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
-&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
-&nbsp; &nbsp; &nbsp; - cp cbsample-libs.rpmspec ./SPECS/
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
-&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample-libs.rpmspec
-&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
-artifacts:
-&nbsp; files:
-&nbsp; &nbsp; - RPMS/x86_64/cbsample-libs*.rpm
-&nbsp; discard-paths: yes</code></pre> 
-<p>Using the same RPM build project that we created earlier, start a new build and set the value of the `–buildspec-override` parameter to buildspec-libs-rpm.yml .</p> 
-<pre><code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo --buildspec-override buildspec-libs-rpm.yml
-{
-&nbsp; &nbsp; &quot;build&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-libs-rpm.yml&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500562366.239,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;
-&nbsp; &nbsp; }
-}</code></pre> 
-<p>After the build is completed successfully, check to see if the package appears in the artifact S3 bucket under the CodeBuild-RPM-Demo build project folder.</p> 
-<pre><code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
-2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
-2017-07-20 16:53:54 &nbsp; &nbsp; &nbsp; 5320 cbsample-libs-0.1-1.el7.centos.x86_64.rpm</code></pre> 
-<h3>Conclusion</h3> 
-<p>In this post, I have shown you how multiple buildspec files in the same source repository can be used to run multiple AWS CodeBuild build projects. I have also shown you how to provide a different buildspec file when starting the build.</p> 
-<p>For more information about AWS CodeBuild, see the&nbsp;<a href="https://aws.amazon.com/documentation/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild documentation</a>. You can&nbsp;get started&nbsp;with AWS CodeBuild by using <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/getting-started.html" target="_blank" rel="noopener noreferrer">this step by step guide</a>.</p> 
-<hr /> 
-<h3>About the author</h3> 
-<p><strong><img class="alignleft wp-image-1260 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" alt="" width="150" height="150" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/aws-codebuild/" rel="tag">AWS CodeBuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codebuild/" rel="tag">codebuild</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Validating AWS CloudFormation Templates</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Remek Hetman</span></span> | on 
-<time property="datePublished" datetime="2017-06-28T10:49:09+00:00">28 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/validating-aws-cloudformation-templates/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>For their continuous integration and continuous deployment (CI/CD) pipeline path, many companies use tools like Jenkins, Chef, and <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a>. Usually, the process is managed by two or more teams. One team is responsible for designing and developing an application, CloudFormation templates, and so on. The other team is generally responsible for integration and deployment.</p> 
-<p>One of the challenges that a CI/CD team has is to validate the CloudFormation templates provided by the development team. Validation provides early warning about any incorrect syntax and ensures that the development team follows company policies in terms of security and the resources created by CloudFormation templates.</p> 
-<p>In this post, I focus on the validation of <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> templates for syntax as well as in the context of business rules.</p> 
-<p><span id="more-1318"></span></p> 
-<h3>Scripted validation solution</h3> 
-<p>For CloudFormation syntax validation, one option is to use the <a href="https://aws.amazon.com/cli">AWS CLI </a>to call the <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/validate-template.html">validate-template command</a>. For security and resource management, another approach is to run a Jenkins pipeline from an Amazon EC2 instance under an EC2 role that has been granted only the necessary permissions.</p> 
-<p>What if you need more control over your CloudFormation templates, such as managing parameters or attributes? What if you have many development teams where permissions to the AWS environment required by one team are either too open or not open enough for another team?</p> 
-<p>To have more control over the contents of your CloudFormation template, you can use the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> Python script, which shows you how to validate different template aspects. With this script, you can validate:</p> 
-<li>JSON syntax</li> 
-<li>IAM capabilities</li> 
-<li>Root tags</li> 
-<li>Parameters</li> 
-<li>CloudFormation resources</li> 
-<li>Attributes</li> 
-<li>Reference resources</li> 
-<p>You can download this script from the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> GitHub repo. Use the following command to run the script:</p> 
-<pre>python cf-validator.py</pre> 
-<p>The script takes the following parameters:</p> 
-<li><strong>–cf_path [Required]</strong><br /> 
-<blockquote> 
-<p>The location of the CloudFormation template in JSON format. Supported location types:</p> 
-<li>File system – Path to the CloudFormation template on the file system</li> 
-<li>Web – URL, for example, https://my-file.com/my_cf.json</li> 
-<li>Amazon S3 – Amazon S3 bucket, for example, s3://my_bucket/my_cf.json</li> 
-</blockquote> </li> 
-<li><strong>–cf_rules [Required]</strong><br /> 
-<blockquote> 
-<p>The location of the JSON file with the validation rules. This parameter supports the same locations as –cf_path. The next section of this post has more information about defining rules.</p> 
-</blockquote> </li> 
-<li><strong>–cf_res [Optional]</strong><br /> 
-<blockquote> 
-<p>The location of the JSON file with the defined AWS resources, which need to be confirmed before launching the CloudFormation template. A later section of this post has more information about resource validation.</p> 
-</blockquote> </li> 
-<li><strong>–allow_cap [Optional][yes/no]</strong><br /> 
-<blockquote> 
-<p>Controls whether you allow the creation of IAM resources by the CloudFormation template, such as policies, rules, or IAM users. The default value is no.</p> 
-</blockquote> </li> 
-<li><strong>–region [Optional]</strong><br /> 
-<blockquote> 
-<p>The AWS region where the existing resources were created. The default value is us-east-1.</p> 
-</blockquote> </li> 
-<h5>Defining rules</h5> 
-<p>All rules are defined in the JSON format file. Rules consist of the following keys:</p> 
-<li><strong>“allow_root_keys”</strong><br /> 
-<blockquote> 
-<p>Lists allowed root CloudFormation keys. Example of root keys are Parameters, Resources, Output, and so on. An empty list means that any key is allowed.</p> 
-</blockquote> </li> 
-<li><strong>“allow_parameters”</strong><br /> 
-<blockquote> 
-<p>Lists allowed CloudFormation parameters. For instance, to force each CloudFormation template to use only the set of parameters defined in your pipeline, list them under this key. An empty list means that any parameter is allowed.</p> 
-</blockquote> </li> 
-<li><strong>“allow_resources”</strong><br /> 
-<blockquote> 
-<p>Lists the AWS resources allowed for creation by a CloudFormation template. The format of the resource is the same as resource types in CloudFormation, but without the “AWS::” prefix. Examples:&nbsp; EC2::Instance, EC2::Volume, and so on. If you allow the creation of all resources from the given group, you can use a wildcard. For instance, if you allow all resources related to CloudFormation, you can add CloudFormation::* to the list instead of typing CloudFormation::Init, CloudFormation:Stack, and so on. An empty list means that all resources are allowed.</p> 
-</blockquote> </li> 
-<li><strong>“require_ref_attributes”</strong><br /> 
-<blockquote> 
-<p>Lists attributes (per resource) that have to be defined in CloudFormation. The value must be referenced and cannot be hardcoded. For instance, you can require that each EC2 instance must be created from a specific AMI where Image ID has to be a passed-in parameter. An empty list means that you are not requiring specific attributes to be present for a given resource.</p> 
-</blockquote> </li> 
-<li><strong>“allow_additional_attributes”</strong><br /> 
-<blockquote> 
-<p>Lists additional attributes (per resource) that can be defined and have any value in the CloudFormation template. An empty list means that any additional attribute is allowed. If you specify additional attributes for this key, then any resource attribute defined in a CloudFormation template that is not listed in this key or in the require_ref_attributes key causes validation to fail.</p> 
-</blockquote> </li> 
-<li><strong>“not_allow_attributes”</strong><br /> 
-<blockquote> 
-<p>Lists attributes (per resource) that are not allowed in the CloudFormation template. This key takes precedence over the require_ref_attributes and allow_additional_attributes keys.</p> 
-</blockquote> </li> 
-<h5>Rule file example</h5> 
-<p>The following is an example of a rule file:</p> 
-<pre><code class="lang-json">{
-&quot;allow_root_keys&quot; : [&quot;AWSTemplateFormatVersion&quot;, &quot;Description&quot;, &quot;Parameters&quot;, &quot;Conditions&quot;, &quot;Resources&quot;, &quot;Outputs&quot;],
-&quot;allow_parameters&quot; : [],
-&quot;allow_resources&quot; : [
-&quot;CloudFormation::*&quot;,
-&quot;CloudWatch::Alarm&quot;,
-&quot;EC2::Instance&quot;,
-&quot;EC2::Volume&quot;,
-&quot;EC2::VolumeAttachment&quot;,
-&quot;ElasticLoadBalancing::LoadBalancer&quot;,
-&quot;IAM::Role&quot;,
-&quot;IAM::Policy&quot;,
-&quot;IAM::InstanceProfile&quot;
-],
-&quot;require_ref_attributes&quot; :
-{
-&quot;EC2::Instance&quot; : [ &quot;InstanceType&quot;, &quot;ImageId&quot;, &quot;SecurityGroupIds&quot;, &quot;SubnetId&quot;, &quot;KeyName&quot;, &quot;IamInstanceProfile&quot; ],
-&quot;ElasticLoadBalancing::LoadBalancer&quot; : [&quot;SecurityGroups&quot;, &quot;Subnets&quot;]
-},
-&quot;allow_additional_attributes&quot; : {},
-&quot;not_allow_attributes&quot; : {}
-}
-</code></pre> 
-<h4>Validating resources</h4> 
-<p>You can use the –cf_res parameter to validate that the resources you are planning to reference in the CloudFormation template exist and are available. As a value for this parameter, point to the JSON file with defined resources. The format should be as follows:</p> 
-<pre><code class="lang-json">[
-{ &quot;Type&quot; : &quot;SG&quot;,
-&quot;ID&quot; : &quot;sg-37c9b448A&quot;
-},
-{ &quot;Type&quot; : &quot;AMI&quot;,
-&quot;ID&quot; : &quot;ami-e7e523f1&quot;
-},
-{ &quot;Type&quot; : &quot;Subnet&quot;,
-&quot;ID&quot; : &quot;subnet-034e262e&quot;
-}
-]
-</code></pre> 
-<h3>Summary</h3> 
-<p>At this moment, this CloudFormation template validation script supports only security groups, AMIs, and subnets. But anyone with some knowledge of Python and the boto3 package can add support for additional resources type, as needed.</p> 
-<p>For more tips please visit our <a href="https://aws.amazon.com/blogs/aws/category/aws-cloud-formation/">AWS CloudFormation blog</a></p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/cloudformation/" rel="tag">CloudFormation</a>, <a href="https://aws.amazon.com/blogs/devops/tag/validation/" rel="tag">Validation</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Continuous Delivery of Nested AWS CloudFormation Stacks Using AWS CodePipeline</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
-<time property="datePublished" datetime="2017-06-27T23:30:29+00:00">27 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/continuous-delivery-of-nested-aws-cloudformation-stacks-using-aws-codepipeline/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>In <a href="https://aws.amazon.com/blogs/aws/codepipeline-update-build-continuous-delivery-workflows-for-cloudformation-stacks/" target="_blank" rel="noopener noreferrer">CodePipeline Update – Build Continuous Delivery Workflows for CloudFormation Stacks</a>, Jeff Barr discusses infrastructure as code and how to use <a href="https://aws.amazon.com/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline</a> for continuous delivery. In this blog post, I discuss the continuous delivery of nested CloudFormation stacks using AWS CodePipeline, with <a href="https://aws.amazon.com/codecommit/" target="_blank" rel="noopener noreferrer">AWS CodeCommit</a> as the source repository and <a href="https://aws.amazon.com/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild</a> as a build and <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/aws-codepipeline-adds-support-for-unit-testing/" target="_blank" rel="noopener noreferrer">testing tool</a>. I deploy the stacks using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html" target="_blank" rel="noopener noreferrer">CloudFormation change sets</a> following a <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/approvals.html" target="_blank" rel="noopener noreferrer">manual approval process</a>.</p> 
-<p>Here’s how to do it:</p> 
-<p>In AWS CodePipeline, create a pipeline with four stages:</p> 
-<li>Source (AWS CodeCommit)</li> 
-<li>Build and Test (AWS CodeBuild and AWS CloudFormation)</li> 
-<li>Staging (AWS CloudFormation and manual approval)</li> 
-<li>Production (AWS CloudFormation and manual approval)</li> 
-<p><span id="more-1238"></span></p> 
-<p>Pipeline stages, the actions in each stage, and transitions between stages are shown in the following diagram.</p> 
-<p><img class="alignnone wp-image-1244" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Pipeline_vertical_design-2-362x1024.png" alt="" width="400" height="1131" /></p> 
-<p>CloudFormation templates, test scripts, and the build specification are stored in AWS CodeCommit repositories. These files are used in the Source stage of the pipeline in AWS CodePipeline.</p> 
-<p>The <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-stack.html" target="_blank" rel="noopener noreferrer">AWS::CloudFormation::Stack</a> resource type is used to create child stacks from a master stack. The CloudFormation stack resource requires the templates of the child stacks to be stored in the S3 bucket. The location of the template file is provided as a URL in the properties section of the resource definition.</p> 
-<p>The following template creates three child stacks:</p> 
-<li>Security (IAM, security groups).</li> 
-<li>Database (an RDS instance).</li> 
-<li>Web stacks (EC2 instances in an Auto Scaling group, elastic load balancer).</li> 
-<pre><code class="lang-yaml">Description: Master stack which creates all required nested stacks
-Parameters:
-&nbsp; TemplatePath:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: S3Bucket Path where the templates are stored
-&nbsp; VPCID:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::VPC::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid VPC Id
-&nbsp; PrivateSubnet1:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ1
-&nbsp; PrivateSubnet2:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ2
-&nbsp; PublicSubnet1:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ1
-&nbsp; PublicSubnet2:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ2
-&nbsp; S3BucketName:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Name of the S3 bucket to allow access to the Web Server IAM Role.
-&nbsp; KeyPair:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::KeyPair::KeyName&quot;
-&nbsp; &nbsp; Description: Enter a valid KeyPair Name
-&nbsp; AMIId:
-&nbsp; &nbsp; Type: &quot;AWS::EC2::Image::Id&quot;
-&nbsp; &nbsp; Description: Enter a valid AMI ID to launch the instance
-&nbsp; WebInstanceType:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Enter one of the possible instance type for web server
-&nbsp; &nbsp; AllowedValues:
-&nbsp; &nbsp; &nbsp; - t2.large
-&nbsp; &nbsp; &nbsp; - m4.large
-&nbsp; &nbsp; &nbsp; - m4.xlarge
-&nbsp; &nbsp; &nbsp; - c4.large
-&nbsp; WebMinSize:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Minimum number of instances in auto scaling group
-&nbsp; WebMaxSize:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Maximum number of instances in auto scaling group
-&nbsp; DBSubnetGroup:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Enter a valid DB Subnet Group
-&nbsp; DBUsername:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Enter a valid Database master username
-&nbsp; &nbsp; MinLength: 1
-&nbsp; &nbsp; MaxLength: 16
-&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z][a-zA-Z0-9]*&quot;
-&nbsp; DBPassword:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Enter a valid Database master password
-&nbsp; &nbsp; NoEcho: true
-&nbsp; &nbsp; MinLength: 1
-&nbsp; &nbsp; MaxLength: 41
-&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z0-9]*&quot;
-&nbsp; DBInstanceType:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Enter one of the possible instance type for database
-&nbsp; &nbsp; AllowedValues:
-&nbsp; &nbsp; &nbsp; - db.t2.micro
-&nbsp; &nbsp; &nbsp; - db.t2.small
-&nbsp; &nbsp; &nbsp; - db.t2.medium
-&nbsp; &nbsp; &nbsp; - db.t2.large
-&nbsp; Environment:
-&nbsp; &nbsp; Type: String
-&nbsp; &nbsp; Description: Select the appropriate environment
-&nbsp; &nbsp; AllowedValues:
-&nbsp; &nbsp; &nbsp; - dev
-&nbsp; &nbsp; &nbsp; - test
-&nbsp; &nbsp; &nbsp; - uat
-&nbsp; &nbsp; &nbsp; - prod
-Resources:
-&nbsp; SecurityStack:
-&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
-&nbsp; &nbsp; Properties:
-&nbsp; &nbsp; &nbsp; TemplateURL:
-&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/security-stack.yml&quot;
-&nbsp; &nbsp; &nbsp; Parameters:
-&nbsp; &nbsp; &nbsp; &nbsp; S3BucketName:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: S3BucketName
-&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
-&nbsp; &nbsp; &nbsp; &nbsp; Environment:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
-&nbsp; &nbsp; &nbsp; Tags:
-&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: SecurityStack
-&nbsp; DatabaseStack:
-&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
-&nbsp; &nbsp; Properties:
-&nbsp; &nbsp; &nbsp; TemplateURL:
-&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/database-stack.yml&quot;
-&nbsp; &nbsp; &nbsp; Parameters:
-&nbsp; &nbsp; &nbsp; &nbsp; DBSubnetGroup:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBSubnetGroup
-&nbsp; &nbsp; &nbsp; &nbsp; DBUsername:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBUsername
-&nbsp; &nbsp; &nbsp; &nbsp; DBPassword:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBPassword
-&nbsp; &nbsp; &nbsp; &nbsp; DBServerSecurityGroup:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBServerSG
-&nbsp; &nbsp; &nbsp; &nbsp; DBInstanceType:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBInstanceType
-&nbsp; &nbsp; &nbsp; &nbsp; Environment:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
-&nbsp; &nbsp; &nbsp; Tags:
-&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: &nbsp; DatabaseStack
-&nbsp; ServerStack:
-&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
-&nbsp; &nbsp; Properties:
-&nbsp; &nbsp; &nbsp; TemplateURL:
-&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/server-stack.yml&quot;
-&nbsp; &nbsp; &nbsp; Parameters:
-&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
-&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet1:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet1
-&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet2:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet2
-&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet1:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet1
-&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet2:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet2
-&nbsp; &nbsp; &nbsp; &nbsp; KeyPair:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: KeyPair
-&nbsp; &nbsp; &nbsp; &nbsp; AMIId:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: AMIId
-&nbsp; &nbsp; &nbsp; &nbsp; WebSG:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebSG
-&nbsp; &nbsp; &nbsp; &nbsp; ELBSG:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.ELBSG
-&nbsp; &nbsp; &nbsp; &nbsp; DBClientSG:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBClientSG
-&nbsp; &nbsp; &nbsp; &nbsp; WebIAMProfile:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebIAMProfile
-&nbsp; &nbsp; &nbsp; &nbsp; WebInstanceType:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebInstanceType
-&nbsp; &nbsp; &nbsp; &nbsp; WebMinSize:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMinSize
-&nbsp; &nbsp; &nbsp; &nbsp; WebMaxSize:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMaxSize
-&nbsp; &nbsp; &nbsp; &nbsp; Environment:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
-&nbsp; &nbsp; &nbsp; Tags:
-&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: ServerStack
-Outputs:
-&nbsp; WebELBURL:
-&nbsp; &nbsp; Description: &quot;URL endpoint of web ELB&quot;
-&nbsp; &nbsp; Value:
-&nbsp; &nbsp; &nbsp; Fn::GetAtt: ServerStack.Outputs.WebELBURL
-</code></pre> 
-<p>During the Validate stage, AWS CodeBuild checks for changes to the AWS CodeCommit source repositories. It uses the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ValidateTemplate.html" target="_blank" rel="noopener noreferrer">ValidateTemplate</a> API to validate the CloudFormation template and copies the child templates and configuration files to the appropriate location in the S3 bucket.</p> 
-<p>The following AWS CodeBuild build specification validates the CloudFormation templates listed under the TEMPLATE_FILES environment variable and copies them to the S3 bucket specified in the TEMPLATE_BUCKET environment variable in the AWS CodeBuild project. Optionally, you can use the TEMPLATE_PREFIX environment variable to specify a path inside the bucket. This updates the configuration files to use the location of the child template files. The location of the template files is provided as a parameter to the master stack.</p> 
-<pre><code class="lang-yaml">version: 0.1
-environment_variables:
-&nbsp; plaintext:
-&nbsp; &nbsp; CHILD_TEMPLATES: |
-&nbsp; &nbsp; &nbsp; security-stack.yml
-&nbsp; &nbsp; &nbsp; server-stack.yml
-&nbsp; &nbsp; &nbsp; database-stack.yml
-&nbsp; &nbsp; TEMPLATE_FILES: |
-&nbsp; &nbsp; &nbsp; master-stack.yml
-&nbsp; &nbsp; &nbsp; security-stack.yml
-&nbsp; &nbsp; &nbsp; server-stack.yml
-&nbsp; &nbsp; &nbsp; database-stack.yml
-&nbsp; &nbsp; CONFIG_FILES: |
-&nbsp; &nbsp; &nbsp; config-prod.json
-&nbsp; &nbsp; &nbsp; config-test.json
-&nbsp; &nbsp; &nbsp; config-uat.json
-phases:
-&nbsp; install:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; npm install jsonlint -g
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Validating CFN templates&quot;
-&nbsp; &nbsp; &nbsp; - |
-&nbsp; &nbsp; &nbsp; &nbsp; for cfn_template in $TEMPLATE_FILES; do
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CloudFormation template file $cfn_template&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws cloudformation validate-template --template-body file://$cfn_template
-&nbsp; &nbsp; &nbsp; &nbsp; done
-&nbsp; &nbsp; &nbsp; - |
-&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CFN parameters config file $conf&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; jsonlint -q $conf
-&nbsp; &nbsp; &nbsp; &nbsp; done
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Copying child stack templates to S3&quot;
-&nbsp; &nbsp; &nbsp; - |
-&nbsp; &nbsp; &nbsp; &nbsp; for child_template in $CHILD_TEMPLATES; do
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$child_template&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$TEMPLATE_PREFIX/$child_template&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
-&nbsp; &nbsp; &nbsp; &nbsp; done
-&nbsp; &nbsp; &nbsp; - echo &quot;Updating template configurtion files to use the appropriate values&quot;
-&nbsp; &nbsp; &nbsp; - |
-&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET\&quot; in $conf&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET/&quot; $conf
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET/$TEMPLATE_PREFIX\&quot; in $conf&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET\/$TEMPLATE_PREFIX/&quot; $conf
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
-&nbsp; &nbsp; &nbsp; &nbsp; done
-artifacts:
-&nbsp; files:
-&nbsp; &nbsp; - master-stack.yml
-&nbsp; &nbsp; - config-*.json
-</code></pre> 
-<p>After the template files are copied to S3, CloudFormation creates a test stack and triggers AWS CodeBuild as a test action.</p> 
-<p>Then the AWS CodeBuild build specification executes <code class="lang-bash">validate-env.py</code>, the Python script used to determine whether resources created using the nested CloudFormation stacks conform to the specifications provided in the CONFIG_FILE.</p> 
-<pre><code class="lang-yaml">version: 0.1
-environment_variables:
-&nbsp; plaintext:
-&nbsp; &nbsp; CONFIG_FILE: env-details.yml
-phases:
-&nbsp; install:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - pip install --upgrade pip
-&nbsp; &nbsp; &nbsp; - pip install boto3 --upgrade
-&nbsp; &nbsp; &nbsp; - pip install pyyaml --upgrade
-&nbsp; &nbsp; &nbsp; - pip install yamllint --upgrade
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Validating config file $CONFIG_FILE&quot;
-&nbsp; &nbsp; &nbsp; - yamllint $CONFIG_FILE
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - echo &quot;Validating resources...&quot;
-&nbsp; &nbsp; &nbsp; - python validate-env.py
-&nbsp; &nbsp; &nbsp; - exit $?</code></pre> 
-<p>Upon successful completion of the test action, CloudFormation deletes the test stack and proceeds to the UAT stage in the pipeline.</p> 
-<p>During this stage, CloudFormation creates a change set against the UAT stack and then executes the change set. This updates the UAT environment and makes it available for acceptance testing. The process continues to a manual approval action. After the QA team validates the UAT environment and provides an approval, the process moves to the Production stage in the pipeline.</p> 
-<p>During this stage, CloudFormation creates a change set for the nested production stack and the process continues to a manual approval step. Upon approval (usually by a designated executive), the change set is executed and the production deployment is completed.<br /> &nbsp;</p> 
-<h3>Setting up a continuous delivery pipeline</h3> 
-<p>&nbsp;<br /> I used a CloudFormation template to set up my continuous delivery pipeline. The <a href="https://github.com/awslabs/codepipeline-nested-cfn/blob/master/codepipeline-cfn-codebuild.yml" target="_blank" rel="noopener noreferrer">codepipeline-cfn-codebuild.yml</a> template, available from GitHub, sets up a full-featured pipeline.</p> 
-<p>When I use the template to create my pipeline, I specify the following:</p> 
-<li>AWS CodeCommit repositories.</li> 
-<li>SNS topics to send approval notifications.</li> 
-<li>S3 bucket name where the artifacts will be stored.</li> 
-<p><img class="alignnone size-full wp-image-1172" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Stack_Parameters.png" alt="" width="1894" height="802" /></p> 
-<p>The CFNTemplateRepoName points to the AWS CodeCommit repository where CloudFormation templates, configuration files, and build specification files are stored.</p> 
-<p>My repo contains following files:</p> 
-<p><img class="alignnone size-full wp-image-1173" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/RepoContent.png" alt="" width="2102" height="626" /></p> 
-<p>The continuous delivery pipeline is ready just seconds after clicking <strong>Create Stack</strong>. After it’s created, the pipeline executes each stage. Upon manual approvals for the UAT and Production stages, the pipeline successfully enables continuous delivery.</p> 
-<p><img class="alignnone size-full wp-image-1205" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/CodePipeline_Flow_1.png" alt="" width="400" height="1764" /><br /> &nbsp;</p> 
-<h3>Implementing a change in nested stack</h3> 
-<p>&nbsp;<br /> To make changes to a child stack in a nested stack (for example, to update a parameter value or add or change resources), update the master stack. The changes must be made in the appropriate template or configuration files and then checked in to the AWS CodeCommit repository. This triggers the following deployment process:</p> 
-<h3><img class="alignnone wp-image-1176 size-large" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/DeployChanges-517x1024.png" alt="" width="517" height="1024" /></h3> 
-<p>&nbsp;</p> 
-<h3>Conclusion</h3> 
-<p>&nbsp;<br /> In this post, I showed how you can use AWS CodePipeline, AWS CloudFormation, AWS CodeBuild, and a manual approval process to create a continuous delivery pipeline for both infrastructure as code and application deployment.</p> 
-<p>For more information about AWS CodePipeline, see the <a href="https://aws.amazon.com/documentation/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline documentation</a>. You can <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/getting-started-codepipeline.html" target="_blank" rel="noopener noreferrer">get started</a> in just a few clicks. All CloudFormation templates, AWS CodeBuild build specification files, and the Python script that performs the validation are available in <a href="https://github.com/awslabs/codepipeline-nested-cfn" target="_blank" rel="noopener noreferrer">codepipeline-nested-cfn</a> GitHub repository.</p> 
-<hr /> 
-<h3>About the author</h3> 
-<p>&nbsp;<br /> <strong><img class="alignleft wp-image-1260 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" alt="" width="150" height="150" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/cloudformation/" rel="tag">CloudFormation</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codebuild/" rel="tag">codebuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codecommit/" rel="tag">CodeCommit</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codedeploy/" rel="tag">CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codepipeline/" rel="tag">CodePipeline</a>, <a href="https://aws.amazon.com/blogs/devops/tag/continuous-delivery/" rel="tag">Continuous Delivery</a></span> 
 </footer> 
 </article> 
 <p>

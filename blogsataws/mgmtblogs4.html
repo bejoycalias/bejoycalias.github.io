@@ -191,6 +191,683 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Secure, Scalable, and Efficient Instance Management Using Amazon EC2 Run Command</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-08-08T13:50:03+00:00">08 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/secure-scalable-and-efficient-instance-management-using-amazon-ec2-run-command/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post was written by Miguel Jo&atilde;o, Cloud Software Engineer at OutSystems.</em></p> 
+<p>The OutSystems low-code development platform allows users to create and deliver high-quality web and mobile apps a lot faster, leveraging all the advantages of visual programming with few of the drawbacks. Of course, providing this high productivity, enterprise-grade <a href="https://en.wikipedia.org/wiki/Platform_as_a_service">Platform-as-a-Service</a> (PaaS) solution can be challenging. For us at OutSystems, those challenges ended up inspiring us to build custom solutions to manage large infrastructures.</p> 
+<p>We were working on a custom offer for clients that would enable them to build their tailored apps. That led us to deploy our own orchestration processes.</p> 
+<li>Instead of only using the common configuration management tools, we had to deploy a <strong>custom remote command execution environment</strong>. This resulted in a tight control over all the steps in the deployment and configuration of the infrastructure.</li> 
+<li>We needed to provide an <strong>enterprise-grade PaaS solution with secure access, data integrity, and high availability</strong>.</li> 
+<li>This solution must scale to meet future demand, and for the long run we’re talking about <strong>1M+ instances</strong>.</li> 
+<li>We had to <strong>ensure a path for the solution to evolve</strong> without disrupting the customer service.</li> 
+<p>Sounds complicated, right? Well, it was, especially when you consider that we had to apply our custom environment to an existing underlying infrastructure while keeping the security, isolation, and evolution requirements.</p> 
+<p>The end result was a leaner and more secure solution. <a href="https://aws.amazon.com/ec2/run-command">Amazon EC2 Run Command</a> service improved the stability of our orchestration processes (error ratio reduction of over 80%), and the performance (10–20 times faster).</p> 
+<p><span id="more-1024"></span></p> 
+<h3>Problem: Difficult to manage instance proliferation</h3> 
+<p>We designed with the standardization of the underlying infrastructure that supports our PaaS offer in mind. However, the need to respond to the specific needs of our enterprise customers led to the development of an orchestration process that takes advantage of configuration management tools like Chef for the initial and base configuration. Afterwards, we extended that orchestration to support the customization using on-demand remote command execution.</p> 
+<p>The adoption of these orchestration processes in our cloud services has grown, and it now supports all of our paid and free PaaS offers, and some of our R&amp;D internal development quality assurance requirements.</p> 
+<p>We currently provision <a href="https://aws.amazon.com/ec2/">EC2</a> instances and <a href="https://aws.amazon.com/rds/">Amazon RDS</a> instances to meet our needs in six different AWS Regions, in an automated fashion, 24/7. Our current infrastructure landscape consists of more than a thousand EC2 instances, and hundreds of RDS instances with many different software versions and software configurations. We have Windows and Linux operating systems, and at least two database flavors: Microsoft SQL Server and Oracle. This graphic shows the management nightmare for which we signed up.</p> 
+<p><img class="size-full wp-image-1030 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/infra_growth-1.png" alt="" width="500" height="327" /></p> 
+<h3>Temporary solution (not scalable): SSH and ESB</h3> 
+<p>Early in the PaaS project, we determined that direct remote commands would control the infrastructure servers, and we designed the orchestration processes to support that.</p> 
+<p>The result was a remote command architecture with an <a href="https://en.wikipedia.org/wiki/Enterprise_service_bus">Enterprise Service Bus (ESB)</a> and <a href="https://en.wikipedia.org/wiki/Secure_Shell">secure shell connections (SSH)</a>. The ESB served as a central point of convergence for all remote connections managing the cloud servers, allowing remote commands to be executed through a synchronous SSH. The orchestration processes invoke the remote command execution via the ESB, and expect a callback from the ESB when the command finishes executing.</p> 
+<p><img class="size-full wp-image-1034 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/old_arch.png" alt="" width="450" height="303" /></p> 
+<p>However, this solution rapidly began to show its limitations:</p> 
+<li><strong>Performance overhead</strong> due to connection handshake and authentication</li> 
+<li><strong>Increased error rate</strong> due to <strong>instability</strong> in the network and long standing connections</li> 
+<li><strong>Limited parallelism</strong> due to concurrent number of remote long standing connections in the ESB (we started to see instability after 40 concurrent remote executions per ESB node)</li> 
+<li><strong>Security concerns</strong> about having SSH inbound traffic on the instances for orchestration purposes, and all the hassle of managing the SSH authentication best practices (keys vs. passwords)</li> 
+<p>With the growth in demand for our cloud services, we had to consider other options immediately. Before we committed to searching for or developing better alternatives that would scale for 1M+ instances, AWS answered our prayers with the <a href="https://aws.amazon.com/ec2/run-command/">EC2 Run Command</a> feature.</p> 
+<h3>Better solution: Scalable, secure remote commands</h3> 
+<p>After a short assessment of Run Command, we realized that it would allow us to greatly improve our efforts and our custom orchestration systems, increasing both reliability and performance. We started changing our orchestration to use this new feature, and replaced the remote command execution engine with Run Command.</p> 
+<p><img class="size-full wp-image-1035 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/new_arch.png" alt="" width="450" height="304" /></p> 
+<p>Sending the remote command through Run Command removed the SSH connectivity requirement, eliminating security concerns. The feature also keeps network instability concerns at bay because keeping long-standing connections during the command execution is no longer necessary. It’s all asynchronous.</p> 
+<p>The most significant changes in our orchestration were:</p> 
+<li>Roll out (re-create) EC2 instances with <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">IAM</a> roles</li> 
+<li>Deploy updated EC2Config and SSM Agent services on the EC2 instances</li> 
+<li>Implement the callback after execution end, based on the S3 output files, using an AWS Lambda function that runs when a new output file is created</li> 
+<li>Change our orchestration command execution engine module to invoke Run Command (using SSM API)</li> 
+<p>We were able to evaluate, design, develop, test, and deploy the changes to our orchestration processes in approximately two months. This opened the door to a new growth spurt in our cloud services, mainly because the parallelism limitations were gone.</p> 
+<h3>Replacing the ESB services: Additional details</h3> 
+<p>We had our system architected to be modular, so replacing the ESB services with the Run Command services seemed like it would be straightforward. But as with any new development, we had to deal with some unexpected challenges. No straightforward replacement—after all, where would be the fun in that?</p> 
+<li>To use Run Command, each EC2 instance had to have an associated instance role. Unfortunately, at the time, it was not possible to associate an IAM role with a running instance. Instead, we re-created about 80% of our EC2 instances to activate Run Command. Thankfully, <a href="https://aws.amazon.com/about-aws/whats-new/2017/02/new-attach-an-iam-role-to-your-existing-amazon-ec2-instance/">it is now possible</a> to add an instance role to an existing EC2 instance without having to re-create it</li> 
+<li>Run Command requires agents installed in the EC2 instances. However, the configuration and execution outputs of these agents differ between Windows and Linux systems. At the time, to use Run Command on Windows, we needed to have the EC2Config service running. For Linux, we needed the SSM Agent service. These two different applications require different configurations, and as such, the output log files prefixes in the S3 output bucket were also different. So, we had to make allowances for these differences as part of the process. Nowadays, the <span style="text-decoration: underline">SSM Agent service is available for both Windows and Linux</span>, which simplifies the configurations and eases the setup between different operating systems</li> 
+<li>Managing the S3 bucket access across the few hundred different AWS accounts that require specific permissions is practically impossible. We had to get creative with the S3 bucket management for the Run Command outputs.<br /> Using a single bucket, each output log would be owned by the account hosting the EC2 instance where the log ran. No other user could access it, so we created a secondary S3 bucket and moved the output logs from the original bucket, fixing the object permissions. This way, we could keep the output logs secured in a bucket with restricted accesses, not allowing the instances to access it anymore. In the meantime, <span style="text-decoration: underline">new versions of the SSM Agent support changing the output log ownership in the bucket</span>.</li> 
+<p>After it was all up and running, magic started to happen. Before, with the ESB solution, our average error rate was usually up to 5%, and it increased to over 20% during the second half of 2016. This growing error rate was a reflex of the ESB solution not keeping up with the growing demand. When we started using Run Command, the average error ratio dropped to values below 1%, regardless of the growth in demand. It seriously made our lives better, as you can see in the stability comparison:</p> 
+<p><img class="size-full wp-image-1053 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/stability-1.png" alt="" width="505" height="330" /></p> 
+<p>Additionally, the Run Command solution improved the remote command execution average time by one order of magnitude: from 10 to 20 times faster. The solution allowed us to remove the bottlenecks in the ESB and the SSH connections, as well as improve stability by reducing the error rate. Here’s the performance comparison so you don’t have to take our word for it:</p> 
+<p><img class="size-full wp-image-1052 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/performance.png" alt="" width="505" height="330" /></p> 
+<p>The new Run Command feature responded as advertised. The end result is a faster, leaner, and more robust remote command execution engine that complies with our on-demand custom configuration orchestration requirements.</p> 
+<h3>About the Author</h3> 
+<p><a href="https://www.linkedin.com/in/migueljoao/">Miguel Jo&atilde;o</a><img class="alignleft size-full wp-image-1109" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/08/miguel.jpg" alt="" width="119" height="130" /> joined OutSystems R&amp;D in 2005, and became a Cloud Software Engineer in 2013. Since then, he’s been working on the Platform-as-a-Service offer of the industry-leading, low-code platform for mobile and web application development. Miguel is a technology enthusiast, and he is passionate about automation.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<hr /> 
+<p><img class="alignnone wp-image-1111 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/08/oustsystems-logo-1.png" alt="" width="300" height="64" /></p> 
+<hr /> 
+<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author. </em></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Supercharge Multi-Account Management with AWS CloudFormation</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Adam McLean</span></span> | on 
+<time property="datePublished" datetime="2017-08-04T10:17:17+00:00">04 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/supercharge-multi-account-management-with-aws-cloudformation/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>As your use of Amazon Web Services evolves, you will probably outgrow your first account, and need to move into a multi-account model.</p> 
+<p>There are plenty of benefits to using more than one AWS account:</p> 
+<li><b>An administrative boundary:</b> I can choose how permissive or restrictive my policies are based on the account type. Separating user authority within an account can be complicated and error prone. Using separate accounts is often the answer.</li> 
+<li><b>A workload boundary:</b> I can choose to peer (or not to peer) various workloads together within accounts, ensuring that my ‘blast radius’ for a poorly behaved application is minimized.</li> 
+<li><b>A billing entity:</b> Detailed bills are generated at an account level. An account has higher ‘resolution’ than is afforded by billing tags, and can be easier to implement.</li> 
+<p>However, management complexities increase using multiple accounts. How do you manage the administrative boundaries? Who can log in and how? How do you manage your baseline infrastructure, such as VPCs and CloudTrail? Is it possible to deploy these by hand and not make potentially critical mistakes?</p> 
+<p>In this blog post I’ll explore ways to manage deployments in your multi-account AWS environment.</p> 
+<p><span id="more-917"></span></p> 
+<p>The broad answer to the questions above is to use infrastructure as code, and tools like <a title="AWS CloudFormation" href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>. CloudFormation gives you a language to describe your desired state, and have it implemented programmatically. For complex multi-account deployments, this can get difficult to manage quickly, especially for complex subjects such as IAM users, groups, polices, and roles.</p> 
+<p>The recent release of <a title="AWS Orgnizations" href="https://aws.amazon.com/organizations/" target="_blank" rel="noopener noreferrer">AWS Organizations</a> has certainly helped with this complexity. Using policies, you can broadly permit or deny service use within your AWS account organizational structure. Layering these capabilities with consistently deployed IAM elements gets the most value from a multi-account model.</p> 
+<b>A tool to help</b> 
+<p>I’d like to introduce a tool I wrote while working with multiple AWS customers as a Professional Services Consultant. This tool allows you to describe complex multi-account IAM elements using simple YAML, and Jinja2 templates. Running a build produces a CloudFormation template per account that can be deployed in your preferred fashion.</p> 
+<p>Some customers have even built a pipeline so that when the configuration YAML is changed, a build is run and deployed automatically. They’re managing multiple accounts completely hands-off, from a central source of truth!</p> 
+<p>I’ll discuss the tool a bit. First, the tool assumes that you’re using a ‘parent’ account model where everyone logs in, or federates, into a single account. Then, users assume roles in the ‘child’ accounts for which they have permissions. This model was explored in more detail by an AWS customer with hundreds of accounts. For more information, see <a title="SEC315" href="https://youtu.be/CY-xvo8Cc54" target="_blank" rel="noopener noreferrer">(SEC315) AWS Directory Service Deep Dive</a> re:Invent session video.</p> 
+<p>I’ve included a simplification of the model for reference. Your child accounts can be one or many.</p> 
+<p><img class="alignnone size-medium wp-image-926" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/Parent-Child-Account-Model.png" alt="" width="708" height="303" /></p> 
+<b>Tool walk-through</b> 
+<h3>Prerequisites</h3> 
+<p>To go through this walkthrough, you need the following:</p> 
+<li>A bash environment</li> 
+<li>A Python 2.7 interpreter</li> 
+<li>At least two AWS accounts that you can experiment with. You can use AWS Organizations to create them programmatically</li> 
+<li>The <a title="Tropsophere" href="https://github.com/cloudtools/troposphere" target="_blank" rel="noopener noreferrer">troposphere</a> and the <a title="Tropsophere" href="https://github.com/pallets/jinja" target="_blank" rel="noopener noreferrer">jinja2</a> libraries installed</li> 
+<pre><code class="lang-bash">
+sudo pip install troposphere
+sudo pip install jinja2
+</code></pre> 
+<h3>Download the code</h3> 
+<p>Clone or download the project from /awslabs/ on GitHub:</p> 
+<pre><code class="lang-bash">
+git clone git@github.com:awslabs/aws-iam-generator.git
+</code></pre> 
+<h3>Build your configuration file</h3> 
+<p>Start with a simple configuration and grow it over time, as you would naturally evolve your AWS environment.</p> 
+<p>Create a file called config.yaml in the downloaded projects root directory. Cut and paste the example configuration below into the file. <b>Substitute the account IDs with the account IDs that you’re using for this walkthrough.</b></p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of your central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of a child account for specific roles.
+id: 109876543210
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser Role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Use the name you've given your account in the 'accounts' section.
+- lab
+in_accounts:
+# Use the keyword 'parent' to match the account that has 'parent: true'
+- parent
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Use the keyword 'children' to match all accounts except the one marked 'parent: true'
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>What happens now?</h3> 
+<p>Because you have two accounts, expect two CloudFormation templates to be created.</p> 
+<p>The CloudFormation template for your <code>central</code> account should contain:</p> 
+<li>A managed policy called <code>AssumeLabPowerUser</code>. The policy document permits sts::AssumeRole on your child account.</li> 
+<li>A group called <code>LabUsers</code>. This group has built-in AWS policies attached to it to allow self service credential management. It also has the <code>AssumeLabPowerUser</code> policy attached that you created under the <code>policies:</code> section.</li> 
+<li>A user called <code>TestUser</code> who is a member of the <code>LabUser</code> group.</li> 
+<p>The CloudFormation template for your <code>lab</code> account should contain:</p> 
+<li>A role called <code>PowerUser</code>. This role has a trust document that allows it to be assumed from the <code>central</code> account. The roles policy document is modeled from the AWS built-in PowerUserAccess policy document.</li> 
+<h3>Run the build</h3> 
+<p>Executing the build.py script reads the contents of the config.yaml file and creates CloudFormation templates in your output_templates/ directory. If the build is successful, you won’t see any output. When a build fails, the output should produce an meaningful error to help figure out what’s wrong. Most of the time, the problem is in the yaml formatting (usually, indentation).</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>If your build ran, you should see output in the <code>output_templates/</code> directory</p> 
+<pre><code class="lang-bash">
+ls -l output_templates/
+-rw-r--r-- 1 user user Users 3367 Apr 10 10:14 central(012345678910)-IAM.template
+-rw-r--r-- 1 user user Users 1680 Apr 10 10:14 lab(109876543210)-IAM.template
+</code></pre> 
+<p>You can see both of your CloudFormation templates. They are named so that you can easily identify the account in which they should be run. Also notice that your <code>central</code> template is about double the size of the <code>lab</code> template. This is expected as <code>central</code> contains a lot more information.</p> 
+<h3>Explore the output</h3> 
+<p>View the <code>central</code> template in your favorite viewer.</p> 
+<p>Your managed policy is there, with the sts::AssumeRole correctly formed:</p> 
+<pre><code class="lang-json">
+...
+&quot;AssumeLabPowerUser&quot;: {
+&quot;Properties&quot;: {
+&quot;Description&quot;: &quot;Allow assumption of the PowerUser role in the lab account&quot;,
+&quot;Groups&quot;: [],
+&quot;PolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: &quot;arn:aws:iam::109876543210:role/PowerUser&quot;
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;Roles&quot;: [],
+&quot;Users&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
+},
+...
+</code></pre> 
+<p>You can also see the group that uses this managed policy:</p> 
+<pre><code class="lang-json">
+....
+&quot;LabUsersGroup&quot;: {
+&quot;Properties&quot;: {
+&quot;GroupName&quot;: &quot;LabUsers&quot;,
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials&quot;,
+&quot;arn:aws:iam::aws:policy/IAMUserChangePassword&quot;,
+&quot;arn:aws:iam::aws:policy/IAMUserSSHKeys&quot;,
+&quot;arn:aws:iam::aws:policy/IAMReadOnlyAccess&quot;,
+{
+&quot;Ref&quot;: &quot;AssumeLabPowerUser&quot;
+}
+],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::Group&quot;
+}
+...
+</code></pre> 
+<p>Finally, your user is here as a member of the group you’ve created:</p> 
+<pre><code class="lang-json">
+...
+&quot;TestUserUser&quot;: {
+&quot;Properties&quot;: {
+&quot;Groups&quot;: [
+&quot;LabUsers&quot;
+],
+&quot;ManagedPolicyArns&quot;: [],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: [],
+&quot;UserName&quot;: &quot;TestUser&quot;
+},
+&quot;Type&quot;: &quot;AWS::IAM::User&quot;
+}
+...
+</code></pre> 
+<p>When you view the <code>lab</code> template, you can see the PowerUser role that you’re permitted to assume, with the trust set correctly to the parent.</p> 
+<pre><code class="lang-json">
+...
+&quot;PowerUserRole&quot;: {
+&quot;Properties&quot;: {
+&quot;AssumeRolePolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::012345678910:root&quot;
+}
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;
+],
+&quot;Path&quot;: &quot;/&quot;,
+&quot;Policies&quot;: [],
+&quot;RoleName&quot;: &quot;PowerUser&quot;
+},
+&quot;Type&quot;: &quot;AWS::IAM::Role&quot;
+}
+...
+</code></pre> 
+<h3>Deploy in your accounts</h3> 
+<p>Deploy the CloudFormation templates in your favorite way, either through the console or the <a title="AWS CLI" href="https://aws.amazon.com/cli" target="_blank" rel="noopener noreferrer">AWS CLI</a>. I’ve included example CLI commands.</p> 
+<p>To use multiple accounts from the AWS CLI, configure profiles. For more information about setting up profiles, see <a title="Configuring the AWS CLI" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html#cli-multiple-profiles" target="_blank" rel="noopener noreferrer">AWS CLI</a>.</p> 
+<p>Deploy in your <code>central</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>Deploy in your <code>lab</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<h3>Explore the results</h3> 
+<p>Sign into the <code>central</code> account with an existing role or user and <a title="Set the password" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_admin-change-user.html" target="_blank" rel="noopener noreferrer">set the password</a> for the <code>TestUser</code> user. You could have set a password in the CloudFormation template, but then it would be in plaintext!</p> 
+<p>Sign into the <code>central</code> account as <code>TestUser</code>. Verify that you have read-only access. You should be able to self-manage your credentials though (set your own password, etc.).</p> 
+<p>Now, switch roles to the <code>PowerUser</code> role in the <code>lab</code> account. Switching roles can be done through the console. For more information, see <a title="Switching to a Role" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-console.html" target="_blank" rel="noopener noreferrer">Switching to a Role</a> (AWS Management Console).</p> 
+<p>Confirm that you can now perform expected activities in the <code>lab</code> account. You should be able to create resources, as per the PowerUserAccess reference policy.</p> 
+<b>Add a new account</b> 
+<p>A new line of business has decided to use AWS and has asked for a new lab environment. You used AWS Organizations to create a new account for them. Now, bring their IAM policies up to the central standard.</p> 
+<p>Edit config.yaml and add the new account:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+...
+</code></pre> 
+<p>This automatically creates the <code>PowerUser</code> role definition in the <code>newlab</code> account because you’ve used a keyword of <code>children</code> in the <code>in_accounts</code> section of the <code>PowerUser</code> role definition. This is a great way to assure that roles are kept consistent across all accounts. Only the users who can assume those roles change.</p> 
+<p>You also need to create a managed policy, group, and a test user in the <code>central</code> account to make use of the new account.</p> 
+<p>For reference your config.yaml should now look like this:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+- lab
+in_accounts:
+- parent
+# The new managed policy lets users assume PowerUser in the newlab account.
+AssumeNewLabPowerUser:
+description: Allow assumption of the PowerUser role in the newlab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Here is the new account added in the accounts section
+- newlab
+in_accounts:
+- parent
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Because you use the keyword 'children' here, the newlab account gets this role
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+# This group services the newlab account users.
+NewLabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+# This matches our new policy above.
+- AssumeNewLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+NewTestUser:
+groups:
+- NewLabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>Build and deploy</h3> 
+<p>Run the build:</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>Now, you see a new set of CloudFormation templates in output_templates/:</p> 
+<pre><code class="lang-bash">
+ls -l output_templates/
+-rw-r--r-- 1 user user Users 6307 Apr 10 10:59 central(012345678910)-IAM.template
+-rw-r--r-- 1 user user Users 1680 Apr 10 10:59 lab(109876543210)-IAM.template
+-rw-r--r-- 1 user user Users 1683 Apr 10 10:59 newlab(543210123456)-IAM.template
+</code></pre> 
+<p>View one of the templates, and notice that the build number has changed:</p> 
+<pre><code class="lang-json">
+...
+&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
+&quot;Description&quot;: &quot;Build 2017-07-25Z19:35:41 - IAM Users, Groups, Roles, and Policies for account central (012345678910)&quot;,
+...
+</code></pre> 
+<p>The build number is the datestamp when the build was executed. It will be the same across all of the templates generated during that build. Use it to assure the environment remtains consistent. You can audit all of your accounts to assure this number is identical to assure deployment conssitency.</p> 
+<p>Again, deploy using your favorite mechanism or use the AWS CLI commands below.</p> 
+<p>In <code>central</code> this is an update which creates the new managed policy, group, and user.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>In <code>lab</code>, this is a simple version increment. Nothing else changes but keeping the version consistent ensures that your environment is consistently deployed.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<p>In <code>newlab</code>, this is the first deployment.</p> 
+<pre><code class="lang-bash">
+aws cloudformation create-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile newlab \
+--region us-east-2
+</code></pre> 
+<h3>Explore the results</h3> 
+<p>You’ve enabled a new account and brought it in line with centrally managed IAM policies, with a few changes to a configuration yaml file.</p> 
+<p>As before, create a password for <code>NewTestUser</code> and assume the <code>PowerUser</code> Role in the <code>newlab</code> account. As a test step, confirm that you cannot assume the <code>PowerUser</code> role in the <code>lab</code> account from this user because you didn’t permit that in the config.yaml file.</p> 
+<b>Corral users into a specific region</b> 
+<p>As your use of AWS has grown, you’ve noticed that your users are creating EC2 instances in multiple regions. This is becoming difficult to manage, and you’d like to restrict their region use to us-east-2.</p> 
+<p>There is no ‘off the shelf’ managed policy for this, so you need to create one. Going through the <a title="IAM Policy Generator" href="https://awspolicygen.s3.amazonaws.com/policygen.html" target="_blank" rel="noopener noreferrer">IAM Policy Generator</a>, create a policy that looks like the following:</p> 
+<pre><code class="lang-json">
+{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;DenyAllButOhio&quot;,
+&quot;Action&quot;: &quot;ec2:*&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Resource&quot;: &quot;*&quot;,
+&quot;Condition&quot;: {
+&quot;StringNotEquals&quot;: {
+&quot;ec2:Region&quot;: &quot;us-east-2&quot;
+}
+}
+}
+]
+}
+</code></pre> 
+<h3>Update the configuration</h3> 
+<p>To support the region restrictions, create a file called <code>policy/restrictEc2Region.j2</code>, and copy the policy json contents above into it.</p> 
+<p>Edit the config.yaml file and make some changes.</p> 
+<p>Define the new managed policy to restrict regions based on the template in the <code>policy/</code> directory.</p> 
+<pre><code class="lang-yaml">
+...
+policies:
+...
+restrictEc2Region:
+description: Prevent EC2 actions outside of us-east-2
+# Get the policy json content from the file in the policy/ directory
+policy_file: restrictEc2Region.j2
+in_accounts:
+- children
+...
+</code></pre> 
+<p>Modify the <code>PowerUser</code> role to include this region restriction policy:</p> 
+<pre><code class="lang-yaml">
+...
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+# Add our new managed policy
+- restrictEc2Region
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+- children
+...
+</code></pre> 
+<p>For reference your config.yaml should now look like this:</p> 
+<pre><code class="lang-yaml">
+---
+accounts:
+central:
+# Change to the ID of the central parent account.
+id: 012345678910
+parent: true
+lab:
+# Change to the ID of the child account.
+id: 109876543210
+newlab:
+# Change to the ID of the new account created using Organizations.
+id: 543210123456
+policies:
+AssumeLabPowerUser:
+description: Allow assumption of the PowerUser role in the lab account
+assume:
+roles:
+- PowerUser
+accounts:
+- lab
+in_accounts:
+- parent
+# The new managed policy lets users assume PowerUser in the newlab account.
+AssumeNewLabPowerUser:
+description: Allow assumption of the PowerUser role in the newlab account
+assume:
+roles:
+- PowerUser
+accounts:
+# Here is the new account added in the accounts section
+- newlab
+in_accounts:
+- parent
+# A policy document taken from a jinja template
+restrictEc2Region:
+description: Prevent EC2 actions outside of us-east-2
+# Get the policy json content from the file in the policy/ directory
+policy_file: restrictEc2Region.j2
+in_accounts:
+- children
+roles:
+PowerUser:
+trusts:
+- parent
+managed_policies:
+# Add our new managed policy
+- restrictEc2Region
+- arn:aws:iam::aws:policy/PowerUserAccess
+in_accounts:
+# Because you use the keyword 'children' here, the newlab account gets this role
+- children
+groups:
+LabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+- AssumeLabPowerUser
+in_accounts:
+- parent
+# This group services the newlab account users.
+NewLabUsers:
+managed_policies:
+- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
+- arn:aws:iam::aws:policy/IAMUserChangePassword
+- arn:aws:iam::aws:policy/IAMUserSSHKeys
+- arn:aws:iam::aws:policy/IAMReadOnlyAccess
+# This matches our new policy above.
+- AssumeNewLabPowerUser
+in_accounts:
+- parent
+users:
+TestUser:
+groups:
+- LabUsers
+in_accounts:
+- parent
+NewTestUser:
+groups:
+- NewLabUsers
+in_accounts:
+- parent
+</code></pre> 
+<h3>Build and deploy</h3> 
+<p>Build the CloudFormation templates:</p> 
+<pre><code class="lang-bash">
+python build.py
+</code></pre> 
+<p>View the <code>lab</code> CloudFormation template. You can see the new managed policy:</p> 
+<pre><code class="lang-json">
+...
+&quot;restrictEc2Region&quot;: {
+&quot;Properties&quot;: {
+&quot;Description&quot;: &quot;Prevent EC2 actions outside of us-east-2&quot;,
+&quot;Groups&quot;: [],
+&quot;PolicyDocument&quot;: {
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: &quot;ec2:*&quot;,
+&quot;Condition&quot;: {
+&quot;StringNotEquals&quot;: {
+&quot;ec2:Region&quot;: &quot;us-east-2&quot;
+}
+},
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Resource&quot;: &quot;*&quot;,
+&quot;Sid&quot;: &quot;DenyAllButOhio&quot;
+}
+],
+&quot;Version&quot;: &quot;2012-10-17&quot;
+},
+&quot;Roles&quot;: [],
+&quot;Users&quot;: []
+},
+&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
+}
+...
+</code></pre> 
+<p>You can also see that <code>PowerUser</code> definition now includes the following:</p> 
+<pre><code class="lang-json">
+...
+&quot;ManagedPolicyArns&quot;: [
+&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;,
+{
+&quot;Ref&quot;: &quot;restrictEc2Region&quot;
+}
+],
+...
+</code></pre> 
+<p>If you look at <code>newlab</code>, you see the same set of definitions are there too. If you had tens or even hundreds of child accounts, those would all reflect the new policy and updated role definitions as well. This scales very nicely!</p> 
+<p>Now, deploy to your three accounts.</p> 
+<p>In <code>central</code>, nothing actually changes. It’s just a deployment version update.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/central(012345678910)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile central \
+--region us-east-2
+</code></pre> 
+<p>In <code>lab</code> and <code>newlab</code>, this deploys the new managed policy, and update the <code>PowerUser</code> role.</p> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile lab \
+--region us-east-2
+</code></pre> 
+<pre><code class="lang-bash">
+aws cloudformation update-stack \
+--stack-name CentralIAMPolicies \
+--template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
+--capabilities CAPABILITY_NAMED_IAM \
+--profile newlab \
+--region us-east-2
+</code></pre> 
+<b>Conclusion</b> 
+<p>I hope you find this tool as useful as I have. The tool is capable of much more complex deployments as well, which leverage the power of Jinja2 templating. Explore the contents of <code>sample_configs/config-complex.yaml</code> and the policy examples in the <code>sample_policy/</code> directory in the project.</p> 
+<p>The <a title="README.md" href="https://github.com/awslabs/aws-iam-generator/blob/master/README.md" target="_blank" rel="noopener noreferrer">README.md</a> file has more detailed explanations of functionality and syntax usage.</p> 
+<h4>About the Author</h4> 
+<p><img class="size-full wp-image-831 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/apmclean.jpeg" alt="" width="119" height="160" /><br /> <a title="LinkedIn Profile" href="https://www.linkedin.com/in/adam-mclean-90bb3020/" target="_blank" rel="noopener noreferrer">Adam McLean</a> is a Cloud Infrastructure Architect with AWS Professional Services. Adam enjoys helping his Canadian enterprise customers achieve success on their cloud journey. In his spare time, Adam enjoys spending time with his family and three small children.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-multi-account-management/" rel="tag">AWS Multi-Account Management</a>, <a href="https://aws.amazon.com/blogs/mt/tag/configuration-management/" rel="tag">Configuration Management</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How Cloudticity Automates Security Patches for Linux and Windows using Amazon EC2 Systems Manager and AWS Step Functions</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1124,389 +1801,6 @@ MessageStructure='json')
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/root-credentials/" rel="tag">root credentials</a>, <a href="https://aws.amazon.com/blogs/mt/tag/secdevops/" rel="tag">SecDevOps</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Monitor Changes and Auto-Enable Logging in AWS CloudTrail</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Sudhanshu Malhotra</span></span> | on 
-<time property="datePublished" datetime="2017-07-10T10:45:09+00:00">10 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudtrail/" title="View all posts in AWS CloudTrail*"><span property="articleSection">AWS CloudTrail*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/monitor-changes-and-auto-enable-logging-in-aws-cloudtrail/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/cloudtrail">AWS CloudTrail</a> is a service that enables governance, compliance, operational auditing, and risk auditing of your AWS account. Hence, it’s crucial to monitor any changes to CloudTrail and make sure that logging is always enabled.</p> 
-<p>With CloudTrail, you can log, continuously monitor, and retain events related to API calls across your AWS infrastructure. CloudTrail provides a history of API calls for your account, including API calls made through the console, AWS SDKs, command line tools, and other AWS services. This history simplifies security analysis, resource change tracking, and troubleshooting.</p> 
-<p>In this post, I describe a solution to notify on changes to CloudTrail and re-enable logging whenever logging is disabled.</p> 
-<p><span id="more-744"></span></p> 
-<b>Change monitoring and notification</b> 
-<p>For this walkthrough, you use an <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a> rule to monitor changes to a CloudTrail trail. An <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function set as a target for this rule contains the logic to detect changes to the trail and publish a message to an <a href="https://aws.amazon.com/sns">Amazon SNS</a> notification. The diagram below depicts the workflow.</p> 
-<p>&nbsp;</p> 
-<p><img class="aligncenter wp-image-1339 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/05/Flow_Diagram-1.jpg" alt="" width="1938" height="376" /></p> 
-<p>&nbsp;</p> 
-<ol> 
-<li>An IAM user makes changes to a CloudTrail trail.</li> 
-<li>That change event gets detected by a CloudWatch Events rule.</li> 
-<li>The rule triggers a Lambda function.</li> 
-<li>The function publishes the change event to an SNS topic.</li> 
-<li>The SNS topic sends the email to its subscribers.</li> 
-<li>If the change event was to disable logging, the function re-enables logging on that trail.</li> 
-</ol> 
-<p>The CloudWatch Events rule detects the following CloudTrail operational events:</p> 
-<li>“StopLogging”</li> 
-<li>“StartLogging”</li> 
-<li>“UpdateTrail”</li> 
-<li>“DeleteTrail”</li> 
-<li>“CreateTrail”</li> 
-<li>“RemoveTags”</li> 
-<li>“AddTags”</li> 
-<li>“PutEventSelectors”</li> 
-<p>After a “StopLogging” event is detected, the Lambda function re-enables logging for that trail. This generates a “StartLogging” event that again sends an SNS notification.</p> 
-<p>&nbsp;</p> 
-<b>Walkthrough</b> 
-<p>Now, I walk you through creating an SNS topic and subscription, Lambda function, and CloudWatch Events rule. To deploy this solution, download the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/CloudTrailMonitor.json">CloudTrailMonitor.json</a> AWS CloudFormation template. The <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/README.md">README</a> document provides instructions to deploy the stack.</p> 
-<b></b> 
-<b>Create the SNS topic and subscription</b> 
-<p>In the SNS console, choose <strong>Create topic</strong> and enter appropriate values for <strong>Topic name</strong> (such as CloudTrailAlert) and <strong>Display name</strong> (CT-Alert). Choose <strong>Create topic</strong>. Select the topic and view the details.</p> 
-<p>Next, choose <strong>Create subscription</strong>.</p> 
-<p>For <strong>Protocol</strong>, choose <strong>Email-JSON</strong>. Enter the email address where notifications should be sent and choose <strong>Create subscription</strong>.</p> 
-<p>An email is sent to confirm the SNS topic subscription. In the email, open the <strong>SubscribeURL</strong> link to complete the subscription. Note the SNS topic ARN, as it is used later by the Lambda function.</p> 
-<p><img class="size-full wp-image-1355 alignnone" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-sns.png" alt="" width="513" height="200" /></p> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/sns/latest/dg/CreateTopic.html">Create a Topic</a> in the Amazon SNS Developer Guide.</p> 
-<p>&nbsp;</p> 
-<b>Create the Lambda function</b> 
-<p>In the Lambda console, choose <strong>Functions</strong>, <strong>Create a Lambda function</strong>. Choose Blank Function and on the <strong>Configure trigger page</strong>, choose <strong>Next</strong>.</p> 
-<p>On the next page, enter the following values:</p> 
-<li><strong>Name:</strong>&nbsp;An appropriate name for the Lambda function</li> 
-<li><strong>Runtime:</strong>&nbsp;Python 2.7</li> 
-<li><strong>Code entry type:</strong>&nbsp;Upload a ZIP file</li> 
-<li><strong>Function package:</strong>&nbsp;Upload the <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/Cloudtraillambdamonitor.zip">Cloudtraillambdamonitor.zip</a> file</li> 
-<li><strong>Environment variables:</strong> 
-<li>Key: SNSARN</li> 
-<li>Value: The SNS topic ARN noted earlier</li> 
-</ul> </li> 
-<li><strong>Handler: </strong>Cloudtraillambdamonitor.lambda_handler</li> 
-<li><strong>Role:</strong>&nbsp;Create a custom role (takes you to another page). Call the role CloudTrailLambda.</li> 
-<p>For the policy document, enter the following policy:</p> 
-<pre><code class="lang-markup">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;LambdaCloudtraiMonitor&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;cloudtrail:DescribeTrails&quot;,
-&quot;cloudtrail:GetTrailStatus&quot;,
-&quot;cloudtrail:StartLogging&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:cloudtrail:*:&lt;AWS-ACCOUNT-ID&gt;:trail/*&quot;
-]
-},
-{
-&quot;Sid&quot;: &quot;CloudWacthLogspermissions&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;logs:CreateLogGroup&quot;,
-&quot;logs:CreateLogStream&quot;,
-&quot;logs:PutLogEvents&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:logs:*:*:*&quot;
-]
-},
-{
-&quot;Sid&quot;: &quot;SNSPublishpermissions&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;sns:Publish&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:sns:*:*:*&quot;
-]
-}
-]
-}
-</code></pre> 
-<p>On the <strong>Configure function</strong> page, choose <strong>Next</strong>. Review the configuration settings before choosing <strong>Create function</strong>.</p> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/get-started-create-function.html"><strong>Step 2.1: Create a Hello World Lambda Function</strong></a> in the <em>AWS Lambda Developer Guide</em>.</p> 
-<p>&nbsp;</p> 
-<b>Create the CloudWatch Events rule</b> 
-<p>In the CloudWatch Events console, choose <strong>Create rule</strong>. Enter the following values:</p> 
-<li><strong>Service Name:</strong> &nbsp;CloudTrail</li> 
-<li><strong>Event Type:</strong> &nbsp;AWS API call via CloudTrail</li> 
-<li><strong>Specific Operations:</strong> &nbsp;StopLogging, StartLogging, UpdateTrail, DeleteTrail, CreateTrail, RemoveTags, AddTags, PutEventSelectors</li> 
-<p>For <strong>Targets</strong>, select the name of the Lambda function created earlier and choose <strong>Configure details</strong>. On next page, enter an appropriate name and description for this rule. For <strong>State</strong>, select <strong>Enabled</strong>. Choose <strong>Create rule</strong>.</p> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/RunLambdaSchedule.html">Tutorial: Schedule Lambda Functions Using CloudWatch Events</a> in the <em>Amazon CloudWatch Events User Guide</em>.</p> 
-<p>&nbsp;</p> 
-<b>Validate monitoring</b> 
-<p>To validate if the solution is working properly, make a change to CloudTrail and see if you get the notification about this change. The following are some sample emails for when a change in CloudTrail was detected. In this case, logging was disabled and re-enabled automatically.</p> 
-<p><img class="alignnone wp-image-1356 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-stoplogging.png" alt="" width="634" height="319" /></p> 
-<p><img class="alignnone wp-image-1357" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/06/sid-startlogging.png" alt="" width="634" height="366" /></p> 
-<p>&nbsp;</p> 
-<b>Summary</b> 
-<p>In this post, I explained how to create a solution with CloudWatch Events, Lambda, and SNS to notify you about changes to CloudTrail trails, and to re-enable logging automatically whenever logging is disabled. If you can’t guarantee that your compliance logging is fully managed and automatic, your organizational governance or auditing may be at risk.</p> 
-<p>For more information, I recommend the following whitepapers:</p> 
-<li><a href="https://d0.awsstatic.com/whitepapers/Security/AWS_Security_Whitepaper.pdf">AWS Security Whitepaper</a></li> 
-<li><a href="https://d0.awsstatic.com/whitepapers/compliance/AWS_Security_at_Scale_Governance_in_AWS_Whitepaper.pdf">Security at Scale: Governance in AWS</a></li> 
-<li><a href="https://d0.awsstatic.com/whitepapers/compliance/Automating_Governance_on_AWS.pdf">Automating Governance on AWS</a></li> 
-<h3>About the Author</h3> 
-<p><img class="alignleft wp-image-747" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/10/dp.jpeg" alt="" width="60" height="80" />Sudhanshu Malhotra is a Solutions Architect at AWS Professional Services. Sudhanshu enjoys working with our customers and helping them deliver complex solutions in AWS in the area of DevOps, Infrastructure-as-Code and Config Management. In his spare time, Sudhanshu enjoys spending time with his family, hiking and tinkering with cars.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudtrail/" rel="tag">AWS CloudTrail</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/mt/tag/secdevops/" rel="tag">SecDevOps</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Keeping CloudWatch Dashboards up to date using AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Mike Meaney</span></span> | on 
-<time property="datePublished" datetime="2017-07-05T16:12:07+00:00">05 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/keeping-cloudwatch-dashboards-up-to-date-using-aws-lambda/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>With the launch of the new <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/Welcome.html">CloudWatch Dashboards API</a> and CloudFormation support it is now easy to <a href="https://aws.amazon.com/blogs/aws/new-api-cloudformation-support-for-amazon-cloudwatch-dashboards/">automate your CloudWatch Dashboards</a> and make sure they monitor all the resources that you launched when creating your <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html">CloudFormation stacks</a>.</p> 
-<p>Let’s now see how you can use the new CloudWatch Dashboards API to dynamically update your dashboard as EC2 instances are added or removed. When you use auto-scaled EC2 instances for example, EC2 instances may be launched or terminated at any time and if you have a CloudWatch Dashboard monitoring your EC2 resources it can suddenly be monitoring instances that do not exist anymore, and may be missing ones that do exist.</p> 
-<b>Use AWS Lambda to keep EC2 instances up to date</b> 
-<p>A simple solution is to run the script below periodically in AWS Lambda. The script loads your CloudWatch Dashboards that monitors your instances and updates the EC2 graph widgets if needed.</p> 
-<p><span id="more-700"></span></p> 
-<p>The script:</p> 
-<li>Loads the specified CloudWatch Dashboard(s)</li> 
-<li>Looks for all graph widgets displaying EC2 instance metrics</li> 
-<li>Calls <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> with configured parameters to discover the current EC2 instances for that graph in that region</li> 
-<li>Updates the widget if needed</li> 
-<li>Saves the CloudWatch Dashboards if any widget definition has changed</li> 
-<p>The script is configured via an environment variable <strong>AWS_DASHBOARDS</strong> whose value is a JSON array of the dashboard names that you want to update along with (optional) parameters for <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#describeInstances-property">EC2 DescribeInstances API</a> which sets which EC2 Instances should be displayed on each dashboard.</p> 
-<p>Here’s an example that will update a CloudWatch Dashboard called <code>MyAutoScalingDashboard</code> with all running instances in the AutoScaling group called <code>MyAutoScalingGroup</code>:</p> 
-<pre><code class="lang-json">[
-{
-&quot;dashboardName&quot;: &quot; MyAutoScalingDashboard &quot;,
-&quot;ec2DescribeInstanceParams&quot;: {
-&quot;Filters&quot;: [
-{
-&quot;Name&quot;: &quot;instance-state-name&quot;,
-&quot;Values&quot;: [ &quot;running&quot; ]
-},
-{
-&quot;Name&quot;: &quot;tag:aws:autoscaling:groupName&quot;,
-&quot;Values&quot;: [ &quot;MyAutoScalingGroup&quot; ]
-}
-]
-}
-}
-]
-</code></pre> 
-<h3>To create the Lambda function:</h3> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/lambda">Lambda console</a>, choose <strong>Create a Lambda function</strong></li> 
-<li>Select <strong>Blank Function</strong> and choose <strong>Next</strong> when asked to configure a trigger.</li> 
-<li>For <strong>Name</strong>, enter <code>ec2DashboardUpdater</code></li> 
-<li>For <strong>Code entry type</strong> choose <strong>Upload a file from Amazon S3</strong>.</li> 
-<li>For <strong>S3 link URL</strong> enter <code>https://s3.amazonaws.com/ec2-dashboard-updater/ec2DashboardUpdater.zip</code></li> 
-<li>You’ll need to specify the <code>AWS_DASHBOARDS</code> environment variable with a JSON array for the dashboards you want to update, e.g. with the JSON in the example earlier (no newlines: <pre><code class="lang-json">[{&quot;dashboardName&quot;:&quot;AutoUpdateEC2Dashboard&quot;,&quot;ec2DescribeInstanceParams&quot;:{&quot;Filters&quot;:[{&quot;Name&quot;:&quot;instance-state-name&quot;,&quot;Values&quot;:[&quot;running&quot;]},{&quot;Name&quot;:&quot;tag:aws:autoscaling:groupName&quot;,&quot;Values&quot;:[&quot;test-asg-01&quot;]}]}}]</code></pre> </li> 
-<li>Set the <strong>Handler</strong> as <code>ec2DashboardUpdater.handler</code></li> 
-<li>For <strong>Role</strong> select <strong>Create a custom role</strong></li> 
-<li>In the IAM Console window that opens choose <strong>IAM Role</strong> of <strong>Create a new IAM Role</strong></li> 
-<li>Set <strong>Role Name</strong> of <code>ec2DashboardUpdaterRole</code></li> 
-<li>Choose <strong>View Policy Document, Edit, Ok</strong>.</li> 
-<li>Set the role to: <pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;cloudwatch:GetDashboard&quot;,
-&quot;cloudwatch:PutDashboard&quot;,
-&quot;ec2:DescribeInstances&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;
-}
-]
-}</code></pre> </li> 
-<li>Choose <strong>Allow</strong></li> 
-<li>In <strong>Advanced settings</strong> set <strong>Timeout</strong> to a value that is enough to describe all instances for all EC2 graph widgets and load and save all dashboards – set it to <strong>5 min</strong> if unsure</li> 
-<li>Select <strong>Next</strong> then <strong>Create function</strong></li> 
-</ol> 
-<h3>To call the Lambda function periodically:</h3> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/cloudwatch">CloudWatch console,</a> choose <strong>Rules</strong> in the left navigation pane</li> 
-<li>Select <strong>Create rule</strong></li> 
-<li>Choose the <strong>Schedule</strong> radio button and set <strong>Fixed rate</strong> of <code>15</code> Minutes</li> 
-<li>Select <strong>Add target</strong>, make sure <strong>Lambda function</strong> is active and for <strong>Function</strong> select the previously created <code>ec2DashboardUpdater</code> function</li> 
-<li>Choose <strong>Configure details</strong></li> 
-<li>Enter <strong>Name</strong> as <code>ec2DashboardUpdaterCron</code></li> 
-<li>Select <strong>Create rule</strong></li> 
-</ol> 
-<p>And that’s it, you’re done. Your selected dashboards will now be kept up to date with your changing EC2 instances hourly. If your EC2 instances do not change from hour to hour then your dashboards will not be updated.</p> 
-<p>Please note some limitations of the script:</p> 
-<li>It will only update graphs where the first metric is an EC2 instance id metric, such as CPUUtilization, NetworkIn or DiskReadBytes, in the AWS/EC2 namespace.</li> 
-<li>It assumes EC2 metrics on a graph all use the same MetricName field.</li> 
-<li>All EC2 graphs on a particular dashboard are for the same list of EC2 instances (as specified in the ec2DescribeInstanceParams configuration parameter.</li> 
-<p>The (Javascript) code for the script is given below. Feel free to use it as the basis for keeping your CloudWatch Dashboards up to date with other resources.</p> 
-<pre><code class="lang-javascript">//
-// EC2 Dashboard Updater
-// This script will keep EC2 graphs on a chosen list of CloudWatch Dashboards up to date. In the CloudWatch Events
-// console create a rule to call this Lambda whenever and EC2 instance changes state.
-//
-// Configure this script with the AWS_DASHBOARDS environment variable. The content of AWS_DASHBOARDS indicates
-// which dashboards to update with which EC2 instances.  The value is an array in JSON format. Each array element
-// is an object with two properties, dashboardName and ec2DescribeInstanceParams. dashboardName is the dashboard to
-// update and ec2DescribeInstanceParams are parameters to pass to EC2 DescribeInstances API, to determine which
-// instances to update the graphs with.
-//
-// For example, set AWS_DASHBOARDS to the following to keep 'MyDashboard' up to date with the instances in the
-// AutoScalingGroup 'MyAutoScalingGroup':
-//
-// [
-//     {
-//         dashboardName: 'MyDashboard',
-//         ec2DescribeInstanceParams: {
-//             Filters: [
-//                 {
-//                     Name: 'tag:aws:autoscaling:groupName',
-//                     Values: [ 'MyAutoScalingGroup' ]
-//                 }
-//             ]
-//         }
-//     }
-// ]
-//
-// Limitations:
-// - it will only update graphs whose first metric is an EC2 instance metric, all other metrics on the graph
-//   will be replaced with these metrics
-// - metrics can not have custom periods or statistics, the graph defaults will be used
-//
-'use strict'
-var _ = require('lodash'),
-co = require('co'),
-AWS = require('aws-sdk'),
-EC2_NAMESPACE = 'AWS/EC2',
-INSTANCE_ID_DIM = 'InstanceId',
-REPEAT_PREVIOUS = '...',
-NAME_TAG = 'Name',
-METRIC_WIDGET_TYPE = 'metric';
-function getDashboards() {
-let dashboardDef = process.env.AWS_DASHBOARDS,
-dashboards;
-if (! dashboardDef) {
-throw 'Environment variable AWS_DASHBOARDS is not set. It should be set with JSON array, e.g [{&quot;dashboardName&quot;: &quot;myDashboard&quot;}]';
-}
-try {
-dashboards = JSON.parse(dashboardDef);
-} catch (err) {
-throw 'Error, AWS_DASHBOARDS is not valid JSON';
-}
-if (! Array.isArray(dashboards)) {
-throw 'Expecting AWS_DASHBOARDS to be an array';
-}
-return dashboards;
-}
-function ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName) {
-return _.chain(ec2DescribeInstances.Reservations).
-map('Instances').
-flatten().
-map(function(instance) {
-let idAndLabel = {
-id: instance.InstanceId,
-label: instance.InstanceId
-};
-_.each(instance.Tags, (tag) =&gt; {        // Use Name tag instead of InstanceId as label, if it exists
-if (tag.Key === NAME_TAG) {
-idAndLabel.label = tag.Value;
-return false;
-}
-});
-return idAndLabel;
-}).
-sortBy(['label']).
-map((idAndLabel, i) =&gt; {
-var metric = i == 0 ?
-[ EC2_NAMESPACE, metricName, INSTANCE_ID_DIM, idAndLabel.id ] :
-[ REPEAT_PREVIOUS, idAndLabel.id ];
-if (idAndLabel.id != idAndLabel.label) {
-metric.push({label: idAndLabel.label});
-}
-return metric;
-}).
-value();
-}
-function* getEC2Metrics(dashboardContext, region, metricName) {
-var params = dashboardContext.dashboard.ec2DescribeInstanceParams || {},
-ec2Cache = dashboardContext.ec2Cache,
-ec2DescribeInstances;
-// ec2Cache is a cache of instance responses per region for the current dashboard, to limit calls to EC2
-if (!ec2Cache) {
-dashboardContext.ec2Cache = {};
-} else if (ec2Cache[region]) {
-ec2DescribeInstances = ec2Cache[region];
-}
-if (!ec2DescribeInstances) {
-// Not in cache, call EC2 to get list of regions
-let ec2Client = new AWS.EC2({region: region});
-ec2DescribeInstances = yield ec2Client.describeInstances(params).promise(),
-dashboardContext.ec2Cache[region] = ec2DescribeInstances;
-}
-return ec2MetricsFromDescribeInstances(ec2DescribeInstances, metricName);
-}
-function* updateDashboard(cloudwatchClient, dashboardContext, dashboardBody) {
-var newDashboard = _.cloneDeep(dashboardBody),
-widgets = newDashboard.widgets,
-dashboardName = dashboardContext.dashboard.dashboardName;
-for (let i = 0; i &lt; widgets.length; i++) {
-let widget = widgets[i],
-metrics = widget.properties.metrics,
-region = widget.region;
-// Check to see if it's a metric widget and first metric is an EC2 Instance metric
-if (widget.type === METRIC_WIDGET_TYPE &amp;&amp; metrics &amp;&amp; (metrics[0].length === 4 || metrics[0].length === 5) &amp;&amp;
-metrics[0][0] === EC2_NAMESPACE &amp;&amp; metrics[0][2] === INSTANCE_ID_DIM) {
-let ec2Metrics = yield getEC2Metrics(dashboardContext, region, metrics[0][1]);
-widget.properties.metrics = ec2Metrics;
-}
-}
-if (JSON.stringify(dashboardBody) !== JSON.stringify(newDashboard)) {
-console.log(`Updating dashboard ${dashboardName} to:`, JSON.stringify(newDashboard));
-// Save updated dashboard
-yield cloudwatchClient.putDashboard({
-DashboardName: dashboardName,
-DashboardBody: JSON.stringify(newDashboard)
-}).promise();
-} else {
-console.log(`Dashboard ${dashboardName} is unchanged, update skipped`);
-}
-}
-exports.handler = (event, context, callback) =&gt; {
-var dashboards = getDashboards(),
-cloudwatchClient = new AWS.CloudWatch(),
-dashboard,
-dashboardContext;
-try {
-co(function* () {
-for (let i = 0; i &lt; dashboards.length; i++) {
-dashboard = dashboards[i];
-dashboardContext = { dashboard: dashboard };
-if (dashboard.dashboardName) {
-let dashboardResponse = yield cloudwatchClient.getDashboard({
-DashboardName: dashboard.dashboardName }).promise(),
-dashboardBody = JSON.parse(dashboardResponse.DashboardBody);
-yield updateDashboard(cloudwatchClient, dashboardContext, dashboardBody);
-}
-}
-callback(null, 'Update complete');
-});
-} catch (err) {
-callback(err);
-}
-};
-</code></pre> 
-<p>&nbsp;</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch/" rel="tag">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-lambda/" rel="tag">AWS Lambda</a></span> 
 </footer> 
 </article> 
 <p>

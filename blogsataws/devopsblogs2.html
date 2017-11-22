@@ -191,6 +191,843 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Create Multiple Builds from the Same Source Using Different AWS CodeBuild Build Specification Files</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
+<time property="datePublished" datetime="2017-08-01T14:25:49+00:00">01 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/create-multiple-builds-from-the-same-source-using-different-aws-codebuild-build-specification-files/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In June 2017, <a href="https://forums.aws.amazon.com/ann.jspa?annID=4762" target="_blank" rel="noopener noreferrer">AWS CodeBuild announced</a> you can now specify an alternate build specification file name or location in an AWS CodeBuild project.</p> 
+<p>In this post, I’ll show you how to use different build specification files in the same repository to create different builds. You’ll find the source code for this post in our&nbsp;<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec" target="_blank" rel="noopener noreferrer">GitHub repo</a>.</p> 
+<h3>Requirements</h3> 
+<p>The <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS CLI</a> must be installed and configured.</p> 
+<h3>Solution Overview</h3> 
+<p>I have created a C program (cbsamplelib.c) that will be used to create a shared library and another utility program (cbsampleutil.c) to use that library. I’ll use a Makefile to compile these files.</p> 
+<p>I need to put this sample application in RPM and DEB packages so end users can easily deploy them. I have created a build specification file for RPM. It will use make to compile this code and the RPM specification file (cbsample.rpmspec) configured in the build specification to create the RPM package. Similarly, I have created a build specification file for DEB. It will create the DEB package based on the control specification file (cbsample.control) configured in this build specification.</p> 
+<p><span id="more-1464"></span></p> 
+<h4>RPM Build Project:</h4> 
+<p>The following build specification file (<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-rpm.yml</a>) uses build specification version 0.2. As described in <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html#build-spec-ref-versions" target="_blank" rel="noopener noreferrer">the documentation</a>, this version has different syntax for environment variables. This build specification includes multiple phases:</p> 
+<li>As part of the install phase, the required packages is installed using yum.</li> 
+<li>During the pre_build phase, the required directories are created and the required files, including the RPM build specification file, are copied to the appropriate location.</li> 
+<li>During the build phase, the code is compiled, and then the RPM package is created based on the RPM specification.</li> 
+<p>As defined in the artifact section, the RPM file will be uploaded as a build artifact.</p> 
+<pre><code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
+&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-$build_version&quot;
+&nbsp; &nbsp; &nbsp; - echo $filename
+&nbsp; &nbsp; &nbsp; - mkdir -p $filename
+&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
+&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
+&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
+&nbsp; &nbsp; &nbsp; - cp cbsample.rpmspec ./SPECS/
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
+&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample.rpmspec
+&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - RPMS/x86_64/cbsample*.rpm
+&nbsp; discard-paths: yes
+</code></pre> 
+<p>Using cb-centos-project.json as a reference, create the input JSON file for the CLI command. This project uses an AWS CodeCommit repository named codebuild-multispec and a file named buildspec-rpm.yml as the build specification file. To create the RPM package, we need to specify a custom image name. I’m using the latest CentOS 7 image available in the Docker Hub. I’m using a role named CodeBuildServiceRole. It contains permissions similar to those defined in CodeBuildServiceRole.json. (You need to change the resource fields in the policy, as appropriate.)</p> 
+<pre><code class="lang-json">{
+&nbsp; &nbsp; &quot;name&quot;: &quot;rpm-build-project&quot;,
+&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build RPM from the source.&quot;,
+&nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
+&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
+&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
+&nbsp; &nbsp; &quot;tags&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;RPM Demo Build&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}
+</code></pre> 
+<p>After the <code class="lang-bash">cli-input-json</code> file is ready, execute the following command to create the build project.</p> 
+<pre><code class="lang-json">$ aws codebuild create-project --name CodeBuild-RPM-Demo --cli-input-json file://cb-centos-project.json
+{
+&quot;project&quot;: {
+&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;, 
+&quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;, 
+&quot;tags&quot;: [
+{
+&quot;value&quot;: &quot;RPM Demo Build&quot;, 
+&quot;key&quot;: &quot;Name&quot;
+}
+], 
+&quot;artifacts&quot;: {
+&quot;namespaceType&quot;: &quot;NONE&quot;, 
+&quot;packaging&quot;: &quot;NONE&quot;, 
+&quot;type&quot;: &quot;S3&quot;, 
+&quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;, 
+&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;
+}, 
+&quot;lastModified&quot;: 1500559811.13, 
+&quot;timeoutInMinutes&quot;: 15, 
+&quot;created&quot;: 1500559811.13, 
+&quot;environment&quot;: {
+&quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;, 
+&quot;privilegedMode&quot;: false, 
+&quot;image&quot;: &quot;centos:7&quot;, 
+&quot;type&quot;: &quot;LINUX_CONTAINER&quot;, 
+&quot;environmentVariables&quot;: []
+}, 
+&quot;source&quot;: {
+&quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;, 
+&quot;type&quot;: &quot;CODECOMMIT&quot;, 
+&quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+}, 
+&quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;, 
+&quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:project/CodeBuild-RPM-Demo&quot;, 
+&quot;description&quot;: &quot;Project which will build RPM from the source.&quot;
+}
+}</code></pre> 
+<p>When the project is created, run the following command to start the build. After the build has started, get the build ID. You can use the build ID to get the status of the build.</p> 
+<pre><code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo
+{
+&nbsp; &nbsp; &quot;build&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1: 012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; }
+}
+$ aws codebuild list-builds-for-project --project-name CodeBuild-RPM-Demo
+{
+&nbsp; &nbsp; &quot;ids&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; ]
+}
+$ aws codebuild batch-get-builds --ids CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc
+{
+&nbsp; &nbsp; &quot;buildsNotFound&quot;: [],&nbsp;
+&nbsp; &nbsp; &quot;builds&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: true,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phases&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560157.164,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PROVISIONING&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 24,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560157.164,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560182.066
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;DOWNLOAD_SOURCE&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560182.066,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560197.906
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;INSTALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 19,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560197.906,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.515
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PRE_BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.515,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.662
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.662,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.995
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;POST_BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.995,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.074
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;UPLOAD_ARTIFACTS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.074,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.542
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;FINALIZING&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 4,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.542,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;COMPLETED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560223.128
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;logs&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;groupName&quot;: &quot;/aws/codebuild/CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;deepLink&quot;: &quot;https://console.aws.amazon.com/cloudwatch/home?region=eu-west-1#logEvent:group=/aws/codebuild/CodeBuild-RPM-Demo;stream=57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;streamName&quot;: &quot;57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;COMPLETED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}</code></pre> 
+<h4>DEB Build Project:</h4> 
+<p>In this project, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-deb.yml" target="_blank" rel="noopener noreferrer">buildspec-deb.yml</a>. Like the RPM build project, this specification includes multiple phases. Here I use a Debian control file to create the package in DEB format. After a successful build, the DEB package will be uploaded as build artifact.</p> 
+<pre><code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - apt-get install gcc make -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/DEBIAN
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/lib
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/include
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/bin
+&nbsp; &nbsp; &nbsp; - cp -f cbsample.control ./cbsample-$build_version/DEBIAN/control
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Building the application&quot;
+&nbsp; &nbsp; &nbsp; - make
+&nbsp; &nbsp; &nbsp; - cp libcbsamplelib.so ./cbsample-$build_version/usr/lib
+&nbsp; &nbsp; &nbsp; - cp cbsamplelib.h ./cbsample-$build_version/usr/include
+&nbsp; &nbsp; &nbsp; - cp cbsampleutil ./cbsample-$build_version/usr/bin
+&nbsp; &nbsp; &nbsp; - chmod +x ./cbsample-$build_version/usr/bin/cbsampleutil
+&nbsp; &nbsp; &nbsp; - dpkg-deb --build ./cbsample-$build_version
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - cbsample-*.deb</code></pre> 
+<p>Here we use cb-ubuntu-project.json as a reference to create the CLI input JSON file. This project uses the same AWS CodeCommit repository (codebuild-multispec) but a different buildspec file in the same repository (buildspec-deb.yml). We use the default CodeBuild image to create the DEB package. We use the same IAM role (CodeBuildServiceRole).</p> 
+<pre><code class="lang-json">{
+&nbsp; &nbsp; &quot;name&quot;: &quot;deb-build-project&quot;,
+&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build DEB from the source.&quot;,
+&nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-deb.yml&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;aws/codebuild/ubuntu-base:14.04&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
+&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
+&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
+&nbsp; &nbsp; &quot;tags&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;Debian Demo Build&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}</code></pre> 
+<p>Using the CLI input JSON file, create the project, start the build, and check the status of the project.</p> 
+<pre><code class="lang-bash">$ aws codebuild create-project --name CodeBuild-DEB-Demo --cli-input-json file://cb-ubuntu-project.json
+$ aws codebuild list-builds-for-project --project-name CodeBuild-DEB-Demo
+$ aws codebuild batch-get-builds --ids CodeBuild-DEB-Demo:e535c4b0-7067-4fbe-8060-9bb9de203789</code></pre> 
+<p>After successful completion of the RPM and DEB builds, check the S3 bucket configured in the artifacts section for the build packages. Build projects will create a directory in the name of the build project and copy the artifacts inside it.</p> 
+<pre><code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
+2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
+$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-DEB-Demo/
+2017-07-20 16:37:22 &nbsp; &nbsp; &nbsp; 5420 cbsample-0.1.deb</code></pre> 
+<h4>Override Buildspec During Build Start:</h4> 
+<p>It’s also possible to override the build specification file of an existing project when starting a build. If we want to create the libs RPM package instead of the whole RPM, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-libs-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-libs-rpm.yml</a>. This build specification file is similar to the earlier RPM build. The only difference is that it uses a different RPM specification file to create libs RPM.</p> 
+<pre><code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
+&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-libs-$build_version&quot;
+&nbsp; &nbsp; &nbsp; - echo $filename
+&nbsp; &nbsp; &nbsp; - mkdir -p $filename
+&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
+&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
+&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
+&nbsp; &nbsp; &nbsp; - cp cbsample-libs.rpmspec ./SPECS/
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
+&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample-libs.rpmspec
+&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - RPMS/x86_64/cbsample-libs*.rpm
+&nbsp; discard-paths: yes</code></pre> 
+<p>Using the same RPM build project that we created earlier, start a new build and set the value of the `–buildspec-override` parameter to buildspec-libs-rpm.yml .</p> 
+<pre><code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo --buildspec-override buildspec-libs-rpm.yml
+{
+&nbsp; &nbsp; &quot;build&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-libs-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500562366.239,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;
+&nbsp; &nbsp; }
+}</code></pre> 
+<p>After the build is completed successfully, check to see if the package appears in the artifact S3 bucket under the CodeBuild-RPM-Demo build project folder.</p> 
+<pre><code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
+2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
+2017-07-20 16:53:54 &nbsp; &nbsp; &nbsp; 5320 cbsample-libs-0.1-1.el7.centos.x86_64.rpm</code></pre> 
+<h3>Conclusion</h3> 
+<p>In this post, I have shown you how multiple buildspec files in the same source repository can be used to run multiple AWS CodeBuild build projects. I have also shown you how to provide a different buildspec file when starting the build.</p> 
+<p>For more information about AWS CodeBuild, see the&nbsp;<a href="https://aws.amazon.com/documentation/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild documentation</a>. You can&nbsp;get started&nbsp;with AWS CodeBuild by using <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/getting-started.html" target="_blank" rel="noopener noreferrer">this step by step guide</a>.</p> 
+<hr /> 
+<h3>About the author</h3> 
+<p><strong><img class="alignleft wp-image-1260 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" alt="" width="150" height="150" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/aws-codebuild/" rel="tag">AWS CodeBuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codebuild/" rel="tag">codebuild</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Validating AWS CloudFormation Templates</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Remek Hetman</span></span> | on 
+<time property="datePublished" datetime="2017-06-28T10:49:09+00:00">28 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/validating-aws-cloudformation-templates/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>For their continuous integration and continuous deployment (CI/CD) pipeline path, many companies use tools like Jenkins, Chef, and <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a>. Usually, the process is managed by two or more teams. One team is responsible for designing and developing an application, CloudFormation templates, and so on. The other team is generally responsible for integration and deployment.</p> 
+<p>One of the challenges that a CI/CD team has is to validate the CloudFormation templates provided by the development team. Validation provides early warning about any incorrect syntax and ensures that the development team follows company policies in terms of security and the resources created by CloudFormation templates.</p> 
+<p>In this post, I focus on the validation of <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> templates for syntax as well as in the context of business rules.</p> 
+<p><span id="more-1318"></span></p> 
+<h3>Scripted validation solution</h3> 
+<p>For CloudFormation syntax validation, one option is to use the <a href="https://aws.amazon.com/cli">AWS CLI </a>to call the <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/validate-template.html">validate-template command</a>. For security and resource management, another approach is to run a Jenkins pipeline from an Amazon EC2 instance under an EC2 role that has been granted only the necessary permissions.</p> 
+<p>What if you need more control over your CloudFormation templates, such as managing parameters or attributes? What if you have many development teams where permissions to the AWS environment required by one team are either too open or not open enough for another team?</p> 
+<p>To have more control over the contents of your CloudFormation template, you can use the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> Python script, which shows you how to validate different template aspects. With this script, you can validate:</p> 
+<li>JSON syntax</li> 
+<li>IAM capabilities</li> 
+<li>Root tags</li> 
+<li>Parameters</li> 
+<li>CloudFormation resources</li> 
+<li>Attributes</li> 
+<li>Reference resources</li> 
+<p>You can download this script from the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> GitHub repo. Use the following command to run the script:</p> 
+<pre>python cf-validator.py</pre> 
+<p>The script takes the following parameters:</p> 
+<li><strong>–cf_path [Required]</strong><br /> 
+<blockquote> 
+<p>The location of the CloudFormation template in JSON format. Supported location types:</p> 
+<li>File system – Path to the CloudFormation template on the file system</li> 
+<li>Web – URL, for example, https://my-file.com/my_cf.json</li> 
+<li>Amazon S3 – Amazon S3 bucket, for example, s3://my_bucket/my_cf.json</li> 
+</blockquote> </li> 
+<li><strong>–cf_rules [Required]</strong><br /> 
+<blockquote> 
+<p>The location of the JSON file with the validation rules. This parameter supports the same locations as –cf_path. The next section of this post has more information about defining rules.</p> 
+</blockquote> </li> 
+<li><strong>–cf_res [Optional]</strong><br /> 
+<blockquote> 
+<p>The location of the JSON file with the defined AWS resources, which need to be confirmed before launching the CloudFormation template. A later section of this post has more information about resource validation.</p> 
+</blockquote> </li> 
+<li><strong>–allow_cap [Optional][yes/no]</strong><br /> 
+<blockquote> 
+<p>Controls whether you allow the creation of IAM resources by the CloudFormation template, such as policies, rules, or IAM users. The default value is no.</p> 
+</blockquote> </li> 
+<li><strong>–region [Optional]</strong><br /> 
+<blockquote> 
+<p>The AWS region where the existing resources were created. The default value is us-east-1.</p> 
+</blockquote> </li> 
+<h5>Defining rules</h5> 
+<p>All rules are defined in the JSON format file. Rules consist of the following keys:</p> 
+<li><strong>“allow_root_keys”</strong><br /> 
+<blockquote> 
+<p>Lists allowed root CloudFormation keys. Example of root keys are Parameters, Resources, Output, and so on. An empty list means that any key is allowed.</p> 
+</blockquote> </li> 
+<li><strong>“allow_parameters”</strong><br /> 
+<blockquote> 
+<p>Lists allowed CloudFormation parameters. For instance, to force each CloudFormation template to use only the set of parameters defined in your pipeline, list them under this key. An empty list means that any parameter is allowed.</p> 
+</blockquote> </li> 
+<li><strong>“allow_resources”</strong><br /> 
+<blockquote> 
+<p>Lists the AWS resources allowed for creation by a CloudFormation template. The format of the resource is the same as resource types in CloudFormation, but without the “AWS::” prefix. Examples:&nbsp; EC2::Instance, EC2::Volume, and so on. If you allow the creation of all resources from the given group, you can use a wildcard. For instance, if you allow all resources related to CloudFormation, you can add CloudFormation::* to the list instead of typing CloudFormation::Init, CloudFormation:Stack, and so on. An empty list means that all resources are allowed.</p> 
+</blockquote> </li> 
+<li><strong>“require_ref_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists attributes (per resource) that have to be defined in CloudFormation. The value must be referenced and cannot be hardcoded. For instance, you can require that each EC2 instance must be created from a specific AMI where Image ID has to be a passed-in parameter. An empty list means that you are not requiring specific attributes to be present for a given resource.</p> 
+</blockquote> </li> 
+<li><strong>“allow_additional_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists additional attributes (per resource) that can be defined and have any value in the CloudFormation template. An empty list means that any additional attribute is allowed. If you specify additional attributes for this key, then any resource attribute defined in a CloudFormation template that is not listed in this key or in the require_ref_attributes key causes validation to fail.</p> 
+</blockquote> </li> 
+<li><strong>“not_allow_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists attributes (per resource) that are not allowed in the CloudFormation template. This key takes precedence over the require_ref_attributes and allow_additional_attributes keys.</p> 
+</blockquote> </li> 
+<h5>Rule file example</h5> 
+<p>The following is an example of a rule file:</p> 
+<pre><code class="lang-json">{
+&quot;allow_root_keys&quot; : [&quot;AWSTemplateFormatVersion&quot;, &quot;Description&quot;, &quot;Parameters&quot;, &quot;Conditions&quot;, &quot;Resources&quot;, &quot;Outputs&quot;],
+&quot;allow_parameters&quot; : [],
+&quot;allow_resources&quot; : [
+&quot;CloudFormation::*&quot;,
+&quot;CloudWatch::Alarm&quot;,
+&quot;EC2::Instance&quot;,
+&quot;EC2::Volume&quot;,
+&quot;EC2::VolumeAttachment&quot;,
+&quot;ElasticLoadBalancing::LoadBalancer&quot;,
+&quot;IAM::Role&quot;,
+&quot;IAM::Policy&quot;,
+&quot;IAM::InstanceProfile&quot;
+],
+&quot;require_ref_attributes&quot; :
+{
+&quot;EC2::Instance&quot; : [ &quot;InstanceType&quot;, &quot;ImageId&quot;, &quot;SecurityGroupIds&quot;, &quot;SubnetId&quot;, &quot;KeyName&quot;, &quot;IamInstanceProfile&quot; ],
+&quot;ElasticLoadBalancing::LoadBalancer&quot; : [&quot;SecurityGroups&quot;, &quot;Subnets&quot;]
+},
+&quot;allow_additional_attributes&quot; : {},
+&quot;not_allow_attributes&quot; : {}
+}
+</code></pre> 
+<h4>Validating resources</h4> 
+<p>You can use the –cf_res parameter to validate that the resources you are planning to reference in the CloudFormation template exist and are available. As a value for this parameter, point to the JSON file with defined resources. The format should be as follows:</p> 
+<pre><code class="lang-json">[
+{ &quot;Type&quot; : &quot;SG&quot;,
+&quot;ID&quot; : &quot;sg-37c9b448A&quot;
+},
+{ &quot;Type&quot; : &quot;AMI&quot;,
+&quot;ID&quot; : &quot;ami-e7e523f1&quot;
+},
+{ &quot;Type&quot; : &quot;Subnet&quot;,
+&quot;ID&quot; : &quot;subnet-034e262e&quot;
+}
+]
+</code></pre> 
+<h3>Summary</h3> 
+<p>At this moment, this CloudFormation template validation script supports only security groups, AMIs, and subnets. But anyone with some knowledge of Python and the boto3 package can add support for additional resources type, as needed.</p> 
+<p>For more tips please visit our <a href="https://aws.amazon.com/blogs/aws/category/aws-cloud-formation/">AWS CloudFormation blog</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/cloudformation/" rel="tag">CloudFormation</a>, <a href="https://aws.amazon.com/blogs/devops/tag/validation/" rel="tag">Validation</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Continuous Delivery of Nested AWS CloudFormation Stacks Using AWS CodePipeline</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
+<time property="datePublished" datetime="2017-06-27T23:30:29+00:00">27 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/continuous-delivery-of-nested-aws-cloudformation-stacks-using-aws-codepipeline/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In <a href="https://aws.amazon.com/blogs/aws/codepipeline-update-build-continuous-delivery-workflows-for-cloudformation-stacks/" target="_blank" rel="noopener noreferrer">CodePipeline Update – Build Continuous Delivery Workflows for CloudFormation Stacks</a>, Jeff Barr discusses infrastructure as code and how to use <a href="https://aws.amazon.com/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline</a> for continuous delivery. In this blog post, I discuss the continuous delivery of nested CloudFormation stacks using AWS CodePipeline, with <a href="https://aws.amazon.com/codecommit/" target="_blank" rel="noopener noreferrer">AWS CodeCommit</a> as the source repository and <a href="https://aws.amazon.com/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild</a> as a build and <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/aws-codepipeline-adds-support-for-unit-testing/" target="_blank" rel="noopener noreferrer">testing tool</a>. I deploy the stacks using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html" target="_blank" rel="noopener noreferrer">CloudFormation change sets</a> following a <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/approvals.html" target="_blank" rel="noopener noreferrer">manual approval process</a>.</p> 
+<p>Here’s how to do it:</p> 
+<p>In AWS CodePipeline, create a pipeline with four stages:</p> 
+<li>Source (AWS CodeCommit)</li> 
+<li>Build and Test (AWS CodeBuild and AWS CloudFormation)</li> 
+<li>Staging (AWS CloudFormation and manual approval)</li> 
+<li>Production (AWS CloudFormation and manual approval)</li> 
+<p><span id="more-1238"></span></p> 
+<p>Pipeline stages, the actions in each stage, and transitions between stages are shown in the following diagram.</p> 
+<p><img class="alignnone wp-image-1244" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Pipeline_vertical_design-2-362x1024.png" alt="" width="400" height="1131" /></p> 
+<p>CloudFormation templates, test scripts, and the build specification are stored in AWS CodeCommit repositories. These files are used in the Source stage of the pipeline in AWS CodePipeline.</p> 
+<p>The <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-stack.html" target="_blank" rel="noopener noreferrer">AWS::CloudFormation::Stack</a> resource type is used to create child stacks from a master stack. The CloudFormation stack resource requires the templates of the child stacks to be stored in the S3 bucket. The location of the template file is provided as a URL in the properties section of the resource definition.</p> 
+<p>The following template creates three child stacks:</p> 
+<li>Security (IAM, security groups).</li> 
+<li>Database (an RDS instance).</li> 
+<li>Web stacks (EC2 instances in an Auto Scaling group, elastic load balancer).</li> 
+<pre><code class="lang-yaml">Description: Master stack which creates all required nested stacks
+Parameters:
+&nbsp; TemplatePath:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: S3Bucket Path where the templates are stored
+&nbsp; VPCID:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::VPC::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid VPC Id
+&nbsp; PrivateSubnet1:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ1
+&nbsp; PrivateSubnet2:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ2
+&nbsp; PublicSubnet1:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ1
+&nbsp; PublicSubnet2:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ2
+&nbsp; S3BucketName:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Name of the S3 bucket to allow access to the Web Server IAM Role.
+&nbsp; KeyPair:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::KeyPair::KeyName&quot;
+&nbsp; &nbsp; Description: Enter a valid KeyPair Name
+&nbsp; AMIId:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Image::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid AMI ID to launch the instance
+&nbsp; WebInstanceType:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter one of the possible instance type for web server
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - t2.large
+&nbsp; &nbsp; &nbsp; - m4.large
+&nbsp; &nbsp; &nbsp; - m4.xlarge
+&nbsp; &nbsp; &nbsp; - c4.large
+&nbsp; WebMinSize:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Minimum number of instances in auto scaling group
+&nbsp; WebMaxSize:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Maximum number of instances in auto scaling group
+&nbsp; DBSubnetGroup:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid DB Subnet Group
+&nbsp; DBUsername:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid Database master username
+&nbsp; &nbsp; MinLength: 1
+&nbsp; &nbsp; MaxLength: 16
+&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z][a-zA-Z0-9]*&quot;
+&nbsp; DBPassword:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid Database master password
+&nbsp; &nbsp; NoEcho: true
+&nbsp; &nbsp; MinLength: 1
+&nbsp; &nbsp; MaxLength: 41
+&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z0-9]*&quot;
+&nbsp; DBInstanceType:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter one of the possible instance type for database
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - db.t2.micro
+&nbsp; &nbsp; &nbsp; - db.t2.small
+&nbsp; &nbsp; &nbsp; - db.t2.medium
+&nbsp; &nbsp; &nbsp; - db.t2.large
+&nbsp; Environment:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Select the appropriate environment
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - dev
+&nbsp; &nbsp; &nbsp; - test
+&nbsp; &nbsp; &nbsp; - uat
+&nbsp; &nbsp; &nbsp; - prod
+Resources:
+&nbsp; SecurityStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/security-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; S3BucketName:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: S3BucketName
+&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: SecurityStack
+&nbsp; DatabaseStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/database-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; DBSubnetGroup:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBSubnetGroup
+&nbsp; &nbsp; &nbsp; &nbsp; DBUsername:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBUsername
+&nbsp; &nbsp; &nbsp; &nbsp; DBPassword:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBPassword
+&nbsp; &nbsp; &nbsp; &nbsp; DBServerSecurityGroup:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBServerSG
+&nbsp; &nbsp; &nbsp; &nbsp; DBInstanceType:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBInstanceType
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: &nbsp; DatabaseStack
+&nbsp; ServerStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/server-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
+&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet1:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet1
+&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet2:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet2
+&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet1:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet1
+&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet2:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet2
+&nbsp; &nbsp; &nbsp; &nbsp; KeyPair:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: KeyPair
+&nbsp; &nbsp; &nbsp; &nbsp; AMIId:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: AMIId
+&nbsp; &nbsp; &nbsp; &nbsp; WebSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebSG
+&nbsp; &nbsp; &nbsp; &nbsp; ELBSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.ELBSG
+&nbsp; &nbsp; &nbsp; &nbsp; DBClientSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBClientSG
+&nbsp; &nbsp; &nbsp; &nbsp; WebIAMProfile:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebIAMProfile
+&nbsp; &nbsp; &nbsp; &nbsp; WebInstanceType:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebInstanceType
+&nbsp; &nbsp; &nbsp; &nbsp; WebMinSize:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMinSize
+&nbsp; &nbsp; &nbsp; &nbsp; WebMaxSize:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMaxSize
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: ServerStack
+Outputs:
+&nbsp; WebELBURL:
+&nbsp; &nbsp; Description: &quot;URL endpoint of web ELB&quot;
+&nbsp; &nbsp; Value:
+&nbsp; &nbsp; &nbsp; Fn::GetAtt: ServerStack.Outputs.WebELBURL
+</code></pre> 
+<p>During the Validate stage, AWS CodeBuild checks for changes to the AWS CodeCommit source repositories. It uses the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ValidateTemplate.html" target="_blank" rel="noopener noreferrer">ValidateTemplate</a> API to validate the CloudFormation template and copies the child templates and configuration files to the appropriate location in the S3 bucket.</p> 
+<p>The following AWS CodeBuild build specification validates the CloudFormation templates listed under the TEMPLATE_FILES environment variable and copies them to the S3 bucket specified in the TEMPLATE_BUCKET environment variable in the AWS CodeBuild project. Optionally, you can use the TEMPLATE_PREFIX environment variable to specify a path inside the bucket. This updates the configuration files to use the location of the child template files. The location of the template files is provided as a parameter to the master stack.</p> 
+<pre><code class="lang-yaml">version: 0.1
+environment_variables:
+&nbsp; plaintext:
+&nbsp; &nbsp; CHILD_TEMPLATES: |
+&nbsp; &nbsp; &nbsp; security-stack.yml
+&nbsp; &nbsp; &nbsp; server-stack.yml
+&nbsp; &nbsp; &nbsp; database-stack.yml
+&nbsp; &nbsp; TEMPLATE_FILES: |
+&nbsp; &nbsp; &nbsp; master-stack.yml
+&nbsp; &nbsp; &nbsp; security-stack.yml
+&nbsp; &nbsp; &nbsp; server-stack.yml
+&nbsp; &nbsp; &nbsp; database-stack.yml
+&nbsp; &nbsp; CONFIG_FILES: |
+&nbsp; &nbsp; &nbsp; config-prod.json
+&nbsp; &nbsp; &nbsp; config-test.json
+&nbsp; &nbsp; &nbsp; config-uat.json
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; npm install jsonlint -g
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating CFN templates&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for cfn_template in $TEMPLATE_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CloudFormation template file $cfn_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws cloudformation validate-template --template-body file://$cfn_template
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CFN parameters config file $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; jsonlint -q $conf
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Copying child stack templates to S3&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for child_template in $CHILD_TEMPLATES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$child_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$TEMPLATE_PREFIX/$child_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; &nbsp; &nbsp; - echo &quot;Updating template configurtion files to use the appropriate values&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET\&quot; in $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET/&quot; $conf
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET/$TEMPLATE_PREFIX\&quot; in $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET\/$TEMPLATE_PREFIX/&quot; $conf
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
+&nbsp; &nbsp; &nbsp; &nbsp; done
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - master-stack.yml
+&nbsp; &nbsp; - config-*.json
+</code></pre> 
+<p>After the template files are copied to S3, CloudFormation creates a test stack and triggers AWS CodeBuild as a test action.</p> 
+<p>Then the AWS CodeBuild build specification executes <code class="lang-bash">validate-env.py</code>, the Python script used to determine whether resources created using the nested CloudFormation stacks conform to the specifications provided in the CONFIG_FILE.</p> 
+<pre><code class="lang-yaml">version: 0.1
+environment_variables:
+&nbsp; plaintext:
+&nbsp; &nbsp; CONFIG_FILE: env-details.yml
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - pip install --upgrade pip
+&nbsp; &nbsp; &nbsp; - pip install boto3 --upgrade
+&nbsp; &nbsp; &nbsp; - pip install pyyaml --upgrade
+&nbsp; &nbsp; &nbsp; - pip install yamllint --upgrade
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating config file $CONFIG_FILE&quot;
+&nbsp; &nbsp; &nbsp; - yamllint $CONFIG_FILE
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating resources...&quot;
+&nbsp; &nbsp; &nbsp; - python validate-env.py
+&nbsp; &nbsp; &nbsp; - exit $?</code></pre> 
+<p>Upon successful completion of the test action, CloudFormation deletes the test stack and proceeds to the UAT stage in the pipeline.</p> 
+<p>During this stage, CloudFormation creates a change set against the UAT stack and then executes the change set. This updates the UAT environment and makes it available for acceptance testing. The process continues to a manual approval action. After the QA team validates the UAT environment and provides an approval, the process moves to the Production stage in the pipeline.</p> 
+<p>During this stage, CloudFormation creates a change set for the nested production stack and the process continues to a manual approval step. Upon approval (usually by a designated executive), the change set is executed and the production deployment is completed.<br /> &nbsp;</p> 
+<h3>Setting up a continuous delivery pipeline</h3> 
+<p>&nbsp;<br /> I used a CloudFormation template to set up my continuous delivery pipeline. The <a href="https://github.com/awslabs/codepipeline-nested-cfn/blob/master/codepipeline-cfn-codebuild.yml" target="_blank" rel="noopener noreferrer">codepipeline-cfn-codebuild.yml</a> template, available from GitHub, sets up a full-featured pipeline.</p> 
+<p>When I use the template to create my pipeline, I specify the following:</p> 
+<li>AWS CodeCommit repositories.</li> 
+<li>SNS topics to send approval notifications.</li> 
+<li>S3 bucket name where the artifacts will be stored.</li> 
+<p><img class="alignnone size-full wp-image-1172" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Stack_Parameters.png" alt="" width="1894" height="802" /></p> 
+<p>The CFNTemplateRepoName points to the AWS CodeCommit repository where CloudFormation templates, configuration files, and build specification files are stored.</p> 
+<p>My repo contains following files:</p> 
+<p><img class="alignnone size-full wp-image-1173" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/RepoContent.png" alt="" width="2102" height="626" /></p> 
+<p>The continuous delivery pipeline is ready just seconds after clicking <strong>Create Stack</strong>. After it’s created, the pipeline executes each stage. Upon manual approvals for the UAT and Production stages, the pipeline successfully enables continuous delivery.</p> 
+<p><img class="alignnone size-full wp-image-1205" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/CodePipeline_Flow_1.png" alt="" width="400" height="1764" /><br /> &nbsp;</p> 
+<h3>Implementing a change in nested stack</h3> 
+<p>&nbsp;<br /> To make changes to a child stack in a nested stack (for example, to update a parameter value or add or change resources), update the master stack. The changes must be made in the appropriate template or configuration files and then checked in to the AWS CodeCommit repository. This triggers the following deployment process:</p> 
+<h3><img class="alignnone wp-image-1176 size-large" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/DeployChanges-517x1024.png" alt="" width="517" height="1024" /></h3> 
+<p>&nbsp;</p> 
+<h3>Conclusion</h3> 
+<p>&nbsp;<br /> In this post, I showed how you can use AWS CodePipeline, AWS CloudFormation, AWS CodeBuild, and a manual approval process to create a continuous delivery pipeline for both infrastructure as code and application deployment.</p> 
+<p>For more information about AWS CodePipeline, see the <a href="https://aws.amazon.com/documentation/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline documentation</a>. You can <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/getting-started-codepipeline.html" target="_blank" rel="noopener noreferrer">get started</a> in just a few clicks. All CloudFormation templates, AWS CodeBuild build specification files, and the Python script that performs the validation are available in <a href="https://github.com/awslabs/codepipeline-nested-cfn" target="_blank" rel="noopener noreferrer">codepipeline-nested-cfn</a> GitHub repository.</p> 
+<hr /> 
+<h3>About the author</h3> 
+<p>&nbsp;<br /> <strong><img class="alignleft wp-image-1260 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" alt="" width="150" height="150" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/cloudformation/" rel="tag">CloudFormation</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codebuild/" rel="tag">codebuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codecommit/" rel="tag">CodeCommit</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codedeploy/" rel="tag">CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codepipeline/" rel="tag">CodePipeline</a>, <a href="https://aws.amazon.com/blogs/devops/tag/continuous-delivery/" rel="tag">Continuous Delivery</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer – Part 2</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1292,149 +2129,6 @@ by
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/bluegreen/" rel="tag">Blue/Green</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codedeploy/" rel="tag">CodeDeploy</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Use Parameter Store to Securely Access Secrets and Config Data in AWS CodeDeploy</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chirag Dhull</span></span> | on 
-<time property="datePublished" datetime="2017-04-11T10:57:28+00:00">11 APR 2017</time> | 
-<a href="https://aws.amazon.com/blogs/devops/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS CodeDeploy is a service that automates code deployments to any instance, including Amazon EC2 instances and instances running on-premises. Many customers use AWS CodeDeploy to automate application deployment because it provides a uniform method for:<br /> • Updating applications across development, staging, and production environments.<br /> • Handling the complexity of updating applications and avoiding service downtime.</p> 
-<p>&nbsp;<br /> Visit this <a href="https://aws.amazon.com/blogs/mt/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/">post</a> on the management tools blog and learn how to simplify your AWS CodeDeploy workflows by using Parameter Store to store and reference a configuration secret.</p> 
-<footer> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Introducing Amazon CloudWatch Logs Integration for AWS OpsWorks Stacks</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Kai Rubarth</span></span> | on 
-<time property="datePublished" datetime="2017-04-10T11:59:44+00:00">10 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/new-stuff/" title="View all posts in New stuff"><span property="articleSection">New stuff</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/introducing-amazon-cloudwatch-logs-integration-for-aws-opsworks-stacks/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="http://aws.amazon.com/opsworks">AWS OpsWorks Stacks</a> now supports <a href="http://aws.amazon.com/cloudwatch">Amazon CloudWatch Logs</a>. This benefits all users who want to stream their log files from OpsWorks instances to CloudWatch. This enables you to take advantage of CloudWatch Logs features such as centralized log archival, real-time monitoring of log data, or generating CloudWatch alarms. Until now, OpsWorks customers had to manually install and configure the CloudWatch Logs agent on every instance they wanted to ship log data from. Now, with the built-in CloudWatch Logs integration these features are made available with just a few clicks across all instances in a layer.</p> 
-<p><span id="more-852"></span></p> 
-<p>The OpsWorks CloudWatch logs integration is compatible with all Chef 11 and Chef 12 Linux stacks. To get started, simply click the new <strong>CloudWatch Logs</strong> tab in your layer settings screen. OpsWorks agent command logs, which include Chef recipe output, are enabled by default; to enable logging for custom log files, simply input an absolute path or file pattern for every log file you want shipped.</p> 
-<p><img class="aligncenter wp-image-853 size-full" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/07/OpsWorks-CloudWatchLogs.png" alt="" width="957" height="351" /></p> 
-<p>It’s that simple. OpsWorks creates log groups and log streams for you, and starts streaming your system and application logs within a few minutes.</p> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/monitoring-cloudwatch-logs.html">Using Amazon CloudWatch Logs with AWS OpsWorks Stacks</a> in the <em>AWS OpsWorks User Guide</em>.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/new-stuff/" rel="tag">New stuff</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Using AWS Lambda and Amazon DynamoDB in an Automated Approach to Managing AWS CloudFormation Template Parameters and Mappings</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
-<time property="datePublished" datetime="2017-04-04T10:15:33+00:00">04 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/custom-lookup-using-aws-lambda-and-amazon-dynamodb/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> gives you an easy way to codify the creation and management of related AWS resources. The optional <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html">Mappings</a> and <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html">Parameters</a> sections of CloudFormation templates help you organize and parameterize your templates so you can quickly customize your stack. As organizations adopt Infrastructure as Code best practices, the number of mappings and parameters can quickly grow. In this blog post, we’ll discuss how <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> and <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> can be used to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
-<h3>Solution overview</h3> 
-<p>There are three parts to the solution described in this post. You’ll find sample code for this solution in this <a href="https://github.com/awslabs/custom-lookup-lambda">AWS Labs GitHub repository</a>.</p> 
-<ol> 
-<li><strong>DynamoDB table</strong>: Used as a central location to store and update all key-value pairs used in the ‘Mappings’ and ‘Parameters’ sections of the CloudFormation template. This could be a centralized table for the whole organization, with a partition key consisting of the team name and environment (for example, development, test, production) and a sort key for the application name. For more information about the types of keys supported by DynamoDB, see <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html#HowItWorks.CoreComponents.PrimaryKey">Core Components</a> in the Amazon DynamoDB Developer Guide.</li> 
-</ol> 
-<p>Here is the sample data in the table. “teamname-environment” is the partition key and “appname” is the sort key.</p> 
-<pre><code class="lang-json">{
-&quot;teamname-environment&quot;: &quot;team1-dev&quot;,
-&quot;appname&quot;: &quot;app1&quot;,
-&quot;mappings&quot;: {
-&quot;elbsubnet1&quot;: &quot;subnet-123456&quot;,
-&quot;elbsubnet2&quot;: &quot;subnet-234567&quot;,
-&quot;appsubnet1&quot;: &quot;subnet-345678&quot;,
-&quot;appsubnet2&quot;: &quot;subnet-456789&quot;,
-&quot;vpc&quot;: &quot;vpc-123456&quot;,
-&quot;appname&quot;:&quot;app1&quot;,
-&quot;costcenter&quot;:&quot;123456&quot;,
-&quot;teamname&quot;:&quot;team1&quot;,
-&quot;environment&quot;:&quot;dev&quot;,
-&quot;certificate&quot;:&quot;arn-123456qwertyasdfgh&quot;,
-&quot;compliancetype&quot;:&quot;pci&quot;,
-&quot;amiid&quot;:&quot;ami-123456&quot;,
-&quot;region&quot;:&quot;us-west-1&quot;,
-&quot;publichostedzoneid&quot;:&quot;Z234asdf1234asdf&quot;,
-&quot;privatehostedzoneid&quot;:&quot;Z345SDFGCVHD123&quot;,
-&quot;hostedzonename&quot;:&quot;demo.internal&quot;
-}
-}
-</code></pre> 
-<p><img class="alignleft size-full wp-image-824" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-3.43.48-PM.png" alt="" width="2394" height="474" /><br /> &nbsp;</p> 
-<ol start="2"> 
-<li><strong>Lambda function:</strong> Accepts the inputs of the primary keys, looks up the DynamoDB table, and returns all the key-value data.</li> 
-<li><strong>Custom lookup resource:</strong> Makes a call to the Lambda function, with the inputs of primary keys (accepted by the Lambda function) and retrieves the key-value data. All CloudFormation templates can duplicate this&nbsp;generic custom resource.</li> 
-</ol> 
-<p><img class="alignleft size-full wp-image-833" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/custom-lookup-workflow.png" alt="" width="974" height="507" /></p> 
-<p>&nbsp;</p> 
-<p>The diagram shows the interaction of services and resources in this solution.</p> 
-<ol> 
-<li>Users create a DynamoDB table and, using the DynamoDB console, AWS SDK, or AWS CLI, insert the mappings, parameters, and key-value data.</li> 
-<li>CloudFormation templates have a custom resource, which calls a Lambda function. The combination of team name and application environment (“teamname-environment”) is the partition key input. Application Name (“appname”) is the sort key input to the Lambda function.</li> 
-<li>The Lambda function queries the DynamoDB table based on the inputs.</li> 
-<li>DynamoDB responds to the Lambda function with the results.</li> 
-<li>The Lambda function responds to the custom resource in the CloudFormation stack, with the key-value data.</li> 
-<li>The key-value data retrieved by the custom resource is then used by other resources in the stack using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html">GetAtt Intrinsic function</a>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<b>Using the sample code</b> 
-<p>To use the sample code for this solution, follow these steps:</p> 
-<ol> 
-<li>Clone the repository.</li> 
-</ol> 
-<pre><code class="lang-bash">git clone https://github.com/awslabs/custom-lookup-lambda.git
-cd custom-lookup-lambda
-</code></pre> 
-<ol start="2"> 
-<li>The values in the sample-mappings.json file will be inserted into DynamoDB. Each record in sample-mappings.json corresponds to an item in DynamoDB. The mappings object contains the mapping.</li> 
-<li>This solution uses Python as a <a href="http://docs.aws.amazon.com/lambda/latest/dg/python-programming-model-handler-types.html">programming model</a> for AWS Lambda. If you haven’t set up your local development environment for Python, follow <a href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/create-deploy-python-common-steps.html#python-common-setup-venv">these steps</a>, and then install the <a href="https://pypi.python.org/pypi/awscli/1.11.63">awscli python package</a>.</li> 
-</ol> 
-<pre><code class="lang-bash">pip install awscli
-</code></pre> 
-<ol start="4"> 
-<li>To prepare your access keys or assume-role to make calls to AWS, configure the AWS Command Line Interface as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>. The IAM user or the assumed role used to make API calls must have, at minimum, <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this access</a>. You can attach <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this policy</a> to the IAM user or IAM group if you are using access keys, or to the IAM role if you are assuming a role. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-using.html#attach-managed-policy-console">Attaching Managed Policies</a> in the IAM User Guide.</li> 
-<li>Run insertrecord.sh to create the DynamoDB table named custom-lookup and insert the items in sample-mappings.json.</li> 
-</ol> 
-<pre><code class="lang-bash">./insertrecord.sh</code></pre> 
-<p>This script does the following:</p> 
-<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
-<li>Executes the Python script to create the DynamoDB table (custom-lookup) and puts the data in sample-mappings.json.</li> 
-<ol start="6"> 
-<li>Run deployer.sh to package and create the Lambda function.</li> 
-</ol> 
-<pre><code class="lang-bash">./deployer.sh</code></pre> 
-<p>This script does the following:</p> 
-<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
-<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html">CloudFormation package cli</a> to package the Lambda function (as coded in lambda-cloudformation.yaml).</li> 
-<li>Uploads the packaged code to the S3 bucket (as prompted when you execute this script).</li> 
-<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html">CloudFormation deploy cli </a>to deploy the Lambda function. lambda-cloudformation.yaml also <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html">exports</a> the Lambda function’s<a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html"> Amazon Resource Name (ARN)</a> using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-lambda-function.html#w1ab2c19c12d587c13">GetAtt intrinsic function</a>, which can be <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html">imported</a> by other stacks.</li> 
-<ol start="7"> 
-<li>Using sample-stack.yaml, create a stack that makes a call to the Lambda function created in step 6. The function queries the DynamoDB table and produces as output the values corresponding to team1-dev and app1.</li> 
-</ol> 
-<pre><code class="lang-bash">aws cloudformation deploy --template-file sample-stack.yaml --stack-name sample-stack
-</code></pre> 
-<ol start="8"> 
-<li>Examine the output in the AWS CloudFormation console. You should see the values retrieved from the DynamoDB table. The Fn::GetAtt function allows you to use the values retrieved by the custom resource Lambda function.</li> 
-</ol> 
-<p>For example, if the custom resource Lambda function is called using resource name as CUSTOMLOOKUP in the sample-stack, the value of key=amiid will be used in the stack using !GetAtt CUSTOMLOOKUP.amiid. Likewise, the value of key=vpc will be used in the stack using !GetAtt CUSTOMLOOKUP.vpc and so on.</p> 
-<p><img class="alignleft size-full wp-image-834" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-2.53.28-PM.png" alt="" width="1364" height="580" /></p> 
-<b>Conclusion</b> 
-<p>In this blog post, we showed how to use an AWS CloudFormation custom resource backed by an AWS Lambda function to query Amazon DynamoDB to retrieve key-value data, thereby replacing the Mappings and Parameter sections of the CloudFormation template. This solution provides a more automated approach to managing template parameters and mappings. You can use the DynamoDB table to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/cloudformation/" rel="tag">CloudFormation</a></span> 
 </footer> 
 </article> 
 <p>
