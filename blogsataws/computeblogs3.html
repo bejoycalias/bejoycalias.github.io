@@ -191,6 +191,251 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Automate Your IT Operations Using AWS Step Functions and Amazon CloudWatch Events</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-09-14T11:29:33+00:00">14 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-personal-health-dashboard/" title="View all posts in AWS Personal Health Dashboard*"><span property="articleSection">AWS Personal Health Dashboard*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2832" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2832&amp;disqus_title=Automate+Your+IT+Operations+Using+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2832');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg" alt="" width="119" height="160" class="alignnone size-full wp-image-2834" /></a><br /> <strong>Rob Percival, Associate Solutions Architect</strong></p> 
+<p>Are you interested in reducing the operational overhead of your AWS Cloud infrastructure? One way to achieve this is to automate the response to operational events for resources in your AWS account.</p> 
+<p><a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-track-and-respond-to-changes-to-your-aws-resources/">Amazon CloudWatch Events</a> provides a near real-time stream of system events that describe the changes and notifications for your AWS resources. From this stream, you can create rules to route specific events to <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a>, <a href="https://aws.amazon.com/lambda/">AWS Lambda</a>, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">other AWS services</a> for further processing and automated actions.</p> 
+<p>In this post, learn how you can use Step Functions to orchestrate <a href="https://aws.amazon.com/serverless/">serverless</a> IT automation workflows in response to CloudWatch events sourced from <a href="http://docs.aws.amazon.com/health/latest/ug/what-is-aws-health.html">AWS Health</a>, a service that monitors and generates events for your AWS resources. As a real-world example, I show automating the response to a scenario where an <a href="https://aws.amazon.com/iam/">IAM</a> user <a href="http://docs.aws.amazon.com/general/latest/gr/aws-sec-cred-types.html#access-keys-and-secret-access-keys">access key</a> has been exposed.</p> 
+<b id="toc_0">Serverless workflows with Step Functions and Lambda</b> 
+<p>Step Functions makes it easy to develop and orchestrate components of operational response automation using visual workflows. Building automation workflows from individual Lambda functions that perform discrete tasks lets you develop, test, and modify the components of your workflow quickly and seamlessly. As serverless services, Step Functions and Lambda also provide the benefits of more productive development, reduced operational overhead, and no costs incurred outside of when the workflows are actively executing.</p> 
+<b id="toc_1">Example workflow</b> 
+<p>As an example, this post focuses on automating the response to an event generated by AWS Health when an IAM access key has been publicly exposed on GitHub. This is a diagram of the automation workflow:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEArch.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEArch.png" alt="" width="975" height="515" class="aligncenter size-full wp-image-2837" /></a></p> 
+<p>AWS proactively monitors popular code repository sites for IAM access keys that have been publicly exposed. Upon detection of an exposed IAM access key, AWS Health generates an AWS_RISK_CREDENTIALS_EXPOSED event in the AWS account related to the exposed key. A configured CloudWatch Events rule detects this event and invokes a Step Functions state machine. The state machine then orchestrates the automated workflow that deletes the exposed IAM access key, summarizes the recent API activity for the exposed key, and sends the summary message to an Amazon SNS topic to notify the subscribers―in that order.</p> 
+<p>The corresponding Step Functions state machine diagram of this automation workflow can be seen below:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEStateMachine.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEStateMachine.png" alt="" width="513" height="509" class="aligncenter size-full wp-image-2838" /></a></p> 
+<p>While this particular example focuses on IT automation workflows in response to the AWS_RISK_CREDENTIALS_EXPOSEDevent sourced from AWS Health, it can be generalized to integrate with other events from these services, <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/EventTypes.html">other event-generating AWS services</a>, and even <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html">run on a time-based schedule</a>.</p> 
+<b id="toc_2">Walkthrough</b> 
+<p>To follow along, use the code and resources found in the <a href="https://github.com/aws/aws-health-tools/tree/master/automated-actions/AWS_RISK_CREDENTIALS_EXPOSED">aws-health-tools</a> GitHub repo. The code and resources include an <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> template, in addition to instructions on how to use it.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=AWSHealthCredsExposed&amp;templateURL=https://s3.amazonaws.com/aws-health-tools-assets/cloudformation-templates/risk_credentials_exposed.output.yaml"><img src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" alt="Launch Stack into N. Virginia with CloudFormation" style="max-width:100%" /></a></p> 
+<p>The Step Functions state machine execution starts with the exposed keys event details in JSON, a sanitized example of which is provided below:</p> 
+<pre><code class="language-json">{
+&quot;version&quot;: &quot;0&quot;,
+&quot;id&quot;: &quot;121345678-1234-1234-1234-123456789012&quot;,
+&quot;detail-type&quot;: &quot;AWS Health Event&quot;,
+&quot;source&quot;: &quot;aws.health&quot;,
+&quot;account&quot;: &quot;123456789012&quot;,
+&quot;time&quot;: &quot;2016-06-05T06:27:57Z&quot;,
+&quot;region&quot;: &quot;us-east-1&quot;,
+&quot;resources&quot;: [],
+&quot;detail&quot;: {
+&quot;eventArn&quot;: &quot;arn:aws:health:us-east-1::event/AWS_RISK_CREDENTIALS_EXPOSED_XXXXXXXXXXXXXXXXX&quot;,
+&quot;service&quot;: &quot;RISK&quot;,
+&quot;eventTypeCode&quot;: &quot;AWS_RISK_CREDENTIALS_EXPOSED&quot;,
+&quot;eventTypeCategory&quot;: &quot;issue&quot;,
+&quot;startTime&quot;: &quot;Sat, 05 Jun 2016 15:10:09 GMT&quot;,
+&quot;eventDescription&quot;: [
+{
+&quot;language&quot;: &quot;en_US&quot;,
+&quot;latestDescription&quot;: &quot;A description of the event is provided here&quot;
+}
+],
+&quot;affectedEntities&quot;: [
+{
+&quot;entityValue&quot;: &quot;ACCESS_KEY_ID_HERE&quot;
+}
+]
+}
+}</code></pre> 
+<p>After it's invoked, the state machine execution proceeds as follows.</p> 
+<b id="toc_3">Step 1: Delete the exposed IAM access key pair</b> 
+<p>The first thing you want to do when you determine that an IAM access key has been exposed is to delete the key pair so that it can no longer be used to make API calls. This Step Functions <em>task</em> state deletes the exposed access key pair detailed in the incoming event, and retrieves the IAM user associated with the key to look up API activity for the user in the next step. The user name, access key, and other details about the event are passed to the next step as JSON.</p> 
+<p>This state contains a powerful error-handling feature offered by Step Functions <em>task</em> states called a <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-errors.html#amazon-states-language-fallback-states"><em>catch</em> configuration</a>. Catch configurations allow you to reroute and continue state machine invocation at new states depending on potential errors that occur in your <em>task</em> function. In this case, the <em>catch</em> configuration skips to Step 3. It immediately notifies your security team that errors were raised in the <em>task</em> function of this step (Step 1), when attempting to look up the corresponding IAM user for a key or delete the user's access key.</p> 
+<p><strong>Note:</strong> Step Functions also offers a <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-errors.html#amazon-states-language-retrying-after-error"><em>retry</em> configuration</a> for when you would rather retry a <em>task</em> function that failed due to error, with the option to specify an increasing time interval between attempts and a maximum number of attempts.</p> 
+<b id="toc_4">Step 2: Summarize recent API activity for key</b> 
+<p>After you have deleted the access key pair, you'll want to have some immediate insight into whether it was used for malicious activity in your account. Another <em>task</em> state, this step uses <a href="https://aws.amazon.com/cloudtrail/">AWS CloudTrail</a> to look up and summarize the most recent API activity for the IAM user associated with the exposed key. The summary is in the form of counts for each API call made and resource type and name affected. This summary information is then passed to the next step as JSON. This step requires information that you obtained in Step 1. Step Functions ensures the successful completion of Step 1 before moving to Step 2.</p> 
+<b id="toc_5">Step 3: Notify security</b> 
+<p>The summary information gathered in the last step can provide immediate insight into any malicious activity on your account made by the exposed key. To determine this and further secure your account if necessary, you must notify your security team with the gathered summary information.</p> 
+<p>This final <em>task</em> state generates an email message providing in-depth detail about the event using the API activity summary, and publishes the message to an SNS topic subscribed to by the members of your security team.</p> 
+<p>If the <em>catch</em> configuration of the <em>task</em> state in Step 1 was triggered, then the security notification email instead directs your security team to log in to the console and navigate to the <a href="http://docs.aws.amazon.com/health/latest/ug/getting-started-phd.html">Personal Health Dashboard</a> to view more details on the incident.</p> 
+<b id="toc_6">Lessons learned</b> 
+<p>When implementing this use case with Step Functions and Lambda, consider the following:</p> 
+<li>One of the most important parts of implementing automation in response to operational events is to ensure visibility into the response and resolution actions is retained. Step Functions and Lambda enable you to orchestrate your granular response and resolution actions that provides direct visibility into the state of the automation workflow.</li> 
+<li>This basic workflow currently executes these steps serially with a <em>catch</em> configuration for error handling. More sophisticated workflows can leverage the <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-parallel-state.html">parallel execution</a>, <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html">branching logic</a>, and <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-wait-state.html">time delay</a> functionality provided by Step Functions.</li> 
+<li>Catch and retry configurations for task states allow for orchestrating reliable workflows while maintaining the granularity of each Lambda function. Without leveraging a catch configuration in Step 1, you would have had to duplicate code from the function in Step 3 to ensure that your security team was notified on failure to delete the access key.</li> 
+<li>Step Functions and Lambda are serverless services, so there is no cost for these services when they are not running. Because this IT automation workflow only runs when an IAM access key is exposed for this account (which is hopefully rare!), the total monthly cost for this workflow is essentially $0.</li> 
+<b id="toc_7">Conclusion</b> 
+<p>Automating the response to operational events for resources in your AWS account can free up the valuable time of your engineers. Step Functions and Lambda enable granular IT automation workflows to achieve this result while gaining direct visibility into the orchestration and state of the automation.</p> 
+<p>For more examples of how to use Step Functions to automate the operations of your AWS resources, or if you'd like to see how Step Functions can be used to build and orchestrate serverless applications, visit <a href="https://aws.amazon.com/step-functions/getting-started/">Getting Started</a> on the <a href="https://aws.amazon.com/step-functions">Step Functions</a> website.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a>, <a href="https://aws.amazon.com/blogs/compute/tag/iam/" rel="tag">IAM</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2832');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Manage Kubernetes Clusters on AWS Using CoreOS Tectonic</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Arun Gupta</span></span> | on 
+<time property="datePublished" datetime="2017-09-13T12:44:55+00:00">13 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-coreos-tectonic/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2819" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2819&amp;disqus_title=Manage+Kubernetes+Clusters+on+AWS+Using+CoreOS+Tectonic&amp;disqus_url=https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-coreos-tectonic/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2819');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>There are multiple ways to run a&nbsp;<a href="https://github.com/kubernetes/community/blob/master/sig-aws/kubernetes-on-aws.md">Kubernetes cluster on Amazon Web Services</a> (AWS).&nbsp;The <a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/">first post</a> in this series explained how to manage a Kubernetes cluster on AWS using <a href="https://github.com/kubernetes/kops">kops</a>. This second post explains how to manage a Kubernetes cluster on AWS using <a href="https://coreos.com/tectonic/">CoreOS Tectonic</a>.</p> 
+<b>Tectonic overview</b> 
+<p>Tectonic delivers the most current upstream version of Kubernetes with additional features. It is a commercial offering from CoreOS and adds the following features over the upstream:</p> 
+<li><strong>Installer</strong><br /> Comes with a graphical installer that installs a highly available Kubernetes cluster. Alternatively, the cluster can be installed using AWS CloudFormation templates or Terraform scripts.</li> 
+<li><strong>Operators</strong><br /> An <a href="https://coreos.com/operators">operator</a> is an application-specific controller that extends the Kubernetes API to create, configure, and manage instances of complex stateful applications on behalf of a Kubernetes user. This release includes an <a href="https://coreos.com/blog/introducing-the-etcd-operator.html">etcd operator</a> for rolling upgrades and a Prometheus operator for monitoring capabilities.</li> 
+<li><strong>Console</strong><br /> A web console provides a full view of applications running in the cluster. It also allows you to deploy applications to the cluster and start the rolling upgrade of the cluster.</li> 
+<li><strong>Monitoring</strong><br /> Node CPU and memory metrics are powered by the Prometheus operator. The graphs are available in the console. A large set of preconfigured Prometheus alerts are also available.</li> 
+<li><strong>Security</strong><br /> Tectonic ensures that cluster is always up to date with the most recent patches/fixes. Tectonic clusters also enable role-based access control (RBAC). Different roles can be mapped to an LDAP service.</li> 
+<li><strong>Support</strong><br /> CoreOS provides commercial support for clusters created using Tectonic.</li> 
+<p>Tectonic can be installed on AWS using a <a href="https://coreos.com/tectonic/docs/latest/install/aws/index.html">GUI installer</a>&nbsp;or <a href="https://coreos.com/tectonic/docs/latest/install/aws/aws-terraform.html">Terraform</a> scripts. The installer prompts you for the information needed to boot the Kubernetes cluster, such as AWS access and secret key, number of master and worker nodes, and instance size for the master and worker nodes. The cluster can be created after all the options are specified. Alternatively, Terraform assets can be downloaded and the cluster can be created later. This post shows using the installer.</p> 
+<b>CoreOS License and Pull Secret</b> 
+<p>Even though Tectonic is a commercial offering, a cluster for up to 10 nodes can be created by creating a free account at <a href="https://account.coreos.com/signup/summary/tectonic-2016-12">Get Tectonic for Kubernetes</a>. After signup, a CoreOS License and Pull Secret files are provided on your <a href="http://account.coreos.com/">CoreOS account page</a>. Download these files as they are needed by the installer to boot the cluster.</p> 
+<b>IAM user permission</b> 
+<p>The IAM user to create the Kubernetes cluster must have access to the following services and features:</p> 
+<li>Amazon Route 53</li> 
+<li>Amazon EC2</li> 
+<li>Elastic Load Balancing</li> 
+<li>Amazon S3</li> 
+<li>Amazon VPC</li> 
+<li>Security groups</li> 
+<p>Use the <a href="https://coreos.com/tectonic/docs/latest/files/aws-policy.json">aws-policy</a> policy to grant the required permissions for the IAM user.</p> 
+<b>DNS configuration</b> 
+<p>A subdomain is required to create the cluster, and it must be registered as a public Route 53 hosted zone. The zone is used to host and expose the console web application. It is also used as the static namespace for the Kubernetes API server. This allows <code>kubectl</code> to be able to talk directly with the master.</p> 
+<p>The domain may be registered using Route 53. Alternatively, a domain may be registered at a third-party registrar. This post uses a&nbsp;<code>kubernetes-aws.io</code> domain registered at a third-party registrar and a <code>tectonic</code> subdomain within it.</p> 
+<p>Generate a Route 53 hosted zone using the <a href="https://aws.amazon.com/cli">AWS CLI</a>. Download&nbsp;<a href="https://github.com/stedolan/jq/wiki/Installation">jq</a>&nbsp;to run this command:</p> 
+<pre>ID=$(uuidgen) &amp;&amp; \
+aws route53 create-hosted-zone \
+--name tectonic.kubernetes-aws.io \
+--caller-reference $ID \
+| jq .DelegationSet.NameServers</pre> 
+<p>The command shows an output such as the following:</p> 
+<pre>[
+&quot;ns-1924.awsdns-48.co.uk&quot;,
+&quot;ns-501.awsdns-62.com&quot;,
+&quot;ns-1259.awsdns-29.org&quot;,
+&quot;ns-749.awsdns-29.net&quot;
+]</pre> 
+<p>Create NS records for the domain with your registrar.&nbsp;Make sure that the NS records can be resolved using a utility like <a href="https://www.digwebinterface.com/">dig web interface</a>. A sample output would look like the following:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-1.png"><img class="alignnone wp-image-2821" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-1.png" alt="" width="567" height="374" /></a></p> 
+<p>The bottom of the screenshot shows NS records configured for the subdomain.</p> 
+<b>Download and run the Tectonic installer</b> 
+<p>Download the <a href="https://releases.tectonic.com/tectonic-1.7.1-tectonic.1.tar.gz">Tectonic installer</a>&nbsp;(version 1.7.1) and extract it. The latest installer can always be found at <a href="https://coreos.com/tectonic">coreos.com/tectonic</a>. Start the installer:</p> 
+<pre>./tectonic/tectonic-installer/$PLATFORM/installer</pre> 
+<p>Replace <code>$PLATFORM</code> with either <code>darwin</code> or <code>linux</code>. The installer opens your default browser and prompts you to select the cloud provider. Choose Amazon Web Services as the platform. Choose <b>Next Step</b>.</p> 
+<p>Specify the Access Key ID and Secret Access Key for the IAM role that you created earlier. This allows the installer to create resources required for the Kubernetes cluster. This also gives the installer full access to your AWS account. Alternatively, to protect the integrity of your main AWS credentials, use a temporary session token to generate temporary credentials.</p> 
+<p>You also need to choose a region in which to install the cluster. For the purpose of this post, I chose a region close to where I live, Northern California. Choose <b>Next Step</b>.</p> 
+<p>Give your cluster a name. This name is part of the static namespace for the master and the address of the console.</p> 
+<p>To enable in-place update to the Kubernetes cluster, select the checkbox next to <b>Automated Updates</b>. It also enables update to the etcd and Prometheus operators. This feature may become a default in future releases.</p> 
+<p>Choose <b>Upload “tectonic-license.txt”</b> and upload the previously downloaded license file.</p> 
+<p>Choose <b>Upload “config.json”</b> and upload the previously downloaded pull secret file. Choose <b>Next Step</b>.</p> 
+<p>Let the installer generate a CA certificate and key. In this case, the browser may not recognize this certificate, which I discuss later in the post. Alternatively, you can provide a CA certificate and a key in PEM format issued by an authorized certificate authority. Choose Next Step.</p> 
+<p>Use the SSH key for the region specified earlier. You also have an option to generate a new key. This allows you to later connect using SSH into the Amazon EC2 instances provisioned by the cluster. Here is the command that can be used to log in:</p> 
+<pre>ssh –i &lt;key&gt; core@&lt;ec2-instance-ip&gt;</pre> 
+<p>Choose <b>Next Step</b>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-2.png"><img class="alignnone wp-image-2822" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/13/tectonic-k8s-2.png" alt="" width="612" height="512" /></a></p> 
+<p>Define the number and instance type of master and worker nodes. In this case, create a 6 nodes cluster. Make sure that the worker nodes have enough processing power and memory to run the containers.</p> 
+<p>An etcd cluster is used as persistent storage for all of Kubernetes API objects. This cluster is required for the Kubernetes cluster to operate. There are three ways to use the etcd cluster as part of the Tectonic installer:</p> 
+<li>(Default) Provision the cluster using EC2 instances. Additional EC2 instances are used in this case.</li> 
+<li>Use an alpha support for cluster provisioning using the etcd operator. The etcd operator is used for automated operations of the etcd master nodes for the cluster itself, in addition to for etcd instances that are created for application usage. The etcd cluster is provisioned within the Tectonic installer.</li> 
+<li>Bring your own pre-provisioned etcd cluster.</li> 
+<p>Use the first option in this case.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-3.png"><img class="alignnone wp-image-2823" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-3.png" alt="" width="550" height="645" /></a></p> 
+<p>For more information about choosing the appropriate instance type, see the <a href="https://coreos.com/etcd/docs/latest/op-guide/hardware.html">etcd hardware recommendation</a>. Choose <strong>Next Step</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-4.png"><img class="alignnone wp-image-2824" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-4.png" alt="" width="549" height="478" /></a></p> 
+<p>Specify the networking options. The installer can create a new public VPC or use a pre-existing public or private VPC. Make sure that the <a href="https://coreos.com/tectonic/docs/latest/install/aws/requirements.html#subnetvpc-requirements">VPC requirements</a> are met for an existing VPC.</p> 
+<p>Give a DNS name for the cluster. Choose the domain for which the Route 53 hosted zone was configured earlier, such as <code>tectonic.kubernetes-aws.io</code>. Multiple clusters may be created under a single domain. The cluster name and the DNS name would typically match each other.</p> 
+<p>To select the CIDR range, choose <strong>Show Advanced Settings</strong>. You can also choose the Availability Zones for the master and worker nodes. By default, the master and worker nodes are spread across multiple Availability Zones in the chosen region. This makes the cluster highly available.</p> 
+<p>Leave the other values as default. Choose <strong>Next Step</strong>.</p> 
+<p>Specify an email address and password to be used as credentials to log in to the console. Choose <strong>Next Step</strong>.</p> 
+<p>At any point during the installation, you can choose <strong>Save progress</strong>. This allows you to save configurations specified in the installer. This configuration file can then be used to restore progress in the installer at a later point.</p> 
+<p>To start the cluster installation, choose <strong>Submit</strong>. At another time, you can download the Terraform assets by choosing <strong>Manually boot</strong>. This allows you to boot the cluster later.</p> 
+<p>The logs from the Terraform scripts are shown in the installer. When the installation is complete, the console shows that the Terraform scripts were successfully applied, the domain name was resolved successfully, and that the console has started. The domain works successfully if the DNS resolution worked earlier, and it’s the address where the console is accessible.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-5.png"><img class="alignnone wp-image-2825" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-5.png" alt="" width="575" height="595" /></a></p> 
+<p>Choose <strong>Download assets</strong> to download assets related to your cluster. It contains your generated CA, kubectl configuration file, and the Terraform state. This download is an important step as it allows you to delete the cluster later.</p> 
+<p>Choose <strong>Next Step</strong> for the final installation screen. It allows you to access the Tectonic console, gives you instructions about how to configure <code>kubectl</code> to manage this cluster, and finally deploys an application using <code>kubectl</code>.</p> 
+<p>Choose <strong>Go to my Tectonic Console</strong>. In our case, it is also accessible at <code>http://cluster.tectonic.kubernetes-aws.io/</code>.</p> 
+<p>As I mentioned earlier, the browser does not recognize the self-generated CA certificate. Choose <strong>Advanced</strong> and connect to the console. Enter the login credentials specified earlier in the installer and choose <strong>Login</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-6.png"><img class="alignnone wp-image-2826" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-6.png" alt="" width="586" height="340" /></a></p> 
+<p>The Kubernetes upstream and console version are shown under <strong>Software Details</strong>. Cluster health shows <strong>All systems go</strong> and it means that the API server and the backend API can be reached.</p> 
+<p>To view different Kubernetes resources in the cluster choose, the resource in the left navigation bar. For example, all deployments can be seen by choosing <strong>Deployments</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-7.png"><img class="alignnone wp-image-2827" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-7.png" alt="" width="591" height="337" /></a></p> 
+<p>By default, resources in the <code>all</code> namespace are shown. Other namespaces may be chosen by clicking on a menu item on the top of the screen. Different administration tasks such as managing the namespaces, getting list of the nodes and RBAC can be configured as well.</p> 
+<b>Download and run Kubectl</b> 
+<p>Kubectl is required to manage the Kubernetes cluster. The latest version of kubectl can be downloaded using the following command:</p> 
+<pre>curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/darwin/amd64/kubectl</pre> 
+<p>It can also be conveniently installed using the <a href="https://brew.sh/">Homebrew package manager</a>. To find and access a cluster, Kubectl needs a kubeconfig file. By default, this configuration file is at <code>~/.kube/config</code>. This file is created when a Kubernetes cluster is created from your machine. However, in this case, download this file from the console.</p> 
+<p>In the console, choose <strong>admin</strong>, <strong>My Account</strong>, <strong>Download Configuration</strong> and follow the steps to download the kubectl configuration file. Move this file to <code>~/.kube/config</code>. If kubectl has already been used on your machine before, then this file already exists. Make sure to take a backup of that file first.</p> 
+<p>Now you can run the commands to view the list of deployments:</p> 
+<pre>~ $ kubectl get deployments --all-namespaces
+NAMESPACE         NAME                                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+kube-system       etcd-operator                           1         1         1            1           43m
+kube-system       heapster                                1         1         1            1           40m
+kube-system       kube-controller-manager                 3         3         3            3           43m
+kube-system       kube-dns                                1         1         1            1           43m
+kube-system       kube-scheduler                          3         3         3            3           43m
+tectonic-system   container-linux-update-operator         1         1         1            1           40m
+tectonic-system   default-http-backend                    1         1         1            1           40m
+tectonic-system   kube-state-metrics                      1         1         1            1           40m
+tectonic-system   kube-version-operator                   1         1         1            1           40m
+tectonic-system   prometheus-operator                     1         1         1            1           40m
+tectonic-system   tectonic-channel-operator               1         1         1            1           40m
+tectonic-system   tectonic-console                        2         2         2            2           40m
+tectonic-system   tectonic-identity                       2         2         2            2           40m
+tectonic-system   tectonic-ingress-controller             1         1         1            1           40m
+tectonic-system   tectonic-monitoring-auth-alertmanager   1         1         1            1           40m
+tectonic-system   tectonic-monitoring-auth-prometheus     1         1         1            1           40m
+tectonic-system   tectonic-prometheus-operator            1         1         1            1           40m
+tectonic-system   tectonic-stats-emitter                  1         1         1            1           40m</pre> 
+<p>This output is similar to the one shown in the console earlier. Now, this <code>kubectl</code> can be used to manage your resources.</p> 
+<b>Upgrade the Kubernetes cluster</b> 
+<p>Tectonic allows the in-place upgrade of the cluster. This is an experimental feature as of this release. The clusters can be updated either automatically, or with manual approval.</p> 
+<p>To perform the update, choose <strong>Administration</strong>, <strong>Cluster Settings</strong>. If an earlier Tectonic installer, version 1.6.2 in this case, is used to install the cluster, then this screen would look like the following:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-8.png"><img class="alignnone wp-image-2828" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-8.png" alt="" width="591" height="325" /></a></p> 
+<p>Choose <strong>Check for Updates</strong>. If any updates are available, choose <strong>Start Upgrade</strong>. After the upgrade is completed, the screen is refreshed.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-9.png"><img class="alignnone wp-image-2829" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/tectonic-k8s-9.png" alt="" width="586" height="527" /></a></p> 
+<p>This is an experimental feature in this release and so should only be used on clusters that can be easily replaced. This feature may become a fully supported in a future release. For more information about the upgrade process, see <a href="https://coreos.com/tectonic/docs/latest/admin/upgrade.html">Upgrading Tectonic &amp; Kubernetes</a>.</p> 
+<b>Delete the Kubernetes cluster</b> 
+<p>Typically, the Kubernetes cluster is a long-running cluster to serve your applications. After its purpose is served, you may delete it. It is important to delete the cluster as this ensures that all resources created by the cluster are appropriately cleaned up.</p> 
+<p>The easiest way to delete the cluster is using the assets downloaded in the last step of the installer. Extract the downloaded zip file. This creates a directory like <code>&lt;cluster-name&gt;_TIMESTAMP</code>. In that directory, give the following command to delete the cluster:</p> 
+<pre>TERRAFORM_CONFIG=$(pwd)/.terraformrc terraform destroy --force</pre> 
+<p>This destroys the cluster and all associated resources.</p> 
+<p>You may have forgotten to download the assets. There is a copy of the assets in the directory <code>tectonic/tectonic-installer/darwin/clusters</code>. In this directory, another directory with the name <code>&lt;cluster-name&gt;_TIMESTAMP</code> contains your assets.</p> 
+<b>Conclusion</b> 
+<p>This post explained how to manage Kubernetes clusters using the CoreOS Tectonic graphical installer. &nbsp;For more details, see <a href="https://coreos.com/tectonic/docs/latest/install/aws/index.html">Graphical Installer with AWS</a>. If the installation does not succeed, see the helpful <a href="https://coreos.com/tectonic/docs/latest/install/aws/troubleshooting.html">Troubleshooting tips</a>. After the cluster is created, see the <a href="https://coreos.com/tectonic/docs/latest/tutorials/index.html">Tectonic tutorials</a> to learn how to deploy, scale, version, and delete an application.</p> 
+<p>Future posts in this series will explain other ways of creating and running a Kubernetes cluster on AWS.</p> 
+<p>—<a href="https://twitter.com/arungupta">Arun</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/coreos/" rel="tag">coreos</a>, <a href="https://aws.amazon.com/blogs/compute/tag/kubernetes/" rel="tag">Kubernetes</a>, <a href="https://aws.amazon.com/blogs/compute/tag/tectonic/" rel="tag">tectonic</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2819');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Delivering Graphics Apps with Amazon AppStream 2.0</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1636,278 +1881,6 @@ xsi:schemaLocation=&quot;http://maven.apache.org/POM/4.0.0 http://maven.apache.o
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2489');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Manage Kubernetes Clusters on AWS Using Kops</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Arun Gupta</span></span> | on 
-<time property="datePublished" datetime="2017-07-06T13:52:28+00:00">06 JUL 2017</time> | 
-<a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2475" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2475&amp;disqus_title=Manage+Kubernetes+Clusters+on+AWS+Using+Kops&amp;disqus_url=https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2475');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Any containerized application typically consists of multiple containers. There are containers for the application itself, a database, possibly a web server, and so on. During development, it’s normal to build and test this multi-container application on a single host. This approach works fine during early dev and test cycles but becomes a single point of failure for production, when application availability is critical.</p> 
-<p>In such cases, a multi-container application can be deployed on multiple hosts. Customers may need an external tool to manage such multi-container, multi-host deployments. Container orchestration frameworks provides the capability of cluster management, scheduling containers on different hosts, service discovery and load balancing, crash recovery, and other related functionalities. There are multiple options for container orchestration on Amazon Web Services: <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>, <a href="https://docs.docker.com/docker-for-aws/">Docker for AWS</a>, and <a href="https://dcos.io/">DC/OS</a>.</p> 
-<p>Another popular option for container orchestration on AWS is <a href="https://kubernetes.io/">Kubernetes</a>. There are multiple ways to run a <a href="https://github.com/kubernetes/community/blob/master/sig-aws/kubernetes-on-aws.md">Kubernetes cluster on AWS</a>. This multi-part blog series provides a brief overview and explains some of these approaches in detail. This first post explains how to create a Kubernetes cluster on AWS using <a href="https://github.com/kubernetes/kops">kops</a>.<span id="more-2475"></span></p> 
-<b>Kubernetes and Kops overview</b> 
-<p>Kubernetes is an open source, container orchestration platform. Applications packaged as Docker images can be easily deployed, scaled, and managed in a Kubernetes cluster. Some of the key features of Kubernetes are:</p> 
-<li><strong>Self-healing</strong><br /> Failed containers are restarted to ensure that the desired state of the application is maintained. If a node in the cluster dies, then the containers are rescheduled on a different node. Containers that do not respond to application-defined health check are terminated, and thus rescheduled.</li> 
-<li><strong>Horizontal scaling</strong><br /> Number of containers can be easily scaled up and down automatically based upon CPU utilization, or manually using a command.</li> 
-<li><strong>Service discovery and load balancing</strong><br /> Multiple containers can be grouped together discoverable using a DNS name. The service can be load balanced with integration to the native LB provided by the cloud provider.</li> 
-<li><strong>Application upgrades and rollbacks</strong><br /> Applications can be upgraded to a newer version without an impact to the existing one. If something goes wrong, Kubernetes rolls back the change.</li> 
-<p>Kops, short for Kubernetes Operations, is a set of tools for installing, operating, and deleting Kubernetes clusters in the cloud. A rolling upgrade of an older version of Kubernetes to a new version can also be performed. It also manages the cluster add-ons. After the cluster is created, the usual <a href="https://kubernetes.io/docs/user-guide/kubectl-overview/">kubectl CLI</a> can be used to manage resources in the cluster.</p> 
-<b>Download Kops and Kubectl</b> 
-<p>There is no need to download the Kubernetes binary distribution for creating a cluster using kops. However, you do need to download the kops CLI. It then takes care of downloading the right Kubernetes binary in the cloud, and provisions the cluster.</p> 
-<p>The different download options for kops are explained at <a href="https://github.com/kubernetes/kops#installing">github.com/kubernetes/kops#installing</a>. On MacOS, the easiest way to install kops is using the <a href="https://brew.sh/">brew</a> package manager.</p> 
-<pre>brew update &amp;&amp; brew install kops</pre> 
-<p>The version of kops can be verified using the kops version command, which shows:</p> 
-<pre>Version 1.6.1</pre> 
-<p>In addition, download kubectl. This is required to manage the Kubernetes cluster. The latest version of kubectl can be downloaded using the following command:</p> 
-<pre>curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/darwin/amd64/kubectl</pre> 
-<p>Make sure to include the directory where kubectl is downloaded in your <code>PATH</code>.</p> 
-<b>IAM user permission</b> 
-<p>The IAM user to create the Kubernetes cluster must have the following permissions:</p> 
-<li><code>AmazonEC2FullAccess</code></li> 
-<li><code>AmazonRoute53FullAccess</code></li> 
-<li><code>AmazonS3FullAccess</code></li> 
-<li><code>IAMFullAccess</code></li> 
-<li><code>AmazonVPCFullAccess</code></li> 
-<p>Alternatively, a new IAM user may be created and the policies attached as explained at <a href="http://github.com/kubernetes/kops/blob/master/docs/aws.md#setup-iam-user">github.com/kubernetes/kops/blob/master/docs/aws.md#setup-iam-user</a>.</p> 
-<b>Create an Amazon S3 bucket for the Kubernetes state store</b> 
-<p>Kops needs a “state store” to store configuration information of the cluster. &nbsp;For example, how many nodes, instance type of each node, and Kubernetes version. The state is stored during the initial cluster creation. Any subsequent changes to the cluster are also persisted to this store as well. As of publication, Amazon S3 is the only supported storage mechanism. Create a S3 bucket and pass that to the kops CLI during cluster creation.</p> 
-<p>This post uses the bucket name <code>kubernetes-aws-io</code>. Bucket names must be unique; you have to use a different name. Create an S3 bucket:</p> 
-<pre>aws s3api create-bucket --bucket kubernetes-aws-io</pre> 
-<p>I strongly recommend versioning this bucket in case you ever need to revert or recover a previous version of the cluster. This can be enabled using the AWS CLI as well:</p> 
-<pre>aws s3api put-bucket-versioning --bucket kubernetes-aws-io --versioning-configuration Status=Enabled</pre> 
-<p>For convenience, you can also define <code>KOPS_STATE_STORE</code> environment variable pointing to the S3 bucket. For example:</p> 
-<pre>export KOPS_STATE_STORE=s3://kubernetes-aws-io</pre> 
-<p>This environment variable is then used by the kops CLI.</p> 
-<b>DNS configuration</b> 
-<p>As of Kops 1.6.1, a top-level domain or a subdomain is required to create the cluster. This domain allows the worker nodes to discover the master and the master to discover all the etcd servers. This is also needed for kubectl to be able to talk directly with the master.</p> 
-<p>This domain may be registered with AWS, in which case a Route 53 hosted zone is created for you. Alternatively, this domain may be at a different registrar. In this case, create a Route 53 hosted zone. Specify the name server (NS) records from the created zone as NS records with the domain registrar.</p> 
-<p>This post uses a <code>kubernetes-aws.io</code> domain registered at a third-party registrar.</p> 
-<p>Generate a Route 53 hosted zone using the AWS CLI. Download <a href="https://github.com/stedolan/jq/wiki/Installation">jq</a> to run this command:</p> 
-<pre>ID=$(uuidgen) &amp;&amp; \
-aws route53 create-hosted-zone \
---name cluster.kubernetes-aws.io \
---caller-reference $ID \
-| jq .DelegationSet.NameServers</pre> 
-<p>This shows an output such as the following:</p> 
-<pre>[
-&quot;ns-94.awsdns-11.com&quot;,
-&quot;ns-1962.awsdns-53.co.uk&quot;,
-&quot;ns-838.awsdns-40.net&quot;,
-&quot;ns-1107.awsdns-10.org&quot;
-]</pre> 
-<p>Create NS records for the domain with your registrar. Different options on how to configure DNS for the cluster are explained at <a href="http://github.com/kubernetes/kops/blob/master/docs/aws.md#configure-dns">github.com/kubernetes/kops/blob/master/docs/aws.md#configure-dns</a>.</p> 
-<p>Experimental&nbsp;support to create a gossip-based cluster was added in Kops 1.6.2. This post uses a DNS-based approach, as that is more mature and well tested.</p> 
-<b>Create the Kubernetes cluster</b> 
-<p>The Kops CLI can be used to create a highly available cluster, with multiple master nodes spread across multiple Availability Zones. Workers can be spread across multiple zones as well. Some of the tasks that happen behind the scene during cluster creation are:</p> 
-<li>Provisioning EC2 instances</li> 
-<li>Setting up AWS resources such as networks, Auto Scaling groups, IAM users, and security groups</li> 
-<li>Installing Kubernetes.</li> 
-<p>Start the Kubernetes cluster using the following command:</p> 
-<pre>kops create cluster \
---name cluster.kubernetes-aws.io \
---zones us-west-2a \
---state s3://kubernetes-aws-io \
---yes</pre> 
-<p>In this command:</p> 
-<li><code>--zones</code><br /> Defines the zones in which the cluster is going to be created. Multiple comma-separated zones can be specified to span the cluster across multiple zones.</li> 
-<li><code>--name</code><br /> Defines the cluster’s name.</li> 
-<li><code>--state</code><br /> Points to the S3 bucket that is the state store.</li> 
-<li><code>--yes</code><br /> Immediately creates the cluster. Otherwise, only the cloud resources are created and the cluster needs to be started explicitly using the command <code>kops update --yes</code>. If the cluster needs to be edited, then the <code>kops edit cluster</code> command can be used.</li> 
-<p>This starts a single master and two worker node Kubernetes cluster. The master is in an Auto Scaling group and the worker nodes are in a separate group. By default, the master node is <code>m3.medium</code> and the worker node is <code>t2.medium</code>. Master and worker nodes are assigned separate IAM roles as well.</p> 
-<p>Wait for a few minutes for the cluster to be created. The cluster can be verified using the command <code>kops validate cluster --state=s3://kubernetes-aws-io</code>. It shows the following output:</p> 
-<pre>Using cluster from kubectl context: cluster.kubernetes-aws.io
-Validating cluster cluster.kubernetes-aws.io
-INSTANCE GROUPS
-NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;ROLE&nbsp;&nbsp;&nbsp;  &nbsp;MACHINETYPE&nbsp;&nbsp;&nbsp;&nbsp;MIN&nbsp;&nbsp;&nbsp;&nbsp;MAX&nbsp;&nbsp;&nbsp;&nbsp;SUBNETS
-master-us-west-2a&nbsp;&nbsp;&nbsp;&nbsp;Master&nbsp;&nbsp;&nbsp;&nbsp;m3.medium&nbsp;&nbsp;&nbsp;&nbsp;  1&nbsp;&nbsp;&nbsp;   1&nbsp;&nbsp;&nbsp;&nbsp;  us-west-2a
-nodes&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;    &nbsp;Node&nbsp;&nbsp;&nbsp;  &nbsp;t2.medium&nbsp;&nbsp;&nbsp;&nbsp;  2&nbsp;&nbsp;&nbsp; &nbsp; 2&nbsp;&nbsp;&nbsp;&nbsp;  us-west-2a
-NODE STATUS
-NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                   ROLE&nbsp;&nbsp;&nbsp;&nbsp;  READY
-ip-172-20-38-133.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;node&nbsp;&nbsp;&nbsp;&nbsp;  True
-ip-172-20-38-177.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;master&nbsp;&nbsp;&nbsp;&nbsp;True
-ip-172-20-46-33.us-west-2.compute.internal&nbsp;&nbsp; &nbsp;&nbsp;node&nbsp;&nbsp;&nbsp;  &nbsp;True
-Your cluster cluster.kubernetes-aws.io is ready</pre> 
-<p>It shows the different instances started for the cluster, and their roles. If multiple cluster states are stored in the same bucket, then <code>--name &lt;NAME&gt;</code> can be used to specify the exact cluster name.</p> 
-<p>Check all nodes in the cluster using the command kubectl get nodes:</p> 
-<pre>NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;STATUS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; AGE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; VERSION
-ip-172-20-38-133.us-west-2.compute.internal&nbsp;&nbsp; Ready,node&nbsp;&nbsp;&nbsp;&nbsp; 14m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2
-ip-172-20-38-177.us-west-2.compute.internal&nbsp;&nbsp; Ready,master&nbsp;&nbsp; 15m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2
-ip-172-20-46-33.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;Ready,node&nbsp;&nbsp;&nbsp;&nbsp; 14m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2</pre> 
-<p>Again, the internal IP address of each node, their current status (master or node), and uptime are shown. The key information here is the Kubernetes version for each node in the cluster, 1.6.2 in this case.</p> 
-<p>The kubectl value included in the PATH earlier is configured to manage this cluster. Resources such as pods, replica sets, and services can now be created in the usual way.</p> 
-<p>Some of the common options that can be used to override the default cluster creation are:</p> 
-<li><code>--kubernetes-version</code><br /> The version of Kubernetes cluster. The exact versions supported are defined at <a href="http://github.com/kubernetes/kops/blob/master/channels/stable">github.com/kubernetes/kops/blob/master/channels/stable</a>.</li> 
-<li><code>--master-size and --node-size</code><br /> Define the instance of master and worker nodes.</li> 
-<li><code>--master-count and --node-count</code><br /> Define the number of master and worker nodes. By default, a master is created in each zone specified by <code>--master-zones</code>. Multiple master nodes can be created by a higher number using <code>--master-count</code> or specifying multiple Availability Zones in <code>--master-zones</code>.</li> 
-<p>A three-master and five-worker node cluster, with master nodes spread across different Availability Zones, can be created using the following command:</p> 
-<pre>kops create cluster \
---name cluster2.kubernetes-aws.io \
---zones us-west-2a,us-west-2b,us-west-2c \
---node-count 5 \
---state s3://kubernetes-aws-io \
---yes</pre> 
-<p>Both the clusters are sharing the same state store but have different names. This also requires you to create an additional Amazon Route 53 hosted zone for the name.</p> 
-<p>By default, the resources required for the cluster are directly created in the cloud. The <code>--target</code> option can be used to generate the AWS CloudFormation scripts instead. These scripts can then be used by the AWS CLI to create resources at your convenience.</p> 
-<p>Get a complete list of options for cluster creation with <code>kops create cluster --help</code>.</p> 
-<p>More details about the cluster can be seen using the command <code>kubectl cluster-info</code>:</p> 
-<pre>Kubernetes master is running at https://api.cluster.kubernetes-aws.io
-KubeDNS is running at https://api.cluster.kubernetes-aws.io/api/v1/proxy/namespaces/kube-system/services/kube-dns
-To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.</pre> 
-<p>Check the client and server version using the command <code>kubectl version</code>:</p> 
-<pre>Client Version: version.Info{Major:&quot;1&quot;, Minor:&quot;6&quot;, GitVersion:&quot;v1.6.4&quot;, GitCommit:&quot;d6f433224538d4f9ca2f7ae19b252e6fcb66a3ae&quot;, GitTreeState:&quot;clean&quot;, BuildDate:&quot;2017-05-19T18:44:27Z&quot;, GoVersion:&quot;go1.7.5&quot;, Compiler:&quot;gc&quot;, Platform:&quot;darwin/amd64&quot;}
-Server Version: version.Info{Major:&quot;1&quot;, Minor:&quot;6&quot;, GitVersion:&quot;v1.6.2&quot;, GitCommit:&quot;477efc3cbe6a7effca06bd1452fa356e2201e1ee&quot;, GitTreeState:&quot;clean&quot;, BuildDate:&quot;2017-04-19T20:22:08Z&quot;, GoVersion:&quot;go1.7.5&quot;, Compiler:&quot;gc&quot;, Platform:&quot;linux/amd64&quot;}</pre> 
-<p>Both client and server version are 1.6 as shown by the Major and Minor attribute values.</p> 
-<b>Upgrade the Kubernetes cluster</b> 
-<p>Kops can be used to create a Kubernetes 1.4.x, 1.5.x, or an older version of the 1.6.x cluster using the <code>--kubernetes-version</code> option. The exact versions supported are defined at <a href="https://github.com/kubernetes/kops/blob/master/channels/stable">github.com/kubernetes/kops/blob/master/channels/stable</a>.</p> 
-<p>Or, you may have used kops to create a cluster a while ago, and now want to upgrade to the latest recommended version of Kubernetes. Kops supports rolling cluster upgrades where the master and worker nodes are upgraded one by one.</p> 
-<p>As of kops 1.6.1, upgrading a cluster is a three-step process.</p> 
-<p>First, check and apply the latest recommended Kubernetes update.</p> 
-<pre>kops upgrade cluster \
---name cluster2.kubernetes-aws.io \
---state s3://kubernetes-aws-io \
---yes</pre> 
-<p>The <code>--yes</code> option immediately applies the changes. Not specifying the <code>--yes</code> option shows only the changes that are applied.</p> 
-<p>Second, update the state store to match the cluster state. This can be done using the following command:</p> 
-<pre>kops update cluster \
---name cluster2.kubernetes-aws.io \
---state s3://kubernetes-aws-io \
---yes</pre> 
-<p>Lastly, perform a rolling update for all cluster nodes using the <code>kops rolling-update</code> command:</p> 
-<pre>kops rolling-update cluster \
---name cluster2.kubernetes-aws.io \
---state s3://kubernetes-aws-io \
---yes</pre> 
-<p>Previewing the changes before updating the cluster can be done using the same command but without specifying the <code>--yes</code> option. This shows the following output:</p> 
-<pre>NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     STATUS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;NEEDUPDATE&nbsp;&nbsp;&nbsp;&nbsp;READY&nbsp;&nbsp;&nbsp;&nbsp;MIN&nbsp;&nbsp;&nbsp;&nbsp;MAX&nbsp;&nbsp;&nbsp;&nbsp;NODES
-master-us-west-2a&nbsp;&nbsp;&nbsp;&nbsp;NeedsUpdate&nbsp;&nbsp;&nbsp;1&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;0&nbsp;&nbsp;&nbsp;    &nbsp;1&nbsp;&nbsp;&nbsp;  &nbsp;1&nbsp;&nbsp;&nbsp;  &nbsp;1
-nodes&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;    &nbsp;&nbsp;&nbsp;NeedsUpdate&nbsp;&nbsp;&nbsp;2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;&nbsp;0&nbsp;&nbsp;&nbsp;    &nbsp;2&nbsp;&nbsp;&nbsp;  &nbsp;2&nbsp;&nbsp;&nbsp;  &nbsp;2</pre> 
-<p>Using <code>--yes</code> updates all nodes in the cluster, first master and then worker. There is a 5-minute delay between restarting master nodes, and a 2-minute delay between restarting nodes. These values can be altered using <code>--master-interval</code> and <code>--node-interval</code> options, respectively.</p> 
-<p>Only the worker nodes may be updated by using the <code>--instance-group</code> node option.</p> 
-<b>Delete the Kubernetes cluster</b> 
-<p>Typically, the Kubernetes cluster is a long-running cluster to serve your applications. After its purpose is served, you may delete it. It is important to delete the cluster using the kops command. This ensures that all resources created by the cluster are appropriately cleaned up.</p> 
-<p>The command to delete the Kubernetes cluster is:</p> 
-<pre>kops delete cluster --state=s3://kubernetes-aws-io --yes</pre> 
-<p>If multiple clusters have been created, then specify the cluster name as in the following command:</p> 
-<pre>kops delete cluster&nbsp;cluster2.kubernetes-aws.io --state=s3://kubernetes-aws-io --yes</pre> 
-<b>Conclusion</b> 
-<p>This post explained how to manage a Kubernetes cluster on AWS using kops. Kubernetes on AWS users provides a self-published list of companies using Kubernetes on AWS.</p> 
-<p>Try starting a cluster, create a few Kubernetes resources, and then tear it down. Kops on AWS provides a more comprehensive tutorial for setting up Kubernetes clusters. Kops docs are also helpful for understanding the details.</p> 
-<p>In addition, the Kops team hosts <a href="https://github.com/kubernetes/kops#office-hours">office hours</a> to help you get started, from guiding you with your first pull request. You can always join the <a href="http://slack.k8s.io/">#kops channel on Kubernetes slack</a> to ask questions. If nothing works, then file an issue at <a href="https://github.com/kubernetes/kops/issues">github.com/kubernetes/kops/issues</a>.</p> 
-<p>Future posts in this series will explain other ways of creating and running a Kubernetes cluster on AWS.</p> 
-<p>—&nbsp;<a href="http://twitter.com/arungupta">Arun</a></p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/containers/" rel="tag">Containers</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/kubernetes/" rel="tag">Kubernetes</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2475');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Blue/Green Deployments with Amazon EC2 Container Service</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-06-30T15:26:24+00:00">30 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/bluegreen-deployments-with-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2448" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2448&amp;disqus_title=Blue%2FGreen+Deployments+with+Amazon+EC2+Container+Service&amp;disqus_url=https://aws.amazon.com/blogs/compute/bluegreen-deployments-with-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2448');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>This post and accompanying code was generously contributed by:</p> 
-<table> 
-<tbody> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg" alt="" width="120" height="160" /></a></td> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg" alt="" width="119" height="160" /></a></td> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg"><img class="aligncenter wp-image-2467 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg" alt="" width="119" height="160" /></a></td> 
-</tr> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><b>Jeremy Cowan</b><br /> Solutions Architect</td> 
-<td style="padding: 0px 30px 0px 0px"><b>Anuj Sharma</b><br /> DevOps Cloud Architect</td> 
-<td style="padding: 0px 30px 0px 0px"><b>Peter Dalbhanjan</b><br /> Solutions Architect</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>Deploying software updates in traditional non-containerized environments is hard and fraught with risk. When you write your deployment package or script, you have to assume that the target machine is in a particular state. If your staging environment is not an exact mirror image of your production environment, your deployment could fail. These failures frequently cause outages that persist until you re-deploy the last known good version of your application. If you are an Operations Manager, this is what keeps you up at night.</p> 
-<p>Increasingly, customers want to do testing in production environments without exposing customers to the new version until the release has been vetted. Others want to expose a small percentage of their customers to the new release to gather feedback about a feature before it’s released to the broader population. This is often referred to as canary analysis or canary testing. In this post, I introduce patterns to implement blue/green and canary deployments using <a href="https://aws.amazon.com/elasticloadbalancing/applicationloadbalancer/">Application Load Balancers</a> and <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html">target groups</a>.</p> 
-<p>If you’d like to try this approach to blue/green deployments, we have open sourced the code and AWS CloudFormation templates in the <a href="https://github.com/awslabs/ecs-blue-green-deployment">ecs-blue-green-deployment GitHub repo</a>. The workflow builds an <a href="https://github.com/awslabs/ecs-refarch-continuous-deployment">automated CI/CD pipeline</a> that deploys your service onto an ECS cluster and offers a controlled process to swap target groups when you’re ready to promote the latest version of your code to production. You can quickly set up the environment in three steps&nbsp;and see the blue/green swap in action. We’d love for you to try it and send us your feedback!</p> 
-<p><span id="more-2448"></span></p> 
-<b>Benefits of blue/green</b> 
-<p>Blue/green deployments are a type of immutable deployment that help you deploy software updates with less risk. The risk is reduced by creating separate environments for the current running or “blue” version of your application, and the new or “green” version of your application.</p> 
-<p>This type of deployment gives you an opportunity to test features in the green environment without impacting the current running version of your application. When you’re satisfied that the green version is working properly, you can gradually reroute the traffic from the old blue environment to the new green environment by modifying DNS. By following this method, you can update and roll back features with near zero downtime.</p> 
-<table> 
-<tbody> 
-<tr> 
-<td><img class="wp-image-2450" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_1-245x300.png" alt="" width="200" height="245" /></td> 
-<td><i>A typical blue/green deployment involves shifting traffic between 2 distinct environments.</i></td> 
-</tr> 
-</tbody> 
-</table> 
-<p>This ability to quickly roll traffic back to the still-operating blue environment is one of the key benefits of blue/green deployments. With blue/green, you should be able to roll back to the blue environment at any time during the deployment process. This limits downtime to the time it takes to realize there’s an issue in the green environment and shift the traffic back to the blue environment. Furthermore, the impact of the outage is limited to the portion of traffic going to the green environment, not all traffic. If the blast radius of deployment errors is reduced, so is the overall deployment risk.</p> 
-<b>Containers make it simpler</b> 
-<p>Historically, blue/green deployments were not often used to deploy software on-premises because of the cost and complexity associated with provisioning and managing multiple environments. Instead, applications were upgraded in place.</p> 
-<p>Although this approach worked, it had several flaws, including the ability to roll back quickly from failures. Rollbacks typically involved re-deploying a previous version of the application, which could affect the length of an outage caused by a bad release. Fixing the issue took precedence over the need to debug, so there were fewer opportunities to learn from your mistakes.</p> 
-<p>Containers can ease the adoption of blue/green deployments because they’re easily packaged and behave consistently as they’re moved between environments. This consistency comes partly from their immutability. To change the configuration of a container, update its Dockerfile and rebuild and re-deploy the container rather than updating the software in place.</p> 
-<p>Containers also provide process and namespace isolation for your applications, which allows you to run multiple versions of them side by side on the same Docker host without conflicts. Given their small sizes relative to virtual machines, you can binpack more containers per host than VMs. This lets you make more efficient use of your computing resources, reducing the cost of blue/green deployments.</p> 
-<b>Fully Managed Updates with Amazon&nbsp;ECS</b> 
-<p><a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service</a> (ECS)&nbsp;performs rolling updates when you update an existing Amazon ECS service. A rolling update involves replacing the current running version of the container with the latest version. The number of containers Amazon ECS adds or removes from service during a rolling update is controlled by adjusting the minimum and maximum number of healthy tasks allowed during service deployments.</p> 
-<p>When you update your service’s task definition with the latest version of your container image, Amazon ECS automatically starts replacing the old version of your container with the latest version. During a deployment, Amazon ECS drains connections from the current running version and registers your new containers with the <a href="https://aws.amazon.com/elasticloadbalancing/applicationloadbalancer/">Application Load Balancer</a> as they come online.</p> 
-<b>Target groups</b> 
-<p>A target group is a logical construct that allows you to run multiple services behind the same Application Load Balancer. This is possible because each target group has its own listener.</p> 
-<p>When you create an Amazon ECS service that’s fronted by an Application Load Balancer, you have to designate a target group for your service. Ordinarily, you would create a target group for each of your Amazon ECS services. However, the approach we’re going to explore here involves creating two target groups: one for the blue version of your service, and one for the green version of your service. We’re also using a different listener port for each target group so that you can test the green version of your service using the same path as the blue service.</p> 
-<p>With this configuration, you can run both environments in parallel until you’re ready to cut over to the green version of your service. You can also do things such as restricting access to the green version to testers on your internal network, using security group rules and placement constraints. For example, you can target the green version of your service to only run on instances that are accessible from your corporate network.</p> 
-<b>Swapping Over</b> 
-<p>When you’re ready to replace the old blue service with the new green service, call the <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_ModifyListener.html">ModifyListener API</a> operation to swap the listener’s rules for the target group rules. The change happens instantaneously. Afterward, the green service is running in the target group with the port 80 listener and the blue service is running in the target group with the port 8080 listener. The diagram below is an illustration of the approach described.</p> 
-<h4>Scenario</h4> 
-<p>Two services are defined, each with their own target group registered to the same Application Load Balancer but listening on different ports. Deployment is completed by swapping the listener rules between the two target groups.</p> 
-<p>The second service is deployed with a new target group listening on a different port but registered to the same Application Load Balancer.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2.png"><img class="aligncenter wp-image-2451" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2-300x214.png" alt="" width="400" height="285" /></a></p> 
-<p>By using 2 listeners, requests to blue services are directed to the target group with the port 80 listener, while requests to the green services are directed to target group with the port 8080 listener.</p> 
-<p>After automated or manual testing, the deployment can be completed by swapping the listener rules on the Application Load Balancer and sending traffic to the green service.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3.png"><img class="aligncenter wp-image-2452" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3-300x221.png" alt="" width="401" height="295" /></a></p> 
-<b>Caveats</b> 
-<p>There are a few caveats to be mindful of when using this approach. This method:</p> 
-<li><strong>Assumes that your application code is completely stateless</strong>. Store state outside of the container.</li> 
-<li><strong>Doesn’t gracefully drain connections</strong>. The swapping of target groups is sudden and abrupt. Therefore, be cautious about using this approach if your service has long-running transactions.</li> 
-<li><strong>Doesn’t allow you to perform canary deployments</strong>. While the method gives you the ability to quickly switch between different versions of your service, it does not allow you to divert a portion of the production traffic to a canary or control the rate at which your service is deployed across the cluster.</li> 
-<b>Canary testing</b> 
-<p>While this type of deployment automates much of the heavy lifting associated with rolling deployments, it doesn’t allow you to interrupt the deployment if you discover an issue midstream. Rollbacks using the standard Amazon ECS deployment require updating the service’s task definition with the last known good version of the container. Then, you wait for Amazon ECS to schedule and deploy it across the cluster. If the latest version introduces a breaking change that went undiscovered during testing, this might be too slow.</p> 
-<p>With canary testing, if you discover the green environment is not operating as expected, there is no impact on the blue environment. You can route traffic back to it, minimizing impaired operation or downtime, and limiting the blast radius of impact.</p> 
-<p>This type of deployment is particularly useful for A/B testing where you want to expose a new feature to a subset of users to get their feedback before making it broadly available.</p> 
-<p>For canary style deployments, you can use a variation of the blue/green swap that involves deploying the blue and the green service to the same target group. Although this method is not as fast as the swap, it allows you to control the rate at which your containers are replaced by adjusting the task count for each service. Furthermore, it gives you the ability to roll back by adjusting the number of tasks for the blue and green services respectively. Unlike the swap approach described above, connections to your containers are drained gracefully. We plan to address canary style deployments for&nbsp;Amazon ECS in a future post.</p> 
-<b>Conclusion</b> 
-<p>With AWS, you can operationalize your blue/green deployments using Amazon ECS, an Application Load Balancer, and target groups. I encourage you to adapt the code published to the <a href="https://github.com/awslabs/ecs-blue-green-deployment">ecs-blue-green-deployment GitHub repo</a> for your use cases and look forward to reading your feedback.</p> 
-<p>If you’re interested in learning more, I encourage you to read the <a href="https://d0.awsstatic.com/whitepapers/AWS_Blue_Green_Deployments.pdf">Blue/Green Deployments on AWS</a> and <a href="https://d0.awsstatic.com/whitepapers/DevOps/practicing-continuous-integration-continuous-delivery-on-AWS.pdf">Practicing Continuous Integration and Continuous Delivery on AWS</a> whitepapers.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/deployment/" rel="tag">deployment</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecs/" rel="tag">ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2448');
 });
 </script> 
 </article> 

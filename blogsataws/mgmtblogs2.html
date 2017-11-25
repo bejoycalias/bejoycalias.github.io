@@ -191,6 +191,271 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Upgrading SQL Server Using EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-11-01T12:55:40+00:00">01 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/upgrading-sql-server-using-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post was written by Alan Cranfield, Systems Engineer at Amazon Web Services</em></p> 
+<p>This is the first in a series of blog posts aimed at the enterprise SQL Server DBA. I’ll demonstrate how to administer your SQL Server workloads on Amazon EC2 using practical examples and best practices.</p> 
+<h3>Using Run Command</h3> 
+<p>In this post I’ll show you how to use <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a> from <a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager</a> to update one or many of your SQL Servers to the latest service pack.</p> 
+<p>Microsoft SQL Server is a popular workload on Amazon EC2. Keeping your SQL Server instances up to date with the latest service pack is important for the stability and security of your critical data. If you need to support multiple versions and editions of SQL Server keeping track of all the latest service packs can be cumbersome.</p> 
+<p>Run Command provides a simple and secure way to remotely execute commands or run scripts against EC2 instances or on-premises servers.&nbsp;With Run Command, you can perform commands that make it easy to accomplish common administrative tasks like upgrading SQL service packs!</p> 
+<p><span id="more-1694"></span></p> 
+<h3>Pre-requisites</h3> 
+<p>When you use EC2 Systems Manager you’ll need to first work through some <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-setting-up.html">prerequisites</a>. The most important prerequisite is that you’ll need the SSM agent installed on your instances. The <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html#sysman-install-ssm-win">SSM agent</a> is installed by default on Windows Server 2016 instances and instances created from Windows Server 2003-2012 R2 Amazon Machine Images (AMIs) published in November 2016 or later.</p> 
+<p>Another pre-requisite is that your instances need to be assigned an AWS Identity and Access Management (IAM) role. The IAM role is used to secure the permission policies needed to communicate with the Systems Manager API. Instances are usually added to an IAM role on launch, but you can also add existing instances using the <a href="https://aws.amazon.com/blogs/security/new-attach-an-aws-iam-role-to-an-existing-amazon-ec2-instance-by-using-the-aws-cli/?sc_channel=sm&amp;sc_campaign=rolesforrunninginstances&amp;sc_publisher=tw&amp;sc_medium=social&amp;sc_content=read-post&amp;sc_country=global&amp;sc_geo=global&amp;sc_category=ec2&amp;sc_outcome=launch">AWS CLI</a>.</p> 
+<h3>Using PowerShell modules</h3> 
+<p>For this exercise we’ll use the Run Command native support for PowerShell modules to download and import a PowerShell module from an Amazon S3 bucket. This module will be called to identify the version of SQL that is running and then download and install the latest service pack. I’ll walk you through updating the SQL service pack by using the AWS Management Console and by using AWS Tools for PowerShell.</p> 
+<h3>Updating the SQL service pack from the EC2 console</h3> 
+<li>Sign In to the AWS Management Console. To confirm that your instances are in a state to be managed, make sure they are listed in the EC2 console under EC2 Dashboard\Managed Instances.</li> 
+<li>Navigate to the Run Command and choose Run a command. Then select the AWS-InstallPowershellModule document, and the servers you’d like to upgrade.<img class="size-full wp-image-1696 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/run-a-command.png" alt="" width="708" height="397" /><img class="size-full wp-image-1697 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/install-ps-module.png" alt="" width="890" height="316" /></li> 
+<li>For Source enter the location of the S3 bucket that holds the PowerShell module: <a href="https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip">https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip</a></li> 
+<li>Paste the following PowerShell script into the Commands Window 
+<pre><code class="lang-powershell">Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
+Import-Module InstallSqlServicePack
+Install-SQLUpdate -Action &quot;Yes&quot;</code></pre> 
+<li>Choose the <strong>Run</strong> button and check the <strong>Status</strong> column for the instance progress.<img class="size-full wp-image-1699 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/command-success.png" alt="" width="971" height="300" /></li> 
+<li>Choose a specific Instance ID in the top pane, and then in the bottom pane choose the Output tab and then choose View Output.</li> 
+<li>The results of the service pack upgrade are shown in the Output results window.<img class="size-full wp-image-1700 alignnone" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/27/output.png" alt="" width="828" height="471" /></li> 
+<h3>Updating the SQL service pack using the AWS Tools for PowerShell</h3> 
+<p>For those who prefer a scripted solution you can call Run Command using the <a href="http://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-set-up.html">AWS Tools for Windows PowerShell</a>.</p> 
+<li>Download and install the latest AWS Tools for Windows PowerShell.</li> 
+<pre><code class="lang-powershell">$AWSPSURL = &quot;http://sdk-for-net.amazonwebservices.com/latest/AWSToolsAndSDKForNet.msi&quot; 
+$AWSPSSetup = &quot;C:\Windows\Temp\AWSPowerShellSetup.msi&quot;
+(New-Object System.Net.WebClient).DownloadFile($AWSPSURL, $AWSPSSetup)
+Start-Process -FilePath msiexec.exe -Argument List &quot;/i $AWSPSSetup&quot;
+Remove-Item $AWSPSSetup -Force</code></pre> 
+<li>Set your credentials and AWS Region</li> 
+<pre><code class="lang-powershell"># set credentials
+Set-AWSCredentials -StoreAs SQL -AccessKey &lt;your access key&gt; -SecretKey &lt;your secret key&gt;
+Set-AWSCredentials -ProfileName SQL
+Set-DefaultAWSRegion &quot;us-west-2&quot; 
+Get-IAMUser</code></pre> 
+<li>Confirm that your instances are managed by SSM</li> 
+<p><code class="lang-powershell">Get-SSMInstanceInformation -InstanceInformationFilterList @{Key=&quot;PingStatus&quot;;ValueSet=&quot;Online&quot;} | select ComputerName, InstanceId<br /> </code></p> 
+<li>Run a Command against your instances to upgrade the SQL service pack. (Tagging can also be used to group servers.)</li> 
+<pre><code class="lang-powershell"></code><code class="lang-powershell">$InstanceIds = (Get-SSMInstanceInformation).InstanceId
+$InstanceIds.count
+$source = 'https://s3.amazonaws.com/sql-service-pack/InstallSqlServicePack.zip'
+$commands = @(
+'Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force',
+'Import-Module InstallSqlServicePack',
+'Install-SQLUpdate -Action &quot;Yes&quot;'
+)
+$parameter = @{
+source = $source;
+commands = $commands;
+}
+$document = 'AWS-InstallPowerShellModule'
+$cmd = Send-SSMCommand –InstanceId $InstanceIds –DocumentName $document –Parameter $parameter </code></pre> 
+<li>Check the progress.</li> 
+<pre><code class="lang-powershell">Get-SSMCommandInvocation -CommandId $cmd.CommandId -Details $true | select InstanceId, status </code></pre> 
+<pre><code class="lang-powershell">InstanceId          Status    
+----------          ------    
+i-0fff59f73e94a0449 InProgress
+i-0f1f7afc2b605b4d1 Success   
+i-0ee0c157a87ede81f InProgress
+i-0daa300d38d9c42b1 InProgress
+i-0b861190458f9381f InProgress
+i-09dc29e6a093ac14c InProgress
+i-09aee29b50203cf3c Success
+</code></pre> 
+<li>Check the results.</li> 
+<p><code class="lang-powershell">Get-SSMCommandInvocation -CommandId $cmd.CommandId -Details $true | select -ExpandProperty CommandPlugins</code></p> 
+<p><code class="lang-powershell">== Install SQL Update ==<br /> </code></p> 
+<pre><code class="lang-powershell">2017-08-18 23:54:38.760 Test-SQLInstallation
+2017-08-18 23:54:38.856 - SQL server service is installed and started
+2017-08-18 23:54:38.866 - Importing SQLPS Module
+2017-08-18 23:54:41.048 Check if Clustered
+2017-08-18 23:54:41.227 - Not Clustered
+2017-08-18 23:54:41.232 Get-InstallableUpdate
+2017-08-18 23:54:41.245 - Read current installed version...
+2017-08-18 23:54:41.254 - Found Microsoft SQL Server 2016 (RTM-CU3-GDR) (KB3194717) - 13.0.2186.6 (RTM)
+2017-08-18 23:54:41.275 - Looking for latest Service Pack...
+2017-08-18 23:54:41.351 - Found Microsoft SQL Server 2016 - 13.0.4001.0 (SP1)
+2017-08-18 23:54:41.359 Test-DownloadDestinationFolder
+2017-08-18 23:54:41.377 - Get disk information on C: drive
+2017-08-18 23:54:41.400 - Free space is 27 GB
+2017-08-18 23:54:41.410 - Destination folder C:\Windows\temp was successfully created.
+2017-08-18 23:54:41.415 Downloading Microsoft SQL Server 2016 - 13.0.4001.0 (SP1) from Microsoft...
+2017-08-18 23:54:49.100 - Downloading Update bits completed
+2017-08-18 23:54:49.106 Installing Microsoft SQL Server 2016 - 13.0.4001.0 (SP1)
+2017-08-18 23:59:01.504 - Installing Microsoft SQL Server 2016 - 13.0.4001.0 (SP1) Completed
+2017-08-18 23:59:01.510 Verify SQL version after update
+2017-08-18 23:59:01.525 - Version after update 13.0.4001.0
+2017-08-18 23:59:01.530 Update Successful!</code></pre> 
+<h3>Conclusion</h3> 
+<p>Amazon EC2 Systems Manager offers a suite of tools to help you manage both your EC2 and on-premises SQL Server instances. In this post, I showed you how to use the Run Command feature of Systems Manager to easily upgrade SQL Server to the latest service pack.</p> 
+<p>In a critical production environment, when you upgrade you might have extra steps to perform before and after, such as database backups, failovers, failbacks, etc. So, in the next post I’ll show you how to use the Automation feature of Systems Manager to achieve custom maintenance workflows.</p> 
+<h3>About the Author</h3> 
+<p><img class="alignleft size-full wp-image-1707" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/28/alan_cranfield.jpg" alt="" width="176" height="233" />Alan Cranfield is a Senior Systems Engineer on the EC2 Windows team where he uses his extensive experience managing critical enterprise environments to help make AWS the best cloud platform for running Windows workloads. He spends his spare time in the garage restoring and customizing old motorcycles.</p> 
+<p><code class="lang-powershell"></code><code class="lang-powershell"></code></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager/" rel="tag">AWS Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Guardrails: Protecting your Stacks and Ensuring Safer Updates</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
+<time property="datePublished" datetime="2017-10-31T17:03:10+00:00">31 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-guardrails-protecting-your-stacks-and-ensuring-safer-updates/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<blockquote> 
+<p><em>“I wonder what will happen if I touch these two wires together.” – Unix fortune</em></p> 
+</blockquote> 
+<p>If you’ve worked with cloud-hosted applications or large distributed architectures for any extended period of time, chances are you’ve heard colleagues&nbsp;invoke&nbsp;<a href="https://en.wikipedia.org/wiki/Murphy's_law">Murphy’s law</a>: “Anything that can go wrong, will go wrong”. All of us have&nbsp;experienced one of those events in the middle of the night where a usually well-intentioned colleague decides to run maintenance or cleanup on some systems…and accidentally deletes or changes a volume, server, endpoint, function, or other critical resource.</p> 
+<p>If your applications, functions, servers, and other resources are in AWS, and you’re using AWS CloudFormation to automate the deployment and changes to your stacks, you are well positioned to implement several levels of safety guardrails to reduce the likelihood of many of these unplanned events. In this blog post we cover many of these guardrails. We’ll also present ideas collected from user surveys, support cases, and other sources so you can build a strategy&nbsp;to use these safety provisions and improve them over time.</p> 
+<p><span id="more-1560"></span></p> 
+<p>There are four primary features that you can use to protect your stacks and resources in CloudFormation:</p> 
+<table style="height: 203px" border="1" width="100%" cellpadding="4"> 
+<tbody> 
+<tr> 
+<td width="139"><strong>Guardrail</strong></td> 
+<td width="328"><strong>Description</strong></td> 
+</tr> 
+<tr> 
+<td width="139">Termination Protection</td> 
+<td width="328">Stack level attribute to prevent deletion; also works with nested stacks</td> 
+</tr> 
+<tr> 
+<td width="139">Deletion Policies</td> 
+<td width="328">Resource level attribute; can be Delete (default), Retain&nbsp;or Snapshot</td> 
+</tr> 
+<tr> 
+<td width="139">Stack Policies</td> 
+<td width="328">Restrict operations at a stack level to multiple resource groups</td> 
+</tr> 
+<tr> 
+<td width="139">IAM Policies</td> 
+<td width="328">Restrict operations by users, groups or roles</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>These features&nbsp;vary in scope and the granularity of options. Consider implementing several of these features in a layered way, as opposed to using only one of them.</p> 
+<p><strong>Using stack termination protection</strong></p> 
+<p>Using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-protect-stacks.html">this</a>&nbsp;stack attribute, you can prevent a new or existing stack from being accidentally deleted. This setting is disabled by default, so you have to explicitly enable it when you create new stacks. For existing, non-nested stacks, you can change termination protection&nbsp;using the AWS Management Console or the AWS CLI. For existing nested stacks, you must enable termination protection on the root stack.&nbsp;After it is enabled on the root stack, the protection is also set for the nested or child stacks. However, keep in mind that if you perform a stack update on the root stack that would delete the nested stack, CloudFormation will delete the nested stack. If you attempt to delete a nested stack when its root stack has termination protection in place, the operation will fail and the nested stack will remain unchanged. Like many other CloudFormation operations,&nbsp;you can control who can enable or disable termination protection by using&nbsp;an IAM policy.</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Statement&quot;:[{
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Action&quot;:[
+&quot;cloudformation:UpdateTerminationProtection&quot;
+],
+&quot;Resource&quot;:&quot;*&quot;
+}]
+}
+</code></pre> 
+<p><strong>Figure 1: Sample IAM policy granting permissions to change stack termination protection </strong></p> 
+<p>&nbsp;</p> 
+<p>So, now that you know about termination protection, should you enable it on all or most of your stacks? Maybe, but you should consider the lifecycle of all your stacks first. Adding termination protection to seldom-changing network resource stacks makes sense, providing yet another layer that can supplement existing controls without interfering with daily application changes. On the other hand, if the application stack changes often, you’ll end up enabling and disabling termination protection often as well. For those types of ephemeral stacks, other guardrails outlined in this article&nbsp;might be more appropriate.</p> 
+<p><strong>Using resource-specific deletion policies</strong></p> 
+<p>You can use <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html">Deletion Policies</a> on a resource-by-resource basis in your template code. By default, when a resource is deleted from a stack template and the stack is updated, the resource is deleted by CloudFormation. (The exceptions are some Amazon RDS database resources, which have a different default behavior.) For more information on resource-specific deletion policies, see the CloudFormation <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html">DeletionPolicy Attribute</a> documentation.</p> 
+<p>Keep in mind the&nbsp;Retain option, which deletes the resource from being managed by CloudFormation via stacks and templates, but doesn’t delete it from your AWS account or region. This can be critical for stateful resources like databases and queues, and semi-durable resources like state machines when using AWS Step Functions. For state machines in particular, it’s advisable to retain them because doing so also retains their execution history. In the interest of utmost safety, you should liberally set Deletion Policies to Retain if and until you can make sure you won’t lose valuable historical data for troubleshooting. You can always delete these resources later using other means.</p> 
+<p>For some stateful resources like Amazon EC2 volumes, Amazon ElastiCache, Amazon RDS and Amazon Redshift, you also have the option to have CloudFormation create a snapshot before it deletes those resources. To further protect your more critical stateful resources, you&nbsp;can group them into separate stacks with more strict policies, and/or you can create dependencies between stacks&nbsp;using cross-stack references, which implements further implicit checks.</p> 
+<pre><code class="lang-json">{
+&quot;AWSTemplateFormatVersion&quot;:&quot;2010-09-09&quot;,
+&quot;Resources&quot;: {
+&quot;myVolume&quot;: {
+&quot;Type&quot;:&quot;AWS::EC2::Volume&quot;,
+&quot;DeletionPolicy&quot;:&quot;Snapshot&quot;,
+&quot;Properties&quot;: {
+&quot;AvailabilityZone&quot;:&quot;us-east-1a&quot;,
+&quot;Size&quot;:&quot;200&quot;
+}
+}
+}
+}
+</code></pre> 
+<p><strong>Figure 2: Using Deletion Policy to take a snapshot of an EC2 Volume, if deleted</strong></p> 
+<p>&nbsp;</p> 
+<p><strong>Using stack-level policies</strong></p> 
+<p>A <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/protect-stack-resources.html#protect-stack-resources-protecting">stack policy</a> is a JSON document that defines the update actions that can be performed on a single resource or a group of resources in a flexible yet compact way (versus Deletion Policies, which are defined on a resource-by-resource basis). Stack policies are evaluated and applied in advance of any update actions, which include cases when resources are modified, recreated, or removed. Resources for a rule can be selected with wildcards or by evaluating a condition expression.</p> 
+<pre><code class="lang-json">{
+&quot;Statement&quot; : [
+{
+&quot;Effect&quot; : &quot;Deny&quot;,
+&quot;Action&quot; : &quot;Update:*&quot;,
+&quot;Principal&quot;: &quot;*&quot;,
+&quot;Resource&quot; : &quot;*&quot;,
+&quot;Condition&quot; : {
+&quot;StringEquals&quot; : {
+&quot;ResourceType&quot; : [&quot;AWS::RDS::DBInstance&quot;]
+}
+}
+},
+{
+&quot;Effect&quot; : &quot;Allow&quot;,
+&quot;Action&quot; : &quot;Update:*&quot;,
+&quot;Principal&quot;: &quot;*&quot;,
+&quot;Resource&quot; : &quot;*&quot;
+}
+]
+}
+</code></pre> 
+<p><strong>Figure 3: A Stack policy that prevents updates to all RDS DB Instances </strong></p> 
+<p>&nbsp;</p> 
+<p>Stack policies can be set when you create a stack&nbsp;using the AWS Management Console or&nbsp;by using the AWS CLI. However,&nbsp;to set a stack policy on an existing stack, you must do it&nbsp;using&nbsp;the CLI or API. You also must use the CLI or API to modify an existing policy on a stack. You can also opt to create a strict permanent stack policy, and&nbsp;then update policy-protected resources by creating temporary policies that override the permanent stack policy. Finally, if you use AWS Config, you can also record configuration changes to the attributes of a stack policy, as well as other permissions and rollback settings.</p> 
+<p><strong>Using IAM Policies</strong></p> 
+<p><a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html">IAM Policies</a> explicitly enforce access controls on users, groups or roles. Beyond restricting updates and deletions to a subset of users, you can also restrict users to use only specific templates, use only specific stack policies, create only a few resource types, or assume specific roles. Gaining expertise with IAM policies can benefit you beyond your CloudFormation usage, such as controlling access to logs, who can execute Lambda functions, and many other use cases across all AWS services.</p> 
+<pre><code class="lang-json">{
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Action&quot;:[&quot;cloudformation:CreateStack&quot;]
+},
+{
+&quot;Effect&quot;:&quot;Deny&quot;,
+&quot;Action&quot;:[&quot;cloudformation:CreateStack&quot;]
+“Condition”:{
+‘ForAnyValue:StringLike”:{
+“cloudformation:ResourceType”: [“AWS::IAM::*”]
+}
+}
+}
+</code></pre> 
+<p><strong>Figure 4: IAM policy allowing users to create resources and stacks except for IAM resources</strong></p> 
+<p>&nbsp;</p> 
+<p><strong>A few more suggestions</strong></p> 
+<p>Beyond understanding how these four guardrails work, here are a few other suggestions and ideas you&nbsp;can study&nbsp;as you look to implement these controls, or improve existing controls you may have inherited:</p> 
+<li>By having smaller, multiple policies that affect a smaller set of resources and stacks, you can limit the blast radius of policy changes as you improve them over time, to either make them more restrictive or to add layers of control.</li> 
+<li>Stack and IAM policies should be treated as code and, with that in mind, they should be periodically tested and versioned. Consider implementing validation pipelines and creating chaos engineering-like tests where critical resource deletions are attempted.</li> 
+<li>For your own custom resources, it’s up to you to add code to determine what happens to your resources when they get deleted. For stateful custom resources, it becomes your responsibility to ensure a given resource is backed up or retained. You can also use a Lambda-backed custom resource to pass a stack’s policy from a root stack to a nested stack using the setStackPolicy API call&nbsp;because nested stacks don’t automatically inherit the root stack’s policy.</li> 
+<li>These guardrails are preventive steps that you can execute within CloudFormation. If you go outside of CloudFormation and use a resource’s AWS Management Console to update and delete it, your template code will become out-of-sync with the resource’s state. You should update your template to reflect the new changes, and prevent future changes&nbsp;using additional IAM policies.</li> 
+<p>You should plan to use most (if not all) of these options. Let’s say, for example, that you’ve just inherited a group of applications (and, with those, the infrastructure stacks and templates associated with them) and are looking at adding layers of protection using these guardrails. A defensible approach may look like this:</p> 
+<li>Review your stacks and templates,&nbsp;and review the resources that are more critical, like stateful or semi-durable resources.&nbsp;Determine which of these critical resources are useful candidates for a DeletionPolicy of Retain or Snapshot.</li> 
+<li>Go one level up from resources to stacks, and consider what operations will be allowed for resources (or groups of resources) within that stack. On top of your resource deletion policy layer, add stack policy restrictions that reflect the criticality of those stacks. For the more critical stacks, consider also using stack termination protection. Even if it becomes a nuisance, at least you’ll&nbsp;gain understanding about how frequently stack updates are required for those stacks, which stacks have cross stack references or parent/child relationships, etc. Armed with this information, you can adjust your&nbsp;controls accordingly.</li> 
+<li>Finally, once you’ve protected the resources and stacks themselves, you should then restrict which users should have the ability to run updates on those stacks using IAM policies.</li> 
+<p><strong>Conclusion</strong></p> 
+<p>We just walked through a sequence starting with&nbsp;the most detailed controls at the individual resource level, then to the stacks, and finally to the users, and will likely end up with the most enforced or least privileged controls. Alternatively, you can also opt to start with users, groups, and roles first, and then work your way down through stacks and resources. This can probably be justified if, in looking at the history of your unplanned downtime events, you already suspect that your IAM policies need more urgent attention. In either case, you want to ensure that there are multiple layers of safety in place by having multiple guardrails apply to your most critical resources.</p> 
+<p>Overall, the key to success in making the most of these features is to carefully test and adapt your use of these guardrails over time, and ensure that you have multiple guardrail layers in place for the most critical stacks and resources. Many existing CloudFormation best practices still apply; for example, smaller stacks will be easier to test and ultimately protect than large, complex ones. &nbsp;Finally, consider ways to establish automated tests for your template code by implementing processes like validation pipelines.</p> 
+<p>&nbsp;</p> 
+<p><strong>About the Author</strong></p> 
+<table class=" alignleft" style="height: 129px" width="100%" cellpadding="4"> 
+<tbody> 
+<tr> 
+<td width="63"><img class="alignnone wp-image-1533" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" alt="" width="80" height="106" /></td> 
+<td width="408"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.&nbsp;</strong>He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
+</tr> 
+</tbody> 
+</table> 
+<p></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/26/awsreinvent2017banner.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Your AWS CloudFormation Guide to re:Invent 2017 &nbsp;</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1240,365 +1505,6 @@ OutputS3BucketName='&lt;bucket-name&gt;'
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/run-command/" rel="tag">Run Command</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Automate remediation actions for Amazon EC2 notifications and beyond using EC2 Systems Manager Automation and AWS Health</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
-<time property="datePublished" datetime="2017-09-27T13:40:09+00:00">27 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/automate-remediation-actions-for-amazon-ec2-notifications-and-beyond-using-ec2-systems-manager-automation-and-aws-health/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>You can use EC2 <a href="https://aws.amazon.com/ec2/systems-manager/">Systems Manager Automation</a> to take remediation actions in response to events that may impact your AWS resources. To illustrate this concept, this post guides you through setting up automated remediation actions when an <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> backed <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2</a> instance is scheduled for retirement.</p> 
-<p>An instance is scheduled to be retired when AWS detects irreparable failure of the underlying hardware hosting the instance. If your instance root device is an Amazon EBS volume you can stop and start the instance at any time of your convenience before the retirement.</p> 
-<p>Amazon EC2 Systems Manager (SSM) Automation is an AWS-hosted service that simplifies common instance and system maintenance and deployment tasks at no additional cost.</p> 
-<p><span id="more-1352"></span></p> 
-<p><a href="http://docs.aws.amazon.com/health/latest/ug/what-is-aws-health.html">AWS Health</a> provides ongoing visibility into the state of your AWS resources, services, and accounts. The service gives you awareness and remediation guidance for resource performance or availability issues that may affect your applications that run on AWS.</p> 
-<p>Both services are integrated with <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a>, allowing AWS Health events to trigger SSM Automation documents.</p> 
-<p>SSM Automation also offers an Approval action which temporarily pauses an Automation execution until your designated principals (e.g. IAM user) either approve or reject the action. More information about SSM automated actions is available <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-actions.html">Systems Manager Automation Actions</a>.</p> 
-<p><img class="alignnone wp-image-1353" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Ec2InstanceRetirement1-1024x441.png" alt="" width="800" height="344" /></p> 
-<p>&nbsp;</p> 
-<h6>Figure 1: AWS Services feed events into AWS Health which triggers EC2 Systems Manager</h6> 
-<p>&nbsp;</p> 
-<p>This post will walk through the four steps to setup Stop and Start of EC2 instances using SSM Automation in response to EC2 retirement events from AWS Health. To launch the solution in the us-east-1 region using AWS CloudFormation please click <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=StopStartEC2InstancewithApproval&amp;templateURL=https://s3.amazonaws.com/aws-health-tools-assets/cloudformation-templates/AWS-StopStartEC2InstancewithApproval.template">here</a>. Please change the region as required. We recommend reviewing the manual steps below before deploying the CloudFormation stack to have an understanding of the solution.</p> 
-<p><strong>Step 1:</strong> Set up required <a href="https://aws.amazon.com/iam/">AWS IAM</a> role<br /> <strong>Step 2:</strong> Set up the <a href="https://aws.amazon.com/sns/">Amazon SNS</a> Topic if you don’t have one already<br /> <strong>Step 3:</strong> Set up the <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> rule with the Automation document<br /> <strong>Step 4:</strong> Test it out and approve the Automation</p> 
-<h3></h3> 
-<h3>Setup Instructions</h3> 
-<p><strong>Step 1: Set up required IAM role</strong></p> 
-<p>First setup the required IAM permissions for CloudWatch Events to use by creating an IAM policy and associating with an IAM role for CloudWatch. For the purpose of this example we will call the IAM role the AutomationCWRole. Here is an example of an IAM policy that could be used for this purpose:</p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;ec2:StartInstances&quot;,
-&quot;ec2:StopInstances&quot;,
-&quot;ec2:DescribeInstanceStatus&quot;
-],
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;ssm:*&quot;
-],
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;sns:Publish&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:sns:*:*:Automation*&quot;
-]
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;iam:PassRole&quot;
-],
-&quot;Resource&quot;: &quot;arn:aws:iam::&lt;AccountId&gt;:role/AutomationCWRole&quot;
-}
-]
-}</code></pre> 
-<p>Please make sure to update the role ARN which account Id and role name. You need to ensure that the role has events.amazonaws.com and ssm.amazonaws.com configured as a trusted entity for the IAM role as shown here:</p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Service&quot;: [
-&quot;ssm.amazonaws.com&quot;,
-&quot;events.amazonaws.com&quot;
-]
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}
-]
-}
-</code></pre> 
-<p>More information about CloudWatch and IAM see <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/auth-and-access-control-cw.html">Authentication and Access Control for Amazon CloudWatch</a>. For more information about Systems Manager and IAM, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html">Configuring Access Using Systems Manager Managed Policies</a>.</p> 
-<p><strong>Step 2: Set up the Amazon SNS Topic if you don’t have one already</strong></p> 
-<p>If you choose to use Automation Approval actions, then you will also need to create an SNS topic that the approval notification will be published to or use an existing one. You will also need to subscribe the approvers to that SNS topic. More information on how to set this up is available <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/US_SetupSNS.html">here</a>.</p> 
-<p>We will use the SNS topic name AutomationStopStart for this example. Please note that the SNS Topic name must start with the Prefix: Automation.</p> 
-<p><strong>Step 3: Set up the Amazon CloudWatch Events rule with the Automation document</strong></p> 
-<p>First create a SSM Automation document named StopStartEC2InstancewithApproval by creating a json file using your preferred editor named “StopStartEC2InstancewithApproval.json”:</p> 
-<pre><code class="lang-json">{
-&quot;description&quot;:&quot;Stop and Start EC2 instances(s) with Approval&quot;,
-&quot;schemaVersion&quot;:&quot;0.3&quot;,
-&quot;assumeRole&quot;:&quot;{{ AutomationAssumeRole }}&quot;,
-&quot;parameters&quot;:{
-&quot;AutomationAssumeRole&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;The ARN of the role that allows Automation to perform the actions on your behalf.&quot;,
-&quot;default&quot;:&quot;arn:aws:iam::{{global:ACCOUNT_ID}}:role/AutomationServiceRole&quot;
-},
-&quot;InstanceIds&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;EC2 Instance(s) to Stop and Start&quot;
-},
-&quot;Approvers&quot;:{
-&quot;type&quot;:&quot;StringList&quot;,
-&quot;description&quot;:&quot;IAM user or user arn of approvers for the automation action&quot;
-},
-&quot;SNSTopicArn&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;description&quot;:&quot;The SNS topic ARN that you are using to get notifications on about EC2 retirement notifications. The SNS topic name must start with Automation.&quot;
-}
-},
-&quot;mainSteps&quot;:[
-{
-&quot;name&quot;:&quot;approve&quot;,
-&quot;action&quot;:&quot;aws:approve&quot;,
-&quot;timeoutSeconds&quot;:999999,
-&quot;onFailure&quot;:&quot;Abort&quot;,
-&quot;inputs&quot;:{
-&quot;NotificationArn&quot;:&quot;{{ SNSTopicArn }}&quot;, 
-&quot;Message&quot;: &quot;Your approval is required to proceed with the stop and start of an EC2 instance using the EC2 systems manager automation document that is scheduled for retirement.&quot;,
-&quot;MinRequiredApprovals&quot;:1,
-&quot;Approvers&quot;:[
-&quot;{{Approvers}}&quot;
-]
-}
-},
-{
-&quot;name&quot;:&quot;stopInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:2,
-&quot;timeoutSeconds&quot;:120,
-&quot;onFailure&quot;:&quot;Continue&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[
-&quot;{{ InstanceIds }}&quot;
-],
-&quot;DesiredState&quot;:&quot;stopped&quot;
-}
-},
-{
-&quot;name&quot;:&quot;forceStopInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:1,
-&quot;timeoutSeconds&quot;:60,
-&quot;onFailure&quot;:&quot;Continue&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[
-&quot;{{ InstanceIds }}&quot;
-],
-&quot;Force&quot;:true,
-&quot;DesiredState&quot;:&quot;stopped&quot;
-}
-},
-{
-&quot;name&quot;:&quot;startInstance&quot;,
-&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
-&quot;maxAttempts&quot;:3,
-&quot;timeoutSeconds&quot;:120,
-&quot;onFailure&quot;:&quot;Continue&quot;,
-&quot;inputs&quot;:{
-&quot;InstanceIds&quot;:[
-&quot;{{ InstanceIds }}&quot;
-],
-&quot;DesiredState&quot;:&quot;running&quot;
-}
-}
-]
-}
-</code></pre> 
-<p>Then use the AWS CLI to create the SSM Automation document using the JSON file above:</p> 
-<pre><code class="lang-json">[
-<em>aws ssm create-document --content file://StopStartEC2InstancewithApproval.json --name &quot; StopStartEC2InstancewithApproval&quot; --document-type &quot;Automation&quot;</em>
-]</code></pre> 
-<p>More information about creating creating SSM documents can be found at <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/create-ssm-doc.html">Creating Systems Manager Documents</a>.</p> 
-<p>You can then create the CloudWatch Events rule that will trigger the Automation document each time an EC2 retirement notification occurs. As an example you can use the following command using the AWS CLI:</p> 
-<pre><code class="lang-json">aws events put-rule --name &quot;EC2RetirementNotification&quot; --event-pattern &quot;{\&quot;source\&quot;:[\&quot;aws.health\&quot;],\&quot;detail-type\&quot;:[\&quot;AWS Health Event\&quot;],\&quot;detail\&quot;:{\&quot;service&quot;\&quot;:[\&quot;EC2\&quot;],\&quot;eventTypeCategory&quot;\&quot;:[\&quot;scheduledChange\&quot;],\&quot;eventTypeCode&quot;\&quot;:[\&quot;AWS_EC2_INSTANCE_RETIREMENT_SCHEDULED\&quot;]}&quot;}&quot;</code></pre> 
-<p>To set this up you can create a JSON file named <em>targets.json</em> using your preferred editor and then use that to create the CloudWatch Events target:</p> 
-<pre><code class="lang-json">[
-{
-&quot;Id&quot;:&quot;1&quot;,
-&quot;Arn&quot;:&quot;arn:aws:ssm:&lt;region&gt;:&lt;accountId&gt;:automation-definition/AWS-StopStartEC2InstancewithApproval&quot;,
-&quot;RoleArn&quot;:&quot;arn:aws:iam::&lt;accountId&gt;:role/AutomationCWRole&quot;,
-&quot;InputTransformer&quot;:{
-&quot;InputPathsMap&quot;:{
-&quot;Instances&quot;: &quot;$.resources&quot;
-},
-&quot;InputTemplate&quot;: &quot;{ \&quot;AutomationAssumeRole\&quot;:[\&quot;aws:iam::&lt;accountId&gt;:role/AutomationCWRole\&quot;],\&quot;Approvers\&quot;:[\&quot;&lt;IAMusername&gt;\&quot;],\&quot;SNSTopicArn\&quot;:[\&quot;arn:aws:sns:&lt;region&gt;:&lt;accountId&gt;:AutomationStopStart\&quot;],\&quot;InstanceIds\&quot;: &lt;Instances&gt; }&quot;
-}
-}
-]</code></pre> 
-<p>Please update the region, accountId, SNS topic ARN, IAM role ARN and IAM username in the json file above per your requirements. The target in this case is the Automation document StopStartEC2InstancewithApproval which Stops and Starts the instance(s) provided.</p> 
-<p>Then use the AWS CLI to create the target specifying the json file you created:</p> 
-<p><em> aws events put-targets –rule EC2RetirementNotification –targets file://targets.json</em></p> 
-<p><strong>Step 4: Test it out and approve the Automation</strong></p> 
-<p>You can test against the document using direct inputs as well:</p> 
-<p><em> aws ssm start-automation-execution –document-name AmazonEC2InstanceStopStartwithApproval –parameters AutomationAssumeRole=”aws:iam::&lt;AccountId&gt;:role/AutomationCWRole”,Approvers=&lt;IAMusername&gt;,SNSTopicArn=”arn:aws:sns:us-east-1:&lt;AccountId&gt;:AutomationStopStart”,InstanceIds=&lt;InstanceId&gt;</em></p> 
-<p>You can get the execution status using the AutomationExecutionId returned from the command above: aws ssm&nbsp; get-automation-execution –automation-execution-id &lt;value&gt;</p> 
-<p>Once you get the approval message published to your SNS topic’s subscribers, you can choose to approve or reject the action:</p> 
-<p><em> aws ssm send-automation-signal –automation-execution-id &lt;automation-execution-id&gt; –signal-type Approve –payload Comment=Replace_This_With_Approve_Comment</em></p> 
-<p>The automation can also be approved from the EC2 console in the Automation section:</p> 
-<p><img class="alignnone size-full wp-image-1354" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Ec2InstanceRetirement2.png" alt="" width="416" height="145" /></p> 
-<p>Please note that the approval will trigger the stop and start of the EC2 Instance, regardless of the comments provided.</p> 
-<p>You can also skip the approval step and instead use the AmazonEC2InstanceStopStart SSM Automation document. Please note that in very rare situations EC2 instances might not stop even after a force stop; you should contact AWS support if that happens.</p> 
-<h3>Conclusion</h3> 
-<p>You can use EC2 Systems Manager Automation to take remediation actions on your AWS resources in response to events that may impact. You can take this example and apply it to other EC2 scheduled changes (e.g. system reboot maintenance) or any event with any AWS resource that may suit your needs. You can also use the document provided to Stop and Start EC2 instances in an automated way. We recommend tailoring it and testing for your use-case before deploying in a production environment.</p> 
-<h3>About the Author</h3> 
-<p><img class=" wp-image-1355 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Tipu_Quershi.jpg" alt="" width="80" height="111" /></p> 
-<p>Tipu Qureshi is a principal engineer in the AWS support organization. He works with customers to implement automation, solve problems and setup new workloads on the AWS platform. He has created various architectures and certifications for cost-optimization and agility through DevOps.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/amazon-cloudwatch-events/" rel="tag">Amazon Cloudwatch Events</a>, <a href="https://aws.amazon.com/blogs/mt/tag/automation/" rel="tag">Automation</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/aws-sns/" rel="tag">AWS SNS</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager/" rel="tag">EC2 Systems Manager</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-windows/" rel="tag">EC2 Windows</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Get Disk Utilization of Your Fleet Using EC2 Systems Manager Custom Inventory Types</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tanu Mutreja</span></span> | on 
-<time property="datePublished" datetime="2017-09-20T14:23:32+00:00">20 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/get-disk-utilization-of-your-fleet-using-ec2-systems-manager-custom-inventory-types/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager/inventory/">Amazon EC2 Systems Manager Inventory</a> provides a centralized way to collect and query system, application, and instance metadata. Using the resource data sync feature, you can sync this metadata to Amazon S3. In Amazon S3 you can aggregate the metadata for different AWS Regions and accounts. After you sync this inventory data to Amazon S3, you can create various visuals of the data using Amazon Athena and Amazon QuickSight.</p> 
-<p>The inventory data collection policy is configured using <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">State Manager</a> , which in turn gets executed by <a href="https://github.com/aws/amazon-ssm-agent/tree/master/agent/plugins/inventory">aws:softwareInventory plugin</a> in <a href="https://github.com/aws/amazon-ssm-agent">amazon-ssm-agent</a>.</p> 
-<p>Amazon EC2 Systems Manager Inventory provides two ways to define the types of data that it collects: predefined and custom.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Predefined data types (with prefix AWS)</strong> are natively supported by the inventory plugin via multiple <a href="https://github.com/aws/amazon-ssm-agent/tree/master/agent/plugins/inventory/gatherers">gatherers</a>. Some examples of predefined inventory types are AWS:Application and AWS:WindowsUpdate.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Custom data type (with prefix Custom)</strong> is a special inventory data type that can be defined by end users. This data type provides the flexibility of collecting additional inventory data, such as server rack location of a managed instance.</p> 
-<p>In this blog, I’ll walk you through an example that shows how to use the custom inventory data type to collect disk utilization for Windows instances. We’ll use PowerShell scripts to collect disk utilization data in the Inventory. After the data is collected, we’ll use this data to get fleet-level aggregation of disk usage.</p> 
-<p><span id="more-1234"></span></p> 
-<h3>Step1: Create Inventory Policy Document with aws:runPowerShellScript plugin</h3> 
-<p>By default, you can use AWS-GatherSoftwareInventory document to collect Inventory data. However, for this example we’ll create a document with <strong>aws:runPowerShellScript &amp; aws:softwareInventory</strong> plugins to ensure that a PowerShell script is invoked before Inventory collection begins. Since amazon-ssm-agent preserves the order of the plugin’s executions, it ensures that the latest Disk Utilization data is captured before Inventory data is collected.</p> 
-<h4>Option 1: Create Document using the AWS Management Console</h4> 
-<p>You can create the document in the AWS console by going to EC2 -&gt; Systems Manager Shared Resources -&gt; Documents. Here is the document content.</p> 
-<pre><code class="lang-json">{
-&quot;schemaVersion&quot;: &quot;2.2&quot;,
-&quot;description&quot;: &quot;Run first a shell script &amp; then inventory plugin.&quot;,
-&quot;mainSteps&quot;: [
-{
-&quot;action&quot;: &quot;aws:runPowerShellScript&quot;,
-&quot;name&quot;: &quot;runPowerShellScript&quot;,
-&quot;inputs&quot;: {
-&quot;runCommand&quot;: &quot;{{ commands }}&quot;
-}
-},
-{
-&quot;action&quot;: &quot;aws:softwareInventory&quot;,
-&quot;name&quot;: &quot;collectSoftwareInventoryItems&quot;,
-&quot;inputs&quot;: {
-&quot;applications&quot;: &quot;{{ applications }}&quot;,
-&quot;awsComponents&quot;: &quot;{{ awsComponents }}&quot;,
-&quot;networkConfig&quot;: &quot;{{ networkConfig }}&quot;,
-&quot;windowsUpdates&quot;: &quot;{{ windowsUpdates }}&quot;,
-&quot;customInventory&quot;: &quot;{{ customInventory }}&quot;
-}
-}
-],
-&quot;parameters&quot;: {
-&quot;commands&quot;: {
-&quot;type&quot;: &quot;StringList&quot;,
-&quot;description&quot;: &quot;(Required) Specify a shell script or a command to run.&quot;,
-&quot;minItems&quot;: 1,
-&quot;displayType&quot;: &quot;textarea&quot;
-},
-&quot;applications&quot;: {
-&quot;type&quot;: &quot;String&quot;,
-&quot;default&quot;: &quot;Enabled&quot;,
-&quot;description&quot;: &quot;(Optional) Collect data for installed applications.&quot;,
-&quot;allowedValues&quot;: [
-&quot;Enabled&quot;,
-&quot;Disabled&quot;
-]
-},
-&quot;awsComponents&quot;: {
-&quot;type&quot;: &quot;String&quot;,
-&quot;default&quot;: &quot;Enabled&quot;,
-&quot;description&quot;: &quot;(Optional) Collect data for AWSComponents like amazon-ssm-agent.&quot;,
-&quot;allowedValues&quot;: [
-&quot;Enabled&quot;,
-&quot;Disabled&quot;
-]
-},
-&quot;networkConfig&quot;: {
-&quot;type&quot;: &quot;String&quot;,
-&quot;default&quot;: &quot;Enabled&quot;,
-&quot;description&quot;: &quot;(Optional) Collect data for Network configurations.&quot;,
-&quot;allowedValues&quot;: [
-&quot;Enabled&quot;,
-&quot;Disabled&quot;
-]
-},
-&quot;windowsUpdates&quot;: {
-&quot;type&quot;: &quot;String&quot;,
-&quot;default&quot;: &quot;Enabled&quot;,
-&quot;description&quot;: &quot;(Optional) Collect data for all WindowsUpdates.&quot;,
-&quot;allowedValues&quot;: [
-&quot;Enabled&quot;,
-&quot;Disabled&quot;
-]
-},
-&quot;customInventory&quot;: {
-&quot;type&quot;: &quot;String&quot;,
-&quot;default&quot;: &quot;Enabled&quot;,
-&quot;description&quot;: &quot;(Optional) Collect data for custom inventory.&quot;,
-&quot;allowedValues&quot;: [
-&quot;Enabled&quot;,
-&quot;Disabled&quot;
-]
-}
-}
-}</code></pre> 
-<h4>Option 2: Create Document using the AWS command line (aws-cli)</h4> 
-<p>a.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Create the document by running the aws-cli command that creates the document:</p> 
-<pre><code class="lang-bash">aws ssm create-document --content file://<em>path to your file\FileName</em> --name &quot;CustomInventory-Doc&quot; --document-type Command</code></pre> 
-<p>b.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Verify the document’s status by running following command:</p> 
-<p><code class="lang-python">aws ssm list-documents --document-filter-list key=Name,value= CustomInventory-Doc<br /> </code></p> 
-<p>Here is a sample output that you should see:<br /> <em>{</em><br /> <em>&nbsp;&nbsp;&nbsp; “DocumentIdentifiers”: [</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Name”: ” CustomInventory-Doc “, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “PlatformTypes”: [</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Windows”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Linux”</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ], </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “DocumentVersion”: “1”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “DocumentType”: “Command”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Owner”: “xxx”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “SchemaVersion”: “2.0”</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }</em><br /> <em>&nbsp;&nbsp;&nbsp; ]</em><br /> <em>}</em></p> 
-<h3>Step2: Create association using CustomInventory-Doc</h3> 
-<p>Now that the inventory policy document is created, we will “Create Association,” that is we’ll associate this policy document to the targeted instances. To use the EC2 console to Create Association, go to State Manager under Systems Manager Service.</p> 
-<p><img class="alignnone wp-image-1319 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/s1-1.png" alt="Create Association" width="975" height="306" /></p> 
-<p>Next, you need to pick instances to which you want to attach this Association. In addition, define a schedule for this inventory collection. After you pick the instances and schedule, you can paste following PowerShell script in the Commands parameter (as shown in the screenshot that follows). This script is executed by the <em><strong>aws:runPowerShellScript</strong></em> plugin before the Inventory plugin is invoked.</p> 
-<p>Script:</p> 
-<pre><code class="lang-powershell">$data = get-wmiobject win32_logicaldisk | Select-Object @{n=&quot;DeviceId&quot;;e={$_.&quot;DeviceID&quot;}}, @{n=&quot;VolumeName&quot;;e={$_.&quot;VolumeName&quot;}}, @{n=&quot;Use%&quot;;e={&quot;{0}&quot; -f [math]::Round(($_.&quot;Size&quot; - $_.&quot;FreeSpace&quot;) * 100 / $_.&quot;Size&quot;,0)}}, @{n=&quot;Size(GB)&quot;;e={&quot;{0}&quot; -f [math]::Round($_.&quot;Size&quot; / 1GB ,0)}} | ConvertTo-Json
-$content = &quot;{`&quot;SchemaVersion`&quot; : `&quot;1.0`&quot;, `&quot;TypeName`&quot;: `&quot;Custom:DiskUtilization`&quot;, `&quot;Content`&quot;: $data}&quot;
-$instanceId = Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/instance-id
-$filepath = &quot;C:\ProgramData\Amazon\SSM\InstanceData\&quot; + $instanceId + &quot;\inventory\custom\CustomDiskUsage.json&quot;
-if (-NOT (Test-Path $filepath)) {
-New-Item $filepath -ItemType file
-}
-Set-Content -Path $filepath -Value $content</code></pre> 
-<p>This script gets disk utilization data using win32_logicaldisk. It uses <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html">Instance-Metadata </a>to get InstanceId, which is required in order to save the content in the path: <em>%SystemDrive%\ProgramData\Amazon\SSM\InstanceData\&lt;instance-id&gt;\inventory\custom</em></p> 
-<p><img class="alignnone wp-image-1236 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/08/s2.png" alt="" width="975" height="1000" /></p> 
-<p>Choose Create Association and that’s it. After the policy runs on the targeted instances, disk utilization data will be collected and become ready for consumption.</p> 
-<p>Let’s go to Managed Instances and check disk utilization for an instance by choosing the Inventory tab. The following screenshot shows the new Custom data for one of my instances.</p> 
-<p>&nbsp;</p> 
-<p><img class="alignnone size-full wp-image-1337" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/20/ss1-1.png" alt="" width="731" height="412" /></p> 
-<p>We can also apply various filters to determine the fleet’s Disk Utilization health.</p> 
-<p>Let’s apply a filter to list all instances with disk utilization of more than 50 percent. The following screenshot shows instances matching the filter.</p> 
-<p><img class="alignnone wp-image-1321 size-full" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/s3-1.png" alt="" width="975" height="206" /></p> 
-<h3>Conclusion</h3> 
-<p>This blog shows you how to create a custom document with <em><strong>aws:runPowerShellScript</strong></em> &amp; <em><strong>aws:softwareInventory plugin</strong></em>s. This allows you to collect and then send Custom Inventory data from an instance every time the Inventory policy is run. The data can then be queried at both the fleet and instance level.</p> 
-<p>In this blog, we used a PowerShell script to get the custom data, however the same document can also be used to trigger any third-party application running in the instance to collect custom data.</p> 
-<h4>About the Author</h4> 
-<p><img class="size-full wp-image-1282 alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/13/SaurabhShankar.jpeg" alt="" width="119" height="160" /></p> 
-<p>Saurabh Shankar is a Software Development Engineer with the Amazon EC2 Systems Manager team. He has been with Amazon for four years, working on Inventory and other features of Amazon EC2 Systems Manager. Outside work, he enjoys trekking and taking photographs.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/mt/tag/aws-systems-manager-inventory/" rel="tag">AWS Systems Manager Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/custom-inventory/" rel="tag">Custom Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/custom-inventory-type/" rel="tag">Custom Inventory Type</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ec2-systems-manager-inventory/" rel="tag">EC2 Systems Manager Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/inventory/" rel="tag">Inventory</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm/" rel="tag">SSM</a>, <a href="https://aws.amazon.com/blogs/mt/tag/ssm-inventory/" rel="tag">SSM Inventory</a></span> 
 </footer> 
 </article> 
 <p>

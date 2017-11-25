@@ -191,6 +191,182 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to create an approval flow for an AWS Service Catalog product launch using AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Karthik Thirugnanasambandam</span></span> | on 
+<time property="datePublished" datetime="2017-08-17T09:12:06+00:00">17 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-solutions-architect-sa-guest-post/" title="View all posts in AWS Partner Solutions Architect (SA) Guest Post"><span property="articleSection">AWS Partner Solutions Architect (SA) Guest Post</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-sns/" title="View all posts in AWS SNS"><span property="articleSection">AWS SNS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/how-to-create-an-approval-flow-for-an-aws-service-catalog-product-launch-using-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-4904" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4904&amp;disqus_title=How+to+create+an+approval+flow+for+an+AWS+Service+Catalog+product+launch+using+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/apn/how-to-create-an-approval-flow-for-an-aws-service-catalog-product-launch-using-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4904');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/introduction.html" target="_blank" rel="noopener noreferrer">AWS Service Catalog</a> allows organizations to centrally manage commonly deployed IT services, achieve consistent governance, and help meet compliance requirements. AWS Service Catalog provides a standardized landscape for product provisioning. Users browse listings of products (services or applications) that they have access to, locate the product that they want to use, and launch it on their own as a provisioned product. The AWS Service Catalog API also provides programmatic control over all user actions.</p> 
+<p>Let’s say you need to build an approval workflow for a launch request from a user. Many solutions are available that use AWS Service Catalog APIs to build complex custom workflows are available (for example, <a href="https://www.servicenow.com/" target="_blank" rel="noopener noreferrer">ServiceNow</a>). In this blog post, I will describe how to build a simple workflow approval process using AWS Lambda, Amazon API Gateway, AWS CloudFormation, and Amazon Simple Notification Service (Amazon SNS), &nbsp;from the perspective of an AWS Service Catalog administrator.</p> 
+<p>To build this approval process, I’ll be using AWS CloudFormation features like <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-waitcondition.html" target="_blank" rel="noopener noreferrer">WaitCondition</a> and <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-waitconditionhandle.html" target="_blank" rel="noopener noreferrer">WaitHandle</a>, along with AWS Lambda as a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html" target="_blank" rel="noopener noreferrer">custom resource</a> to create a simple approval workflow. This approach is beneficial if you are looking for an AWS native solution to extend existing AWS Service Catalog features. This will also help retain the AWS Service Catalog user interface for product launch.</p> 
+<h3>Architecture Overview:<br /> <a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/09/servicecatalog1.png"><img class="alignnone size-full wp-image-4905" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/09/servicecatalog1.png" alt="" width="740" height="475" /></a></h3> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<ol> 
+<li>The user launches a product from their available product list and fills in all required data &nbsp;via the AWS Service Catalog interface. You can obtain the user’s email address through this input.</li> 
+<li>For products that require administrator approval, there will be three additional CloudFormation resources: a WaitHandle, the WaitCondition, and the custom resource. The Lambda custom resource is called to notify the admin who is responsible for approving the product launch. The stack will be in a waiting state until it receives a response from the admin.</li> 
+<li>The admin receives an email notification about the product launch and an approval URL to allow stack creation. The URL contains the WaitHandle pre-signed URL as a parameter for signaling the stack to continue.</li> 
+<li>When the admin clicks the URL, a Lambda function behind API Gateway receives the admin approval to proceed.</li> 
+<li>If the admin approves the product launch, the Lambda approval function sends the confirmation for the WaitHandle to proceed with stack creation. Otherwise, the stack is rolled back after the maximum wait time of 12 hours.</li> 
+<li>The user receives either a completion or rolled back status on the AWS Service Catalog console. Additionally, the admin could reach out to the user to ask for more information on the launch request before proceeding with the approval.</li> 
+</ol> 
+<h3>Build Steps:</h3> 
+<p>Now that we’ve covered the steps, let’s build the required resources for the approval flow. I have attached an <a href="https://s3.amazonaws.com/service-catalog-approval-flow/v1/resources_for_approval_template.yaml" target="_blank" rel="noopener noreferrer">AWS CloudFormation template</a> for your convenience so you can follow along. When you launch the template, you will be prompted to enter an email address for the approval flow. After stack completion, the following resources will be created:</p> 
+<p><strong>SNS topic</strong>: An SNS topic along with the provided email subscription. You will be getting an email to confirm your subscription. Subscribe to the topic to receive messages.</p> 
+<p><strong>SNS notification function</strong>: A Lambda function to send the approval mail. Whenever a new product launch requires approval, this Lambda function will be called. This function will get the WaitHandle pre-signed URL and user email address as input.</p> 
+<p><strong>Approval function</strong>: A Lambda function to notify the CloudFormation stack by sending the status of the WaitHandle pre-signed URL.</p> 
+<p>In addition to these resources, an API Gateway API and IAM roles will also be created.</p> 
+<p>Note the ARN for the Lambda function from the output. You will need this later to test the setup.</p> 
+<h3>Testing:</h3> 
+<p>To test the setup, you can use the attached <a href="https://s3.amazonaws.com/service-catalog-approval-flow/v1/sample_wordpress_for_approval_template.yaml" target="_blank" rel="noopener noreferrer">sample CloudFormation template</a>. This is a standard template provided by Amazon that deploys WordPress on AWS, but I’ve modified it to introduce approval flow and added three additional resources: WaitCondition, WaitConditionHandle, and NotificationFunction.</p> 
+<p>WaitCondition and WaitConditionHandle are used to pause the creation of a stack and to wait for a signal before continuing to create the stack.&nbsp;All other resources in the template depend on WaitCondition for approval status.</p> 
+<pre><code class="lang-python">  WaitHandle:
+Type: 'AWS::CloudFormation::WaitConditionHandle'
+WaitCondition:
+Type: 'AWS::CloudFormation::WaitCondition'
+Properties:
+Handle:
+Ref: 'WaitHandle'
+Timeout: '43200'</code></pre> 
+<p>NotificationFunction is a custom resource that triggers the Lambda function responsible for sending approval email.</p> 
+<pre><code class="lang-python">  NotificationFunction:
+Type: Custom::NotificationFunction
+Properties:
+ServiceToken: '&lt;REPLACE YOUR LAMBDA ARN&gt;'
+Region: !Ref &quot;AWS::Region&quot;
+WaitUrl: !Ref WaitHandle
+EmailID: !Ref UserEmail</code></pre> 
+<p>You’ll need to download the template and modify the NotificationFunction resource’s ServiceToken parameter to specify the ARN you obtained in the previous section. Once you have updated the Lambda ARN, you can add this template as a new product to your existing catalog or test the template in the CloudFormation console.</p> 
+<p>When the template has launched successfully, you’ll receive email requesting approval to proceed, similar to this:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/09/servicecatalog2.png"><img class="alignnone size-full wp-image-4907" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/09/servicecatalog2.png" alt="" width="975" height="473" /></a></p> 
+<p>When you choose the approval link, the Lambda function behind the API will send a confirmation for WaitHandle to proceed with stack creation. Otherwise, the stack will be rolled back after the maximum wait time of 12 hours.</p> 
+<h3>Troubleshooting:</h3> 
+<p>If you don’t receive the approval mail, check the SNS topic subscription status. Also, verify that you’ve specified the correct Lambda ARN in the template. Check Amazon CloudWatch logs for any exceptions or errors launching the stack. Additionally, you can check the following sources for general troubleshooting help with services such as Amazon SNS, API Gateway, and AWS Lambda:</p> 
+<li><a href="http://docs.aws.amazon.com/sns/latest/dg/SubscribeTopic.html" target="_blank" rel="noopener noreferrer">Check your SNS Topic subscription</a></li> 
+<li><a href="http://docs.aws.amazon.com/apigateway/latest/developerguide/monitoring_overview.html" target="_blank" rel="noopener noreferrer">Monitoring and Troubleshooting in API Gateway</a></li> 
+<li><a href="http://docs.aws.amazon.com/lambda/latest/dg/monitoring-functions-logs.html" target="_blank" rel="noopener noreferrer">Accessing Amazon CloudWatch Logs for AWS Lambda</a></li> 
+<h3>Conclusion:</h3> 
+<p>You can now add a simple approval workflow to your Service Catalog stack by adding the three resources from the sample test template. For more information about managing portfolios, products, and constraints from an administrator console, check this <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs.html" target="_blank" rel="noopener noreferrer">documentation</a>.</p> 
+<p>I hope this post and sample templates were useful in helping you extend AWS Service Catalog features. Feel free to leave your feedback or suggestions in the comments.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/apn/tag/apn-launches/" rel="tag">APN Launches</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-partner-solutions-architect-sa-guest-post/" rel="tag">AWS Partner Solutions Architect (SA) Guest Post</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-service-catalog/" rel="tag">AWS Service Catalog</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-sns/" rel="tag">AWS SNS</a>, <a href="https://aws.amazon.com/blogs/apn/tag/partner-sa-post/" rel="tag">Partner SA Post</a>, <a href="https://aws.amazon.com/blogs/apn/tag/partner-solutions-architect-sa-post/" rel="tag">Partner Solutions Architect (SA) Post</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4904');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Testing AWS GameDay with the AWS Well-Architected Framework – Review</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
+<time property="datePublished" datetime="2017-08-15T11:14:23+00:00">15 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-solutions-architect-sa-guest-post/" title="View all posts in AWS Partner Solutions Architect (SA) Guest Post"><span property="articleSection">AWS Partner Solutions Architect (SA) Guest Post</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/testing-aws-gameday-with-the-aws-well-architected-framework/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-4922" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4922&amp;disqus_title=Testing+AWS+GameDay+with+the+AWS+Well-Architected+Framework+%E2%80%93+Review&amp;disqus_url=https://aws.amazon.com/blogs/apn/testing-aws-gameday-with-the-aws-well-architected-framework/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4922');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h5><em>By Ian Scofield, Juan Villa, and Mike Ruiz</em></h5> 
+<p>&nbsp;</p> 
+<p>GameDay is an immersive, team-based event we’ve hosted at AWS Summits and re:Invent over the past few years. The event has teams of players settling into a challenging—and hopefully entertaining—scenario as DevOps leads at Unicorn.Rentals, a popular startup minutes away from the very public launch of a widely anticipated product. For more information, see the <a href="https://reinvent.awsevents.com/learn/gameday/" target="_blank" rel="noopener noreferrer">GameDay website</a>.</p> 
+<p>Of course, we have a lot going on behind the scenes to make GameDay work. Beyond all the enthusiastic acting and silly props, you’ll find a complex AWS infrastructure that includes a live score tracking engine, a single-instance load generator capable of dynamically varying the load over the course of the game, and various command and control functions. Overall, the infrastructure is simplistic in design but complex to operate, with room for improvement by incorporating the same best practices we encourage players to adopt during the course of the game.</p> 
+<p>Today, in an attempt to improve the player experience (and our quality of life), we have invited a team of AWS Partner Solutions Architects to review the GameDay architecture against a standard benchmark: the <a href="https://aws.amazon.com/architecture/well-architected/" target="_blank" rel="noopener noreferrer">AWS Well-Architected Framework</a>. The review team will work to understand the details of our architecture, ask detailed questions about our design and intent, and then deliver a document with prioritized findings.</p> 
+<p>In this post, we’ll cover the initial architecture review and the findings delivered from the review team. In future posts, we will share the process of making improvements and our plans to refine our architecture through continuous improvement and collaboration with AWS Solutions Architects.</p> 
+<p>&nbsp;</p> 
+<h3>Architecture Overview</h3> 
+<p>We began the review session by providing the review team with an architectural overview of GameDay, using diagrams and other collateral to highlight various components and relationships where appropriate. To help you follow along, here’s a summary of the high-level details we shared regarding the architecture of GameDay:</p> 
+<p>The GameDay infrastructure runs in a master AWS account, with each team having their own player AWS account (Figure 1). Various components in the master account serve load to player accounts, and host other services such as the scoreboard and cost calculator.&nbsp; The master account utilizes an <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html" target="_blank" rel="noopener noreferrer">IAM Cross-Account Role</a> in each player account that gives it the required permissions to perform administrative tasks throughout the day.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/11/GameDay1.png"><img class="size-full wp-image-4924 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/11/GameDay1.png" alt="" width="453" height="339" /></a></p> 
+<p style="text-align: center"><em>Figure 1: Master – player account relationship</em></p> 
+<p>The master account has the following components:</p> 
+<ol> 
+<li><strong>Scoreboard</strong> – This is a static site hosted in an <a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon Simple Storage Service</a> (Amazon S3) bucket, written in JavaScript and HTML.</li> 
+<li><strong>Cost calculator</strong> – In order to encourage players to take cost optimization into account, we charge players for their <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon Elastic Computer Cloud</a> (Amazon EC2) utilization (as in the real world!). The cost calculator includes three AWS Lambda functions that deduct points proportional to their consumption.</li> 
+<li><strong>Amazon DynamoDB</strong> – We use several <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a> tables to hold team information, score information, generic game configuration values, and other supporting information that is used by the master account components.</li> 
+<li><strong>Load generator</strong> – This is the heart of the game implementation. It is made up of a single EC2 instance. &nbsp;The load generator controls the game and initiates administrative actions. 
+<ol> 
+<li>When player accounts are dynamically created, a message is posted to an <a href="https://aws.amazon.com/sns/" target="_blank" rel="noopener noreferrer">Amazon Simple Notification Service</a> (Amazon SNS) topic in the master account with a notification of the account creation.&nbsp; On the load generator, PHP scripts run to do the account registration/provisioning based on the SNS messages.</li> 
+<li>The load generator runs one process per team that initiates connections to the infrastructure running in each player’s account.</li> 
+<li>The number of messages delivered to player accounts is scaled by creating additional processes per team within this load generator instance.</li> 
+</ol> </li> 
+</ol> 
+<p>Figure 2 shows a high-level overview of the master account architecture:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/11/GameDay2.png"><img class="size-full wp-image-4925 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/08/11/GameDay2.png" alt="" width="540" height="463" /></a></p> 
+<p style="text-align: center"><em>Figure 2: Initial architecture</em></p> 
+<p>&nbsp;</p> 
+<h3>Deep Dive</h3> 
+<p>Once they understood the architecture, the review team began a deep dive and asked clarifying questions on the various components based on the questions in the appendix of the <a href="https://d0.awsstatic.com/whitepapers/architecture/AWS_Well-Architected_Framework.pdf" target="_blank" rel="noopener noreferrer">Well-Architected Framework whitepaper</a>.&nbsp; In particular, they were very interested in manual operations (especially in the operation of the load generator), disaster recovery (specifically the recovery timing for assets lost before an event), and the security of the application as a whole (specifically the security of customer data and credentials). On the whole, the review was comprehensive and took approximately three hours to complete.</p> 
+<h3>Review Findings</h3> 
+<p>The review team consolidated the data and provided us with a written report that outlined the various findings.&nbsp; In addition, they provided us with notes and prioritized recommendations for each finding, which would serve as a starting point for us to develop our remediation plan.</p> 
+<p>Looking at GameDay through the lens of the Well-Architected Framework, it was obvious that there were many opportunities for improvement. The AWS review team prioritized the findings into two sets: critical and recommended. Most of the findings were classified as recommended—these don’t pose an immediate risk and will be incorporated into our roadmap.&nbsp; However, the three elements that were identified as critical needed to be addressed immediately.</p> 
+<p>Here’s the text of the findings from the review team:</p> 
+<p>&nbsp;</p> 
+<hr /> 
+<b></b> 
+<h3>SEC11. How are you managing keys?</h3> 
+<p><strong>Critical finding:</strong></p> 
+<p>The legacy administrative scripts for GameDay use AWS access keys and secret access keys and are stored in plain text in an Amazon DynamoDB table.</p> 
+<p><strong>Notes:</strong></p> 
+<p>The legacy administrative scripts require the use of an AWS access key and secret access key in order to interact with the AWS API on the player’s account, and do not support cross-account roles. Currently, these keys are being stored in plain text in an Amazon DynamoDB table, which the scripts query to retrieve the keys.&nbsp; AWS access keys and secret access keys are long-lived credentials that do not expire until they are explicitly revoked. Storing them in plain text increases the probability of the keys being compromised, and in the current design, any person with read access to the DynamoDB table (though the application or application administrative interface, indirectly via backups or logs, or directly via the AWS DynamoDB API) can read and exploit the keys.</p> 
+<p><strong>Recommendation:</strong></p> 
+<p>Modify the legacy administrative scripts to support cross-account roles in order to avoid the need to store and use AWS access keys and secret access Keys.</p> 
+<h3>REL 7. How are you planning for disaster recovery?</h3> 
+<p><strong>Critical finding:</strong></p> 
+<p>There is no clearly defined disaster recovery plan, recovery point objectives (RPO), or recovery time objectives (RTO).&nbsp; Additionally due to not having a plan, it cannot be periodically tested against the RPO and RTO objectives.</p> 
+<p><strong>Notes:</strong></p> 
+<p>GameDay was originally conceived as a set of instructions players would iteratively execute in a minimally configured account. As tooling and additional features were added over time, they have failed to step back and consider the entire stack and how to protect it from accidental, malicious, or environmental faults. Although it’s just a game, GameDay customers invest a whole day to attend and deserve as good an experience as can be delivered; having to scramble to invent a recovery process in the run-up to an event or, worse, in the middle of a live game would be a bad experience for all involved.</p> 
+<p><strong>Recommendation:</strong></p> 
+<ol> 
+<li>Define a disaster recovery plan, including RPO and RTO.</li> 
+<li>Periodically test the plan against the defined objectives.</li> 
+</ol> 
+<h3>REL 2. How does your system withstand component failures?</h3> 
+<p><strong>Critical finding:</strong></p> 
+<p>Currently the load generator is a single instance in a single <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html" target="_blank" rel="noopener noreferrer">Availability Zone</a>, and no recovery options have been configured.</p> 
+<p><strong>Notes:</strong></p> 
+<p>If this load generator instance were to fail or become unavailable either due to a hardware fault or in the (unlikely) event of an Availability Zone failure, the game would no longer be able to continue, because there is no automated process to recover the failed node.&nbsp; The load generator is currently not in an <a href="http://docs.aws.amazon.com/autoscaling/latest/userguide/AutoScalingGroup.html" target="_blank" rel="noopener noreferrer">Auto Scaling group</a>, nor does it have <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-recover.html" target="_blank" rel="noopener noreferrer">EC2 instance recovery</a> configured.&nbsp; Additionally, the instance has been configured manually and doesn’t contain all the necessary settings and scripts. &nbsp;Lastly, all state is stored locally on the instance and will need to be broken out when implementing a multi-instance architecture.&nbsp; By storing state externally, this will also alleviate the issue of losing state in the event of an instance failure.</p> 
+<p><strong>Recommendation:</strong></p> 
+<ol> 
+<li>Implement an EC2 Auto Scaling group with a launch configuration by creating an Amazon Machine Image (AMI) which self-contains all necessary components.&nbsp; Optionally, you can utilize user data to pull down all necessary components.</li> 
+<li>Configure your Auto Scaling group to span multiple Availability Zones to increase the resiliency and fault tolerance of your architecture.</li> 
+<li>Make your instances stateless to reduce the chance of losing information in the event of a failure.</li> 
+</ol> 
+<p>&nbsp;</p> 
+<hr /> 
+<h3></h3> 
+<h3>Next Steps</h3> 
+<p>Now that the review team has given us this feedback and the list of critical items that need to be resolved, we need to construct our remediation plan to correct these deficiencies.&nbsp; In our next blog post, we’ll go through this remediation plan and explain in depth how we plan to correct these items to improve the security and reliability of the GameDay application.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/apn/tag/aws-partner-solutions-architect-sa-guest-post/" rel="tag">AWS Partner Solutions Architect (SA) Guest Post</a>, <a href="https://aws.amazon.com/blogs/apn/tag/partner-solutions-architect-sa-post/" rel="tag">Partner Solutions Architect (SA) Post</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4922');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Announcing the Addition of four AWS Management Tools to the AWS Service Delivery Program</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -617,116 +793,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-4842');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Inside SendGrid’s Expanded Relationship with AWS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Paul Zimmerman</span></span> | on 
-<time property="datePublished" datetime="2017-07-25T09:39:44+00:00">25 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-partner-highlight/" title="View all posts in APN Partner Highlight"><span property="articleSection">APN Partner Highlight</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-technology-partners/" title="View all posts in APN Technology Partners"><span property="articleSection">APN Technology Partners</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/inside-sendgrids-expanded-relationship-with-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-4819" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4819&amp;disqus_title=Inside+SendGrid%26%238217%3Bs+Expanded+Relationship+with+AWS&amp;disqus_url=https://aws.amazon.com/blogs/apn/inside-sendgrids-expanded-relationship-with-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4819');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>In today’s world of technology dependencies, ensuring your application’s messages reach the intended recipients is critical. That’s why some of the largest and most successful software-defined organizations such as Airbnb, Spotify, Uber, and Yelp rely on SendGrid as their customer communication platform for their most valuable email.</p> 
-<p>Unlike most high-growth tech start-ups, SendGrid was born in the data center. Following the company’s launch in 2009, it built a high-performing and highly scalable private, internal cloud, achieving cost-efficient price-to-performance and four-hour server deploy times. Despite this, SendGrid chose to&nbsp;aggressively expand their relationship with AWS as their single, strategic cloud partner. Important factors in this decision included the business and marketing advantages of the AWS Partner Network (APN), AWS Marketplace, and the technology enablement advantages derived from elastic capabilities and managed services. So we are excited to officially announce SendGrid is joining the AWS family as an APN Partner and customer.</p> 
-<h3>Inside SendGrid’s Expanded Relationship with AWS</h3> 
-<p><em>By JR Jasperson, Chief Architect at SendGrid, an APN Technology Partner</em></p> 
-<p>I am excited to unveil two related blockbuster projects we’ve been working on for a long time. The first is a robust, expanded relationship with AWS. At SendGrid, we have been running many critical workloads with many cloud providers – including AWS – for many years. However, through our relationship with AWS, we will be deepening and broadening our collaboration and aggressively expanding our footprint with AWS. Below, we’ll share additional details into why, and what this will mean for our customers.</p> 
-<p>The second announcement is that we’ve been quietly working on a complete re-&shy;architecture of our mail processing pipeline for more than a year, and will roll these changes out throughout the remainder of 2017. While worthy of its own blog post, the new architecture was created and intended from day one to lay the groundwork for the SendGrid-AWS relationship. Our new pipeline is truly cloud-&shy;native and designed from the ground up to run optimally on AWS. In so doing, we’ve avoided several pitfalls that have beset other mail providers, so it’s helpful to tell both stories to highlight the advantages of AWS that we will be passing along to our customers.</p> 
-<h4>Some Background</h4> 
-<p>When SendGrid was founded in 2009, we created the notion of a transactional Email Service Provider (ESP)—sometimes referred to as a Cloud Mail Transfer Agent (MTA). Over the years, we have developed unique expertise at solving for the interesting and unique challenges that arise from serving an incredibly high volume (we surpassed the <a href="https://sendgrid.com/blog/celebrating-sending-1-trillion-emails/?utm_source=aws_apn_blog&amp;utm_medium=blog&amp;utm_content=partnership" target="_blank" rel="noopener noreferrer">1 trillion emails sent mark in March 2017</a>), multi-tenant SaaS email delivery platform. Many of these challenges are unique to this sector, when running in a cloud environment such as the AWS Cloud. Experience with single-tenant and/or on-premise solutions is only a fraction of what it takes to be successful as a true Cloud MTA.</p> 
-<p>At SendGrid we strive to live by our <a href="http://www.huffingtonpost.com/oliver-leung/the-four-hs-of-sendgrid_b_8317016.html" target="_blank" rel="noopener noreferrer">4 H values</a>: Humble, Honest, Hungry and Happy and to be unwavering champions for our customers. So we’re proud that our customers put more value on our differentiators: <a href="https://sendgrid.com/wp-content/uploads/2016/05/CINC_CaseStudy.pdf" target="_blank" rel="noopener noreferrer">ease of use</a>, <a href="https://sendgrid.com/solutions/sendgrid-api/" target="_blank" rel="noopener noreferrer">simple integration</a>, <a href="https://sendgrid.com/email-delivery/?utm_source=aws_apn_blog&amp;utm_medium=blog&amp;utm_content=partnership" target="_blank" rel="noopener noreferrer">deliverability</a>, <a href="https://sendgrid.com/wp-content/uploads/2016/05/Foursquare_CaseStudy-1.pdf" target="_blank" rel="noopener noreferrer">proven availability</a>, <a href="https://sendgrid.com/solutions/high-volume/?utm_source=aws_apn_blog&amp;utm_medium=blog&amp;utm_content=partnership" target="_blank" rel="noopener noreferrer">scalability</a>, and <a href="https://sendgrid.com/solutions/high-volume/?utm_source=aws_apn_blog&amp;utm_medium=blog&amp;utm_content=partnership" target="_blank" rel="noopener noreferrer">performance</a>—we feel that these numbers speak for themselves.</p> 
-<h4>Why Now?</h4> 
-<p>The adage “success lives at the intersection of preparation and opportunity” immediately comes to mind while considering the question of “why become an APN Partner now”? In our case, preparation meant re-&shy;architecting to a cloud-native platform. Two examples immediately stand out to illustrate why we viewed this as a prerequisite.</p> 
-<li>Email is delivered through a store-&shy;and-&shy;forward mechanism which naturally implies statefulness in the system. As other “Cloud MTAs” have discovered, stateful compute is a poor fit for the cloud as it erodes many of its advantages. This is why we have decoupled state from our MTAs in the new architecture which allows us to take full advantage of AWS’ compute elasticity.</li> 
-<li>In regards to IPs, deliverability is a measure of how many emails dispatched by a sender actually arrive in the recipient’s inbox as intended. It is perhaps the most important metric for an Email Service Provider. Surprisingly, deliverability is arduous to maintain, and one area in which SendGrid especially excels. Deliverability is not only highly dependent on the reputation of the specific IP address from which a given email is sent, but can also be negatively impacted due to bleed&shy;-over effects from dubious activity or poor reputation from other IPs in the same subnet. This is why SendGrid controls the entirety of the subnets from which we send and have ensured this will always remain the case as we transition additional workloads into AWS. We’ve spent years cultivating our IPs, and the 50,000 plus paying customers who use these IPs are a testament to their viability. Our move to AWS takes into account that reputations are hard to build and easy to destroy, hence why we will retain full control of all of our IPs during and after our move to AWS. Surprisingly, this is not the case with all “Cloud MTAs.”</li> 
-<h4>Customer Advantages</h4> 
-<p>With much of the prep work now behind us, we are well positioned to turbocharge our mission to become the world’s most trusted communication platform—our relationship with AWS has been born not of necessity, but opportunity. While the most commonly-&shy;cited benefits of AWS certainly apply in our case, I’ll skip these well&shy;-covered facets and instead highlight several that are more nuanced to a Cloud MTA and most importantly how we expect our customers to benefit from these advantages.</p> 
-<li>For years, SendGrid has maintained distributed Points of Presence (PoPs) around the globe to quickly respond to API and SMTP requests. The performance and responsiveness of these PoPs is a function of their proximity to our customers. We will be leveraging AWS’ immense global reach to create additional PoPs in many AWS regions, further reducing latency and increasing throughput for our customers.</li> 
-<li>Running a high&shy;-scale Cloud MTA requires near real-&shy;time analysis of a massive flow of data behind the scenes—challenges that require stream processing and machine learning technologies. We manage the infrastructure for these systems today, which naturally require overhead to build and maintain. Leveraging AWS capabilities such as Amazon Kinesis Streams, Amazon EMR, and Amazon Machine Learning will enable us to do more faster, allowing us to spend more time developing features for our customers.</li> 
-<li>The ability to visualize or deeply analyze facets of messaging campaigns (such as deliverability by recipient domain or click/open rates of A/B tests) is critical to maximize the value that SendGrid provides to our customers. Supporting and continuously enhancing these capabilities represents a non&shy;trivial engineering challenge for SendGrid  due both to our substantial volume (finding and associating discrete events in an enormous sea of data) and providing the flexibility necessary to meet diverse requirements. AWS offers a number of analytics capabilities such as Amazon Athena, Redshift, and AWS Data Pipeline that we have already begun to explore as more efficient and advanced ways for our customers to use SendGrid to optimize their messaging.</li> 
-<p>We will be leveraging AWS to allow us to focus on delivering even more value to our customers at an accelerated rate. While we’ve already been working on these projects for quite some time, we know these are just the first steps in an exciting journey— if you haven’t already, come join us and help shape the <a href="https://www.sendgrid.com/?utm_source=aws_apn_blog&amp;utm_medium=blog&amp;utm_content=partnership" target="_blank" rel="noopener noreferrer">future of messaging</a>!</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/apn/tag/apn-partner-guest-post/" rel="tag">APN Partner Guest Post</a>, <a href="https://aws.amazon.com/blogs/apn/tag/apn-partner-highlight/" rel="tag">APN Partner Highlight</a>, <a href="https://aws.amazon.com/blogs/apn/tag/apn-partner-recognition/" rel="tag">APN Partner Recognition</a>, <a href="https://aws.amazon.com/blogs/apn/tag/apn-technology-partners/" rel="tag">APN Technology Partners</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4819');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Partner SA Roundup – July 2017</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
-<time property="datePublished" datetime="2017-07-24T15:18:54+00:00">24 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/artificial-intelligence/amazon-machine-learning/" title="View all posts in Amazon Machine Learning*"><span property="articleSection">Amazon Machine Learning*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-partner-highlight/" title="View all posts in APN Partner Highlight"><span property="articleSection">APN Partner Highlight</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-technology-partners/" title="View all posts in APN Technology Partners"><span property="articleSection">APN Technology Partners</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-iot/" title="View all posts in AWS IoT"><span property="articleSection">AWS IoT</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/software/aws-marketplace/" title="View all posts in AWS Marketplace*"><span property="articleSection">AWS Marketplace*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/iot/" title="View all posts in IoT"><span property="articleSection">IoT</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/partner-sa-roundup-july-2017/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-4805" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4805&amp;disqus_title=Partner+SA+Roundup+%E2%80%93+July+2017&amp;disqus_url=https://aws.amazon.com/blogs/apn/partner-sa-roundup-july-2017/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4805');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>This month, Juan Villa, Pratap Ramamurthy, and Roy Rodan from the Emerging Partner SA team highlight a few of the partners they work with. They’ll be exploring Microchip, Domino, and Cohesive Networks.</p> 
-<h3>Microchip Zero Touch Secure Provisioning Kit, by Juan Villa</h3> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/600x400_microchip_Logo.jpg"><img class="wp-image-4808 size-medium alignleft" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/600x400_microchip_Logo-300x200.jpg" alt="" width="300" height="200" /></a>AWS IoT is a managed cloud platform that enables connected devices to easily and securely interact with cloud applications and other devices. In order for devices to interact with AWS IoT via the Message Queue Telemetry Transport (MQTT) protocol, they must first authenticate using Transport Layer Security (TLS) mutual authentication. This process involves the use of X.509 certificates on both the devices and in AWS IoT. A single certificate contains a private and a public key component. An IoT device needs to store the private key that corresponds to its certificate in order to establish a TLS connection with mutual authentication.</p> 
-<p>Private keys can be somewhat difficult to store securely on IoT devices. It’s easy to simply store data on a device’s local memory, but this is not enough to protect the key from tampering. It’s quite easy, and affordable, to purchase the necessary hardware to read the content of the memory from most microcontrollers and memory components used on IoT devices. This means that private keys used for authentication and establishing trust need to be stored in a secure manner.</p> 
-<p>This is where a secure element chip comes in! Microchip, an APN Advanced Technology Partner, is a silicon manufacturer that makes a secure element chip called the ATECC508A. This chip has a hardware-based secure key storage mechanism that is tamper-proof. In fact, once a key is stored in the ATECC508A, its contents cannot be read. The chip accomplishes this with hardware-based cryptographic acceleration features that allow it to perform cryptographic operations very quickly and with power efficiency. When considering ATECC508A for your product, keep in mind that Microchip can preload certificates on the secure element during manufacturing, before delivery. Combining this feature with AWS IoT’s support for custom certificate authorities and just-in-time registration can streamline device provisioning and security.</p> 
-<p>To make this secure element chip easy for you to try out, Microchip makes an evaluation kit called the <a href="http://www.microchip.com/promo/zero-touch-secure-provisioning-kit-forAWSIoT" target="_blank" rel="noopener noreferrer">Zero Touch Secure Provisioning Kit</a>. This kit includes a SAM G55 Cortex-M4 microcontroller, the ATECC508A secure element, and an ATWINC1500 power-efficient 802.11 b/g/n module, and comes with instructions on how to get started with AWS IoT. With this combination of silicon products you can begin testing and developing your next IoT product in a secure fashion.</p> 
-<p>Before you work on your next IoT project, I recommend that you consider a secure element in your design. For more information on ATECC508A, please read the <a href="http://www.atmel.com/Images/Atmel-8923S-CryptoAuth-ATECC508A-Datasheet-Summary.pdf" target="_blank" rel="noopener noreferrer">datasheet</a> on the Microchip website.</p> 
-<p>&nbsp;</p> 
-<h3>Domino Data Science Platform, by Pratap Ramamurthy</h3> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino.png"><img class="wp-image-4809 size-medium alignleft" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino-300x122.png" alt="" width="300" height="122" /></a>Machine learning, artificial intelligence, and predictive analytics are all data science techniques. Data scientists analyze data, search for insights that can be extracted, and build predictive models to solve business problems. To help data scientists with these tasks, a new set of tools, like <a href="http://jupyter.org/install.html" target="_blank" rel="noopener noreferrer">Jupyter notebooks</a>, as well as a wide variety of software packages ranging from deep learning neural network frameworks, like <a href="http://mxnet.io/" target="_blank" rel="noopener noreferrer">MXNet</a>, to <a href="http://www.nvidia.com/object/cuda_home_new.html" target="_blank" rel="noopener noreferrer">CUDA drivers</a>, are becoming popular. Data science as a field is growing rapidly as companies increase their reliance on these new technologies.</p> 
-<p>However, supporting a team of data scientists can be challenging. They need access to different tools and software packages, as well as a variety of servers connected to the cloud. They want to collaborate by sharing projects, not just code or results. They want to be able to publish models with minimal friction. While data scientists want flexibility, companies need to ensure security and compliance. Companies also need to understand resource how resources like data and compute power are being used.</p> 
-<p>Domino, an APN Advanced Technology Partner, solves these challenges by providing a convenient platform for data scientists to spin up interactive workspaces using the tools that they already know and love e.g., Jupyter, RStudio, Zeppelin, as well as commercial languages like SAS and Matlab, as seen in the diagram below.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino2.png"><img class="alignnone size-full wp-image-4811 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino2.png" alt="" width="595" height="488" /></a></p> 
-<p style="text-align: center"><em>Image used with permission</em></p> 
-<p>In the Domino platform, users can run experiments on a wide variety of instances that mirror the latest <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> options provided by AWS, as seen in the screenshot. Customers can run a notebook on instances with up to 2 TB of RAM with the <a href="https://aws.amazon.com/ec2/instance-types/x1/" target="_blank" rel="noopener noreferrer">AWS X1 instance family</a>. If more computational power is needed, you can switch the same notebook to GPU instances as necessary or connect to a Spark cluster.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino3.png"><img class="size-full wp-image-4812 alignright" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/Domino3.png" alt="" width="375" height="281" /></a>Because the software used for data science and machine learning has several layers, and new software technologies are introduced and adopted rapidly, the data science environment is often difficult to deploy and manage. Domino solves this problem by storing the notebooks, along with the software dependencies, inside a Docker image. &nbsp;This allows the same code to be rerun consistently in the future. There is no need to manually reconstruct the software, and this saves valuable time for data scientists.</p> 
-<p>Domino helps data scientists share and collaborate. They have introduced the software development concepts of code sharing, peer review, and discussions seamlessly into the data science platform.</p> 
-<p>For companies that have not yet started their cloud migration, <a href="https://www.dominodatalab.com/aws-data-science/" target="_blank" rel="noopener noreferrer">Domino on AWS</a> makes data science an excellent first project. Domino runs entirely on AWS and integrates well into many AWS services. Customers who have stored large amounts of data in <a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon S3</a> can easily access it from within Domino. After training their models by using this data, they can easily deploy their machine learning model into AWS with a click of a button, and within minutes access it using an API. All of these features help data scientists focus on data science and not the underlying platform.</p> 
-<p>Today, Domino Data Science Platform is available as a SaaS offering at <a href="https://www.dominodatalab.com/" target="_blank" rel="noopener noreferrer">the Domino website</a>. Additionally, if you prefer to run the Domino software in your own virtual private cloud (VPC), you can install the supporting software by using an <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> template that will be provided to you. If you prefer a dedicated VPC setting, Domino also offers a managed service offering, which runs Data Science Platform in a separate VPC. Before considering those options, get a quick feel for the platform by signing up for a <a href="http://trial.dominodatalab.com/" target="_blank" rel="noopener noreferrer">free trial</a>.</p> 
-<p>&nbsp;</p> 
-<h3>Cohesive Networks, by Roy Rodan</h3> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/1-16-2015-Cohesive-Networks-Logo.png"><img class="alignleft wp-image-4814 size-medium" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/1-16-2015-Cohesive-Networks-Logo-300x72.png" alt="" width="300" height="72" /></a>Many AWS customers have a hybrid network topology where part of their infrastructure is on premises and part is within the AWS Cloud. Most IT experts and developers aren’t concerned with where the infrastructure resides—all they want is easy access to all their resources, remote or local, from their local networks.</p> 
-<p>So how do you manage all these networks as a single distributed network in a secure fashion? The configuration and maintenance of such a complex environment can be challenging.</p> 
-<p>Cohesive Networks, an APN Advanced Technology Partner, has a product called <a href="https://aws.amazon.com/marketplace/pp/B00THF20J8" target="_blank" rel="noopener noreferrer">VNS3:vpn</a>, which helps alleviate some of these challenges. The VNS3 product family helps you build and manage a secure, highly available, and self-healing network between multiple regions, cloud providers, and/or physical data centers. VNS3:vpn is available as an <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html" target="_blank" rel="noopener noreferrer">Amazon Machine Image (AMI)</a> on the <a href="https://aws.amazon.com/marketplace" target="_blank" rel="noopener noreferrer">AWS Marketplace</a>, and can be deployed on an <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> instance inside your VPCs.</p> 
-<p>One of the interesting features of VNS3 is its ability to create meshed connectivity between multiple locations and run an overlay network on top. This effectively creates a single distributed network across locations by peering several remote VNS3 controllers.</p> 
-<p>Here is an example of a network architecture that uses VNS3 for peering:</p> 
-<p style="text-align: center"><a href="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/cohesive2.png"><img class="alignnone size-full wp-image-4815" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/07/24/cohesive2.png" alt="" width="975" height="321" /></a></p> 
-<p>The VNS3 controllers act as six machines in one, to address all your network needs:</p> 
-<li>Router</li> 
-<li>Switch</li> 
-<li>SSL/IPsec VPN concentrator</li> 
-<li>Firewall</li> 
-<li>Protocol redistributor</li> 
-<li>Extensible network functions virtualization (NFV)</li> 
-<p>The setup process is straightforward and well-documented with both <a href="https://www.youtube.com/watch?v=LcpOm09hko4" target="_blank" rel="noopener noreferrer">how-to videos</a> and detailed <a href="https://cohesive.net/dnld/Cohesive-Networks_VNS3-4.0-Configuration.pdf" target="_blank" rel="noopener noreferrer">configuration guides</a>.</p> 
-<p>Cohesive Networks also provides a web-based monitoring and management system called VNS3:ms in a separate server, where you can update your network topology, fail over between VNS3 controllers, and monitor your network and instances’ performance.</p> 
-<p>See the &nbsp;<a href="https://aws.amazon.com/marketplace/search/results?x=0&amp;y=0&amp;searchTerms=vns3&amp;page=1&amp;ref_=nav_search_box" target="_blank" rel="noopener noreferrer">VNS3</a> family offerings from Cohesive Networks in AWS Marketplace, and start building your secured, cross-connected network. &nbsp;Also, be sure to head over to the Cohesive Networks <a href="https://cohesive.net/" target="_blank" rel="noopener noreferrer">website</a> to learn more about the VNS3 product family.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/apn/tag/amazon-ec2/" rel="tag">Amazon EC2</a>, <a href="https://aws.amazon.com/blogs/apn/tag/amazon-machine-image/" rel="tag">Amazon Machine Image</a>, <a href="https://aws.amazon.com/blogs/apn/tag/amazon-machine-learning/" rel="tag">Amazon Machine Learning</a>, <a href="https://aws.amazon.com/blogs/apn/tag/apn-partner-highlight/" rel="tag">APN Partner Highlight</a>, <a href="https://aws.amazon.com/blogs/apn/tag/apn-technology-partners/" rel="tag">APN Technology Partners</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-cloudformation/" rel="tag">AWS CloudFormation</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-iot/" rel="tag">AWS IoT</a>, <a href="https://aws.amazon.com/blogs/apn/tag/aws-marketplace/" rel="tag">AWS Marketplace</a>, <a href="https://aws.amazon.com/blogs/apn/tag/iot/" rel="tag">IoT</a>, <a href="https://aws.amazon.com/blogs/apn/tag/partner-sa-post/" rel="tag">Partner SA Post</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4805');
 });
 </script> 
 </article> 

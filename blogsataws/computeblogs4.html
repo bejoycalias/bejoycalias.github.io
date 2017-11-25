@@ -191,6 +191,278 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Manage Kubernetes Clusters on AWS Using Kops</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Arun Gupta</span></span> | on 
+<time property="datePublished" datetime="2017-07-06T13:52:28+00:00">06 JUL 2017</time> | 
+<a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2475" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2475&amp;disqus_title=Manage+Kubernetes+Clusters+on+AWS+Using+Kops&amp;disqus_url=https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2475');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Any containerized application typically consists of multiple containers. There are containers for the application itself, a database, possibly a web server, and so on. During development, it’s normal to build and test this multi-container application on a single host. This approach works fine during early dev and test cycles but becomes a single point of failure for production, when application availability is critical.</p> 
+<p>In such cases, a multi-container application can be deployed on multiple hosts. Customers may need an external tool to manage such multi-container, multi-host deployments. Container orchestration frameworks provides the capability of cluster management, scheduling containers on different hosts, service discovery and load balancing, crash recovery, and other related functionalities. There are multiple options for container orchestration on Amazon Web Services: <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>, <a href="https://docs.docker.com/docker-for-aws/">Docker for AWS</a>, and <a href="https://dcos.io/">DC/OS</a>.</p> 
+<p>Another popular option for container orchestration on AWS is <a href="https://kubernetes.io/">Kubernetes</a>. There are multiple ways to run a <a href="https://github.com/kubernetes/community/blob/master/sig-aws/kubernetes-on-aws.md">Kubernetes cluster on AWS</a>. This multi-part blog series provides a brief overview and explains some of these approaches in detail. This first post explains how to create a Kubernetes cluster on AWS using <a href="https://github.com/kubernetes/kops">kops</a>.<span id="more-2475"></span></p> 
+<b>Kubernetes and Kops overview</b> 
+<p>Kubernetes is an open source, container orchestration platform. Applications packaged as Docker images can be easily deployed, scaled, and managed in a Kubernetes cluster. Some of the key features of Kubernetes are:</p> 
+<li><strong>Self-healing</strong><br /> Failed containers are restarted to ensure that the desired state of the application is maintained. If a node in the cluster dies, then the containers are rescheduled on a different node. Containers that do not respond to application-defined health check are terminated, and thus rescheduled.</li> 
+<li><strong>Horizontal scaling</strong><br /> Number of containers can be easily scaled up and down automatically based upon CPU utilization, or manually using a command.</li> 
+<li><strong>Service discovery and load balancing</strong><br /> Multiple containers can be grouped together discoverable using a DNS name. The service can be load balanced with integration to the native LB provided by the cloud provider.</li> 
+<li><strong>Application upgrades and rollbacks</strong><br /> Applications can be upgraded to a newer version without an impact to the existing one. If something goes wrong, Kubernetes rolls back the change.</li> 
+<p>Kops, short for Kubernetes Operations, is a set of tools for installing, operating, and deleting Kubernetes clusters in the cloud. A rolling upgrade of an older version of Kubernetes to a new version can also be performed. It also manages the cluster add-ons. After the cluster is created, the usual <a href="https://kubernetes.io/docs/user-guide/kubectl-overview/">kubectl CLI</a> can be used to manage resources in the cluster.</p> 
+<b>Download Kops and Kubectl</b> 
+<p>There is no need to download the Kubernetes binary distribution for creating a cluster using kops. However, you do need to download the kops CLI. It then takes care of downloading the right Kubernetes binary in the cloud, and provisions the cluster.</p> 
+<p>The different download options for kops are explained at <a href="https://github.com/kubernetes/kops#installing">github.com/kubernetes/kops#installing</a>. On MacOS, the easiest way to install kops is using the <a href="https://brew.sh/">brew</a> package manager.</p> 
+<pre>brew update &amp;&amp; brew install kops</pre> 
+<p>The version of kops can be verified using the kops version command, which shows:</p> 
+<pre>Version 1.6.1</pre> 
+<p>In addition, download kubectl. This is required to manage the Kubernetes cluster. The latest version of kubectl can be downloaded using the following command:</p> 
+<pre>curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/darwin/amd64/kubectl</pre> 
+<p>Make sure to include the directory where kubectl is downloaded in your <code>PATH</code>.</p> 
+<b>IAM user permission</b> 
+<p>The IAM user to create the Kubernetes cluster must have the following permissions:</p> 
+<li><code>AmazonEC2FullAccess</code></li> 
+<li><code>AmazonRoute53FullAccess</code></li> 
+<li><code>AmazonS3FullAccess</code></li> 
+<li><code>IAMFullAccess</code></li> 
+<li><code>AmazonVPCFullAccess</code></li> 
+<p>Alternatively, a new IAM user may be created and the policies attached as explained at <a href="http://github.com/kubernetes/kops/blob/master/docs/aws.md#setup-iam-user">github.com/kubernetes/kops/blob/master/docs/aws.md#setup-iam-user</a>.</p> 
+<b>Create an Amazon S3 bucket for the Kubernetes state store</b> 
+<p>Kops needs a “state store” to store configuration information of the cluster. &nbsp;For example, how many nodes, instance type of each node, and Kubernetes version. The state is stored during the initial cluster creation. Any subsequent changes to the cluster are also persisted to this store as well. As of publication, Amazon S3 is the only supported storage mechanism. Create a S3 bucket and pass that to the kops CLI during cluster creation.</p> 
+<p>This post uses the bucket name <code>kubernetes-aws-io</code>. Bucket names must be unique; you have to use a different name. Create an S3 bucket:</p> 
+<pre>aws s3api create-bucket --bucket kubernetes-aws-io</pre> 
+<p>I strongly recommend versioning this bucket in case you ever need to revert or recover a previous version of the cluster. This can be enabled using the AWS CLI as well:</p> 
+<pre>aws s3api put-bucket-versioning --bucket kubernetes-aws-io --versioning-configuration Status=Enabled</pre> 
+<p>For convenience, you can also define <code>KOPS_STATE_STORE</code> environment variable pointing to the S3 bucket. For example:</p> 
+<pre>export KOPS_STATE_STORE=s3://kubernetes-aws-io</pre> 
+<p>This environment variable is then used by the kops CLI.</p> 
+<b>DNS configuration</b> 
+<p>As of Kops 1.6.1, a top-level domain or a subdomain is required to create the cluster. This domain allows the worker nodes to discover the master and the master to discover all the etcd servers. This is also needed for kubectl to be able to talk directly with the master.</p> 
+<p>This domain may be registered with AWS, in which case a Route 53 hosted zone is created for you. Alternatively, this domain may be at a different registrar. In this case, create a Route 53 hosted zone. Specify the name server (NS) records from the created zone as NS records with the domain registrar.</p> 
+<p>This post uses a <code>kubernetes-aws.io</code> domain registered at a third-party registrar.</p> 
+<p>Generate a Route 53 hosted zone using the AWS CLI. Download <a href="https://github.com/stedolan/jq/wiki/Installation">jq</a> to run this command:</p> 
+<pre>ID=$(uuidgen) &amp;&amp; \
+aws route53 create-hosted-zone \
+--name cluster.kubernetes-aws.io \
+--caller-reference $ID \
+| jq .DelegationSet.NameServers</pre> 
+<p>This shows an output such as the following:</p> 
+<pre>[
+&quot;ns-94.awsdns-11.com&quot;,
+&quot;ns-1962.awsdns-53.co.uk&quot;,
+&quot;ns-838.awsdns-40.net&quot;,
+&quot;ns-1107.awsdns-10.org&quot;
+]</pre> 
+<p>Create NS records for the domain with your registrar. Different options on how to configure DNS for the cluster are explained at <a href="http://github.com/kubernetes/kops/blob/master/docs/aws.md#configure-dns">github.com/kubernetes/kops/blob/master/docs/aws.md#configure-dns</a>.</p> 
+<p>Experimental&nbsp;support to create a gossip-based cluster was added in Kops 1.6.2. This post uses a DNS-based approach, as that is more mature and well tested.</p> 
+<b>Create the Kubernetes cluster</b> 
+<p>The Kops CLI can be used to create a highly available cluster, with multiple master nodes spread across multiple Availability Zones. Workers can be spread across multiple zones as well. Some of the tasks that happen behind the scene during cluster creation are:</p> 
+<li>Provisioning EC2 instances</li> 
+<li>Setting up AWS resources such as networks, Auto Scaling groups, IAM users, and security groups</li> 
+<li>Installing Kubernetes.</li> 
+<p>Start the Kubernetes cluster using the following command:</p> 
+<pre>kops create cluster \
+--name cluster.kubernetes-aws.io \
+--zones us-west-2a \
+--state s3://kubernetes-aws-io \
+--yes</pre> 
+<p>In this command:</p> 
+<li><code>--zones</code><br /> Defines the zones in which the cluster is going to be created. Multiple comma-separated zones can be specified to span the cluster across multiple zones.</li> 
+<li><code>--name</code><br /> Defines the cluster’s name.</li> 
+<li><code>--state</code><br /> Points to the S3 bucket that is the state store.</li> 
+<li><code>--yes</code><br /> Immediately creates the cluster. Otherwise, only the cloud resources are created and the cluster needs to be started explicitly using the command <code>kops update --yes</code>. If the cluster needs to be edited, then the <code>kops edit cluster</code> command can be used.</li> 
+<p>This starts a single master and two worker node Kubernetes cluster. The master is in an Auto Scaling group and the worker nodes are in a separate group. By default, the master node is <code>m3.medium</code> and the worker node is <code>t2.medium</code>. Master and worker nodes are assigned separate IAM roles as well.</p> 
+<p>Wait for a few minutes for the cluster to be created. The cluster can be verified using the command <code>kops validate cluster --state=s3://kubernetes-aws-io</code>. It shows the following output:</p> 
+<pre>Using cluster from kubectl context: cluster.kubernetes-aws.io
+Validating cluster cluster.kubernetes-aws.io
+INSTANCE GROUPS
+NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;ROLE&nbsp;&nbsp;&nbsp;  &nbsp;MACHINETYPE&nbsp;&nbsp;&nbsp;&nbsp;MIN&nbsp;&nbsp;&nbsp;&nbsp;MAX&nbsp;&nbsp;&nbsp;&nbsp;SUBNETS
+master-us-west-2a&nbsp;&nbsp;&nbsp;&nbsp;Master&nbsp;&nbsp;&nbsp;&nbsp;m3.medium&nbsp;&nbsp;&nbsp;&nbsp;  1&nbsp;&nbsp;&nbsp;   1&nbsp;&nbsp;&nbsp;&nbsp;  us-west-2a
+nodes&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;    &nbsp;Node&nbsp;&nbsp;&nbsp;  &nbsp;t2.medium&nbsp;&nbsp;&nbsp;&nbsp;  2&nbsp;&nbsp;&nbsp; &nbsp; 2&nbsp;&nbsp;&nbsp;&nbsp;  us-west-2a
+NODE STATUS
+NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                   ROLE&nbsp;&nbsp;&nbsp;&nbsp;  READY
+ip-172-20-38-133.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;node&nbsp;&nbsp;&nbsp;&nbsp;  True
+ip-172-20-38-177.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;master&nbsp;&nbsp;&nbsp;&nbsp;True
+ip-172-20-46-33.us-west-2.compute.internal&nbsp;&nbsp; &nbsp;&nbsp;node&nbsp;&nbsp;&nbsp;  &nbsp;True
+Your cluster cluster.kubernetes-aws.io is ready</pre> 
+<p>It shows the different instances started for the cluster, and their roles. If multiple cluster states are stored in the same bucket, then <code>--name &lt;NAME&gt;</code> can be used to specify the exact cluster name.</p> 
+<p>Check all nodes in the cluster using the command kubectl get nodes:</p> 
+<pre>NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;STATUS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; AGE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; VERSION
+ip-172-20-38-133.us-west-2.compute.internal&nbsp;&nbsp; Ready,node&nbsp;&nbsp;&nbsp;&nbsp; 14m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2
+ip-172-20-38-177.us-west-2.compute.internal&nbsp;&nbsp; Ready,master&nbsp;&nbsp; 15m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2
+ip-172-20-46-33.us-west-2.compute.internal&nbsp;&nbsp;&nbsp;&nbsp;Ready,node&nbsp;&nbsp;&nbsp;&nbsp; 14m&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; v1.6.2</pre> 
+<p>Again, the internal IP address of each node, their current status (master or node), and uptime are shown. The key information here is the Kubernetes version for each node in the cluster, 1.6.2 in this case.</p> 
+<p>The kubectl value included in the PATH earlier is configured to manage this cluster. Resources such as pods, replica sets, and services can now be created in the usual way.</p> 
+<p>Some of the common options that can be used to override the default cluster creation are:</p> 
+<li><code>--kubernetes-version</code><br /> The version of Kubernetes cluster. The exact versions supported are defined at <a href="http://github.com/kubernetes/kops/blob/master/channels/stable">github.com/kubernetes/kops/blob/master/channels/stable</a>.</li> 
+<li><code>--master-size and --node-size</code><br /> Define the instance of master and worker nodes.</li> 
+<li><code>--master-count and --node-count</code><br /> Define the number of master and worker nodes. By default, a master is created in each zone specified by <code>--master-zones</code>. Multiple master nodes can be created by a higher number using <code>--master-count</code> or specifying multiple Availability Zones in <code>--master-zones</code>.</li> 
+<p>A three-master and five-worker node cluster, with master nodes spread across different Availability Zones, can be created using the following command:</p> 
+<pre>kops create cluster \
+--name cluster2.kubernetes-aws.io \
+--zones us-west-2a,us-west-2b,us-west-2c \
+--node-count 5 \
+--state s3://kubernetes-aws-io \
+--yes</pre> 
+<p>Both the clusters are sharing the same state store but have different names. This also requires you to create an additional Amazon Route 53 hosted zone for the name.</p> 
+<p>By default, the resources required for the cluster are directly created in the cloud. The <code>--target</code> option can be used to generate the AWS CloudFormation scripts instead. These scripts can then be used by the AWS CLI to create resources at your convenience.</p> 
+<p>Get a complete list of options for cluster creation with <code>kops create cluster --help</code>.</p> 
+<p>More details about the cluster can be seen using the command <code>kubectl cluster-info</code>:</p> 
+<pre>Kubernetes master is running at https://api.cluster.kubernetes-aws.io
+KubeDNS is running at https://api.cluster.kubernetes-aws.io/api/v1/proxy/namespaces/kube-system/services/kube-dns
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.</pre> 
+<p>Check the client and server version using the command <code>kubectl version</code>:</p> 
+<pre>Client Version: version.Info{Major:&quot;1&quot;, Minor:&quot;6&quot;, GitVersion:&quot;v1.6.4&quot;, GitCommit:&quot;d6f433224538d4f9ca2f7ae19b252e6fcb66a3ae&quot;, GitTreeState:&quot;clean&quot;, BuildDate:&quot;2017-05-19T18:44:27Z&quot;, GoVersion:&quot;go1.7.5&quot;, Compiler:&quot;gc&quot;, Platform:&quot;darwin/amd64&quot;}
+Server Version: version.Info{Major:&quot;1&quot;, Minor:&quot;6&quot;, GitVersion:&quot;v1.6.2&quot;, GitCommit:&quot;477efc3cbe6a7effca06bd1452fa356e2201e1ee&quot;, GitTreeState:&quot;clean&quot;, BuildDate:&quot;2017-04-19T20:22:08Z&quot;, GoVersion:&quot;go1.7.5&quot;, Compiler:&quot;gc&quot;, Platform:&quot;linux/amd64&quot;}</pre> 
+<p>Both client and server version are 1.6 as shown by the Major and Minor attribute values.</p> 
+<b>Upgrade the Kubernetes cluster</b> 
+<p>Kops can be used to create a Kubernetes 1.4.x, 1.5.x, or an older version of the 1.6.x cluster using the <code>--kubernetes-version</code> option. The exact versions supported are defined at <a href="https://github.com/kubernetes/kops/blob/master/channels/stable">github.com/kubernetes/kops/blob/master/channels/stable</a>.</p> 
+<p>Or, you may have used kops to create a cluster a while ago, and now want to upgrade to the latest recommended version of Kubernetes. Kops supports rolling cluster upgrades where the master and worker nodes are upgraded one by one.</p> 
+<p>As of kops 1.6.1, upgrading a cluster is a three-step process.</p> 
+<p>First, check and apply the latest recommended Kubernetes update.</p> 
+<pre>kops upgrade cluster \
+--name cluster2.kubernetes-aws.io \
+--state s3://kubernetes-aws-io \
+--yes</pre> 
+<p>The <code>--yes</code> option immediately applies the changes. Not specifying the <code>--yes</code> option shows only the changes that are applied.</p> 
+<p>Second, update the state store to match the cluster state. This can be done using the following command:</p> 
+<pre>kops update cluster \
+--name cluster2.kubernetes-aws.io \
+--state s3://kubernetes-aws-io \
+--yes</pre> 
+<p>Lastly, perform a rolling update for all cluster nodes using the <code>kops rolling-update</code> command:</p> 
+<pre>kops rolling-update cluster \
+--name cluster2.kubernetes-aws.io \
+--state s3://kubernetes-aws-io \
+--yes</pre> 
+<p>Previewing the changes before updating the cluster can be done using the same command but without specifying the <code>--yes</code> option. This shows the following output:</p> 
+<pre>NAME&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     STATUS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;NEEDUPDATE&nbsp;&nbsp;&nbsp;&nbsp;READY&nbsp;&nbsp;&nbsp;&nbsp;MIN&nbsp;&nbsp;&nbsp;&nbsp;MAX&nbsp;&nbsp;&nbsp;&nbsp;NODES
+master-us-west-2a&nbsp;&nbsp;&nbsp;&nbsp;NeedsUpdate&nbsp;&nbsp;&nbsp;1&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;0&nbsp;&nbsp;&nbsp;    &nbsp;1&nbsp;&nbsp;&nbsp;  &nbsp;1&nbsp;&nbsp;&nbsp;  &nbsp;1
+nodes&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;    &nbsp;&nbsp;&nbsp;NeedsUpdate&nbsp;&nbsp;&nbsp;2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;     &nbsp;&nbsp;0&nbsp;&nbsp;&nbsp;    &nbsp;2&nbsp;&nbsp;&nbsp;  &nbsp;2&nbsp;&nbsp;&nbsp;  &nbsp;2</pre> 
+<p>Using <code>--yes</code> updates all nodes in the cluster, first master and then worker. There is a 5-minute delay between restarting master nodes, and a 2-minute delay between restarting nodes. These values can be altered using <code>--master-interval</code> and <code>--node-interval</code> options, respectively.</p> 
+<p>Only the worker nodes may be updated by using the <code>--instance-group</code> node option.</p> 
+<b>Delete the Kubernetes cluster</b> 
+<p>Typically, the Kubernetes cluster is a long-running cluster to serve your applications. After its purpose is served, you may delete it. It is important to delete the cluster using the kops command. This ensures that all resources created by the cluster are appropriately cleaned up.</p> 
+<p>The command to delete the Kubernetes cluster is:</p> 
+<pre>kops delete cluster --state=s3://kubernetes-aws-io --yes</pre> 
+<p>If multiple clusters have been created, then specify the cluster name as in the following command:</p> 
+<pre>kops delete cluster&nbsp;cluster2.kubernetes-aws.io --state=s3://kubernetes-aws-io --yes</pre> 
+<b>Conclusion</b> 
+<p>This post explained how to manage a Kubernetes cluster on AWS using kops. Kubernetes on AWS users provides a self-published list of companies using Kubernetes on AWS.</p> 
+<p>Try starting a cluster, create a few Kubernetes resources, and then tear it down. Kops on AWS provides a more comprehensive tutorial for setting up Kubernetes clusters. Kops docs are also helpful for understanding the details.</p> 
+<p>In addition, the Kops team hosts <a href="https://github.com/kubernetes/kops#office-hours">office hours</a> to help you get started, from guiding you with your first pull request. You can always join the <a href="http://slack.k8s.io/">#kops channel on Kubernetes slack</a> to ask questions. If nothing works, then file an issue at <a href="https://github.com/kubernetes/kops/issues">github.com/kubernetes/kops/issues</a>.</p> 
+<p>Future posts in this series will explain other ways of creating and running a Kubernetes cluster on AWS.</p> 
+<p>—&nbsp;<a href="http://twitter.com/arungupta">Arun</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/containers/" rel="tag">Containers</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/kubernetes/" rel="tag">Kubernetes</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2475');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Blue/Green Deployments with Amazon EC2 Container Service</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-06-30T15:26:24+00:00">30 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/bluegreen-deployments-with-amazon-ecs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2448" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2448&amp;disqus_title=Blue%2FGreen+Deployments+with+Amazon+EC2+Container+Service&amp;disqus_url=https://aws.amazon.com/blogs/compute/bluegreen-deployments-with-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2448');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>This post and accompanying code was generously contributed by:</p> 
+<table> 
+<tbody> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg" alt="" width="120" height="160" /></a></td> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg" alt="" width="119" height="160" /></a></td> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg"><img class="aligncenter wp-image-2467 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg" alt="" width="119" height="160" /></a></td> 
+</tr> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><b>Jeremy Cowan</b><br /> Solutions Architect</td> 
+<td style="padding: 0px 30px 0px 0px"><b>Anuj Sharma</b><br /> DevOps Cloud Architect</td> 
+<td style="padding: 0px 30px 0px 0px"><b>Peter Dalbhanjan</b><br /> Solutions Architect</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>Deploying software updates in traditional non-containerized environments is hard and fraught with risk. When you write your deployment package or script, you have to assume that the target machine is in a particular state. If your staging environment is not an exact mirror image of your production environment, your deployment could fail. These failures frequently cause outages that persist until you re-deploy the last known good version of your application. If you are an Operations Manager, this is what keeps you up at night.</p> 
+<p>Increasingly, customers want to do testing in production environments without exposing customers to the new version until the release has been vetted. Others want to expose a small percentage of their customers to the new release to gather feedback about a feature before it’s released to the broader population. This is often referred to as canary analysis or canary testing. In this post, I introduce patterns to implement blue/green and canary deployments using <a href="https://aws.amazon.com/elasticloadbalancing/applicationloadbalancer/">Application Load Balancers</a> and <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html">target groups</a>.</p> 
+<p>If you’d like to try this approach to blue/green deployments, we have open sourced the code and AWS CloudFormation templates in the <a href="https://github.com/awslabs/ecs-blue-green-deployment">ecs-blue-green-deployment GitHub repo</a>. The workflow builds an <a href="https://github.com/awslabs/ecs-refarch-continuous-deployment">automated CI/CD pipeline</a> that deploys your service onto an ECS cluster and offers a controlled process to swap target groups when you’re ready to promote the latest version of your code to production. You can quickly set up the environment in three steps&nbsp;and see the blue/green swap in action. We’d love for you to try it and send us your feedback!</p> 
+<p><span id="more-2448"></span></p> 
+<b>Benefits of blue/green</b> 
+<p>Blue/green deployments are a type of immutable deployment that help you deploy software updates with less risk. The risk is reduced by creating separate environments for the current running or “blue” version of your application, and the new or “green” version of your application.</p> 
+<p>This type of deployment gives you an opportunity to test features in the green environment without impacting the current running version of your application. When you’re satisfied that the green version is working properly, you can gradually reroute the traffic from the old blue environment to the new green environment by modifying DNS. By following this method, you can update and roll back features with near zero downtime.</p> 
+<table> 
+<tbody> 
+<tr> 
+<td><img class="wp-image-2450" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_1-245x300.png" alt="" width="200" height="245" /></td> 
+<td><i>A typical blue/green deployment involves shifting traffic between 2 distinct environments.</i></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>This ability to quickly roll traffic back to the still-operating blue environment is one of the key benefits of blue/green deployments. With blue/green, you should be able to roll back to the blue environment at any time during the deployment process. This limits downtime to the time it takes to realize there’s an issue in the green environment and shift the traffic back to the blue environment. Furthermore, the impact of the outage is limited to the portion of traffic going to the green environment, not all traffic. If the blast radius of deployment errors is reduced, so is the overall deployment risk.</p> 
+<b>Containers make it simpler</b> 
+<p>Historically, blue/green deployments were not often used to deploy software on-premises because of the cost and complexity associated with provisioning and managing multiple environments. Instead, applications were upgraded in place.</p> 
+<p>Although this approach worked, it had several flaws, including the ability to roll back quickly from failures. Rollbacks typically involved re-deploying a previous version of the application, which could affect the length of an outage caused by a bad release. Fixing the issue took precedence over the need to debug, so there were fewer opportunities to learn from your mistakes.</p> 
+<p>Containers can ease the adoption of blue/green deployments because they’re easily packaged and behave consistently as they’re moved between environments. This consistency comes partly from their immutability. To change the configuration of a container, update its Dockerfile and rebuild and re-deploy the container rather than updating the software in place.</p> 
+<p>Containers also provide process and namespace isolation for your applications, which allows you to run multiple versions of them side by side on the same Docker host without conflicts. Given their small sizes relative to virtual machines, you can binpack more containers per host than VMs. This lets you make more efficient use of your computing resources, reducing the cost of blue/green deployments.</p> 
+<b>Fully Managed Updates with Amazon&nbsp;ECS</b> 
+<p><a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service</a> (ECS)&nbsp;performs rolling updates when you update an existing Amazon ECS service. A rolling update involves replacing the current running version of the container with the latest version. The number of containers Amazon ECS adds or removes from service during a rolling update is controlled by adjusting the minimum and maximum number of healthy tasks allowed during service deployments.</p> 
+<p>When you update your service’s task definition with the latest version of your container image, Amazon ECS automatically starts replacing the old version of your container with the latest version. During a deployment, Amazon ECS drains connections from the current running version and registers your new containers with the <a href="https://aws.amazon.com/elasticloadbalancing/applicationloadbalancer/">Application Load Balancer</a> as they come online.</p> 
+<b>Target groups</b> 
+<p>A target group is a logical construct that allows you to run multiple services behind the same Application Load Balancer. This is possible because each target group has its own listener.</p> 
+<p>When you create an Amazon ECS service that’s fronted by an Application Load Balancer, you have to designate a target group for your service. Ordinarily, you would create a target group for each of your Amazon ECS services. However, the approach we’re going to explore here involves creating two target groups: one for the blue version of your service, and one for the green version of your service. We’re also using a different listener port for each target group so that you can test the green version of your service using the same path as the blue service.</p> 
+<p>With this configuration, you can run both environments in parallel until you’re ready to cut over to the green version of your service. You can also do things such as restricting access to the green version to testers on your internal network, using security group rules and placement constraints. For example, you can target the green version of your service to only run on instances that are accessible from your corporate network.</p> 
+<b>Swapping Over</b> 
+<p>When you’re ready to replace the old blue service with the new green service, call the <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_ModifyListener.html">ModifyListener API</a> operation to swap the listener’s rules for the target group rules. The change happens instantaneously. Afterward, the green service is running in the target group with the port 80 listener and the blue service is running in the target group with the port 8080 listener. The diagram below is an illustration of the approach described.</p> 
+<h4>Scenario</h4> 
+<p>Two services are defined, each with their own target group registered to the same Application Load Balancer but listening on different ports. Deployment is completed by swapping the listener rules between the two target groups.</p> 
+<p>The second service is deployed with a new target group listening on a different port but registered to the same Application Load Balancer.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2.png"><img class="aligncenter wp-image-2451" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2-300x214.png" alt="" width="400" height="285" /></a></p> 
+<p>By using 2 listeners, requests to blue services are directed to the target group with the port 80 listener, while requests to the green services are directed to target group with the port 8080 listener.</p> 
+<p>After automated or manual testing, the deployment can be completed by swapping the listener rules on the Application Load Balancer and sending traffic to the green service.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3.png"><img class="aligncenter wp-image-2452" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3-300x221.png" alt="" width="401" height="295" /></a></p> 
+<b>Caveats</b> 
+<p>There are a few caveats to be mindful of when using this approach. This method:</p> 
+<li><strong>Assumes that your application code is completely stateless</strong>. Store state outside of the container.</li> 
+<li><strong>Doesn’t gracefully drain connections</strong>. The swapping of target groups is sudden and abrupt. Therefore, be cautious about using this approach if your service has long-running transactions.</li> 
+<li><strong>Doesn’t allow you to perform canary deployments</strong>. While the method gives you the ability to quickly switch between different versions of your service, it does not allow you to divert a portion of the production traffic to a canary or control the rate at which your service is deployed across the cluster.</li> 
+<b>Canary testing</b> 
+<p>While this type of deployment automates much of the heavy lifting associated with rolling deployments, it doesn’t allow you to interrupt the deployment if you discover an issue midstream. Rollbacks using the standard Amazon ECS deployment require updating the service’s task definition with the last known good version of the container. Then, you wait for Amazon ECS to schedule and deploy it across the cluster. If the latest version introduces a breaking change that went undiscovered during testing, this might be too slow.</p> 
+<p>With canary testing, if you discover the green environment is not operating as expected, there is no impact on the blue environment. You can route traffic back to it, minimizing impaired operation or downtime, and limiting the blast radius of impact.</p> 
+<p>This type of deployment is particularly useful for A/B testing where you want to expose a new feature to a subset of users to get their feedback before making it broadly available.</p> 
+<p>For canary style deployments, you can use a variation of the blue/green swap that involves deploying the blue and the green service to the same target group. Although this method is not as fast as the swap, it allows you to control the rate at which your containers are replaced by adjusting the task count for each service. Furthermore, it gives you the ability to roll back by adjusting the number of tasks for the blue and green services respectively. Unlike the swap approach described above, connections to your containers are drained gracefully. We plan to address canary style deployments for&nbsp;Amazon ECS in a future post.</p> 
+<b>Conclusion</b> 
+<p>With AWS, you can operationalize your blue/green deployments using Amazon ECS, an Application Load Balancer, and target groups. I encourage you to adapt the code published to the <a href="https://github.com/awslabs/ecs-blue-green-deployment">ecs-blue-green-deployment GitHub repo</a> for your use cases and look forward to reading your feedback.</p> 
+<p>If you’re interested in learning more, I encourage you to read the <a href="https://d0.awsstatic.com/whitepapers/AWS_Blue_Green_Deployments.pdf">Blue/Green Deployments on AWS</a> and <a href="https://d0.awsstatic.com/whitepapers/DevOps/practicing-continuous-integration-continuous-delivery-on-AWS.pdf">Practicing Continuous Integration and Continuous Delivery on AWS</a> whitepapers.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/deployment/" rel="tag">deployment</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecs/" rel="tag">ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2448');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Synchronizing Amazon S3 Buckets Using AWS Step Functions</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1480,208 +1752,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2142');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
-<time property="datePublished" datetime="2017-05-31T11:13:18+00:00">31 MAY 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2091" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2091&amp;disqus_title=Building+Scalable+Applications+and+Microservices%3A+Adding+Messaging+to+Your+Toolbox&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2091');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/Jakub.jpeg"><img class="alignnone size-full wp-image-2082" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/Jakub.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Jakub Wojciak, Senior Software Development Engineer</strong></p> 
-<p>Throughout our careers, we developers keep adding new tools to our development toolboxes. These range from the programming languages we learn, use, and become experts in, to architectural components such as HTTP servers, load balancers, and databases (both relational and NoSQL).</p> 
-<p>I’d like to kick off a series of posts to introduce you to the architectural components of messaging solutions. Expand your toolbox with this indispensable tool for building modern, scalable services and applications. In the coming months, I will update this post with links that dive deeper into each topic and illustrate messaging use cases using <a href="http://aws.amazon.com/sqs/">Amazon Simple Queue Service (SQS)</a> and<a href="http://aws.amazon.com/sns/"> Amazon Simple Notification Service (SNS)</a>.<span id="more-2091"></span></p> 
-<p><strong>What is messaging?</strong><br /> Messaging involves passing messages around, but it’s different from email or text messages, because it is intended for communication between software components, not between people. Enterprise messaging happens at a higher level than that of UDP packets or direct TCP connections (although it does frequently use these protocols).</p> 
-<p>A message typically contains the payload — whatever information your application sends: XML, JSON, binary data, and so on. You can also add optional attributes and metadata to a message.</p> 
-<p>A SQL or NoSQL database often has a server that stores data. Similarly, a messaging server or service allows a place for your messages to be stored temporarily and transmitted.</p> 
-<p><strong>The queue and the topic</strong><br /> For a database service, the main resource is a table. In a messaging service, the two main resources are the queue and the topic.</p> 
-<p>A queue is like a buffer. You can put messages into a queue, and you can retrieve messages from a queue. The software that puts messages into a queue is called a message producer and the software that retrieves messages is called a message consumer.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/MessageQueueDiagramFINAL.png"><img class="size-full wp-image-2080 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/MessageQueueDiagramFINAL.png" alt="" width="950" height="396" /></a></p> 
-<p>A topic is like a broadcasting station. You can publish messages to a topic, and anyone interested in these messages can subscribe to the topic. Then, the interested parties are notified about the published messages. The software that broadcasts topics is called a topic publisher and the software that subscribes to broadcasts is called a topic subscriber.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/MessageTopicDiagramFINAL.png"><img class="size-full wp-image-2079 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/24/MessageTopicDiagramFINAL.png" alt="" width="694" height="390" /></a><strong>When should you use messaging?</strong><br /> There are some common use cases that might instantly make you think “I should use messaging for that!” Here are some of these use cases (to be discussed in greater detail in future posts).</p> 
-<li><strong>Service-to-service communication</strong><br /> You have two services or systems that need to communicate with each other. Let’s say a website (the frontend) has to update customer’s delivery address in a customer relationship management (CRM) system (the backend). Alternatively, you can set up a load balancer in front of the backend CRM service and call its API actions directly from the frontend website. You can also set up a queue and have the frontend website code send messages to the queue and have the backend CRM service to consume them.</li> 
-<li><strong>Asynchronous work item backlogs</strong><br /> You have a service that has to track a backlog of actions to be executed. Let’s say a hotel booking system needs to cancel a booking and this process takes a long time (from a few seconds to a minute). You can execute the cancellation synchronously, but then you risk annoying the customer who has to wait for the webpage to load. You can also track all pending cancellations in your database and keep polling and executing cancellations. Alternatively, you can put a message into a queue and have the same hotel booking system consume messages from that queue and perform asynchronous cancellations.</li> 
-<li><strong>State change notifications</strong><br /> You have a service that manages some resource and other services that receive updates about changes to those resources. Let’s say an inventory tracking system tracks products stocked in a warehouse. Whenever the stock is sold out, the website must stop offering that product. Whenever the stock is close to being depleted, the purchasing system must place an order for more items. Those systems can keep querying the inventory system to learn about these changes (or even directly examine the database—yuck!). Alternatively, the inventory system can publish notifications about stock changes to a topic and any interested program can subscribe to learn about those changes.</li> 
-<p><strong>When should you not use messaging?</strong><br /> According to the law of the instrument, <a href="https://en.wikipedia.org/wiki/Law_of_the_instrument">“If all you have is a hammer, everything looks like a nail.”</a> In other words, it’s important to know when a particular technology won’t fit well with your use case. For example, you have a relational database that you can store large binary files in… but you probably shouldn’t.</p> 
-<p>Messaging has its own set of commonly encountered anti-patterns (also to be discussed in greater detail in future posts).</p> 
-<li><strong>Message selection</strong><br /> It’s tempting to have the ability to receive messages selectively from a queue —that match a particular set of attributes, or even match an ad-hoc logical query. For example, a service requests a message with a particular attribute because it contains a response to another message that the service sent out. This can lead to a scenario where there are messages in the queue that no one is polling for and are never consumed. (Note: This problem doesn’t exist for message routing or filtering, which are evaluated when messages are&nbsp;sent&nbsp;to a destination queue or topic.)</li> 
-<li><strong>Very large messages or files</strong><br /> Most messaging protocols and implementations work best with reasonably sized messages (in the tens or hundreds of KBs). As message sizes grow, it’s best to use a dedicated file (or blob) storage system, such as Amazon S3, and pass a reference to an object in that store in the message itself. A dedicated file (or blob) store typically has much better support for uploading data in chunks with the ability to retry or resume downloads from a particular fragment.</li> 
-<p><strong>Key features of messaging systems</strong><br /> Messaging servers and services offer much more than just produce/consume or publish/subscribe functionality. Thus, although it might seem easy to create your own message passing implementation on top of your own data store, consider all the extra features that a full-fledged messaging service provides. Here’s a list of a few but not—by any means—all messaging features:</p> 
-<li><strong>Push or pull delivery</strong><br /> Most messaging services provide both options for consuming messages. Pull means continuously querying whether the messaging service has any new messages. Push means that the messaging service notifies you when a message is available. The notification about the new message might be a special packet sent over the messaging protocol. It might also be an HTTP call that the messaging service makes to your API endpoint. You can also use long-polling, which combines both push and pull functionality.</li> 
-<li><strong>Dead letter queues</strong><br /> What can your application do if a queue contains a message that you can’t process? Most messaging services allow you to configure a dead-letter queue for messages that you fail to process a certain number of times. This makes it easy to set them aside for further inspection without blocking the queue processing or spending CPU cycles on a message that can never be consumed successfully.</li> 
-<li><strong>Delay queues and scheduled messages</strong><br /> What if you want to postpone the processing of a particular message until a specific time? Many messaging services support setting a specific delivery time for a message. If you need to have a common delay for all messages, you can set up a delay queue.</li> 
-<li><strong>Ordering, priorities, duplicates</strong><br /> Messaging services provide you with a variety of options that affect the delivery of messages:<p></p> 
-<li>A choice between ordered delivery with limited maximum throughput or unordered delivery with virtually unlimited throughput</li> 
-<li>Message priorities, where a higher priority message can skip over other messages in the queue</li> 
-<li>Transactionality or best-effort acknowledgments of messages</li> 
-</ul> </li> 
-<p>When designing your system with messaging in mind, ask yourself the following questions:</p> 
-<li>Do you need to process messages exactly in the order in which they were sent?</li> 
-<li>Could your application parallelize the workload and process messages out of order?</li> 
-<li>Do you want your application to consume certain messages at a higher priority than other messages?</li> 
-<li>What happens if your application fails to process a message midway? Can you handle processing the same message again?</li> 
-<p><strong>How can you get started?</strong></p> 
-<p>If you have to configure and start a messaging server, it might take an extra effort to start using messaging. Instead, you can start to use message queues and topics today, using Amazon SQS and Amazon SNS. For more information, visit the following resources, and get started creating message queues and topics with just a few API actions:</p> 
-<li><a href="https://aws.amazon.com/sqs/getting-started/">Getting started with Amazon SQS</a></li> 
-<li><a href="https://aws.amazon.com/sns/getting-started/">Getting started with Amazon SNS</a></li> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-notification-service/" rel="tag">Amazon Simple Notification Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-queue-service/" rel="tag">Amazon Simple Queue Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sns/" rel="tag">Amazon SNS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sqs/" rel="tag">Amazon SQS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloud-messaging/" rel="tag">cloud messaging</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-queues/" rel="tag">message queues</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-topics/" rel="tag">message topics</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a>, <a href="https://aws.amazon.com/blogs/compute/tag/notifications/" rel="tag">notifications</a>, <a href="https://aws.amazon.com/blogs/compute/tag/pubsub/" rel="tag">pub/sub</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2091');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Job Layer (Part 2 of 4)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-05-31T09:45:02+00:00">31 MAY 2017</time> | 
-<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2123" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2123&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Job+Layer+%28Part+2+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2123');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
-<p>This post is the second in a series on how to build a genomics workflow on AWS. In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1</a>, we introduced a general architecture, shown below, and highlighted the three common layers in a batch workflow:</p> 
-<li>Job</li> 
-<li><a href="https://aws.amazon.com/batch/">Batch</a></li> 
-<li>Workflow</li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
-<p>In Part 2, you tackle the job layer and package a set of bioinformatics applications into Docker containers and store them in <a href="https://aws.amazon.com/ecr">Amazon ECR</a>. We illustrate some common patterns and best practices for these containers, such as how you can effectively use <a href="https://aws.amazon.com/s3">Amazon S3</a> to exchange data between jobs.<span id="more-2123"></span></p> 
-<p>ECR is a fully managed Docker container registry that makes it easy for developers to store, manage, and deploy Docker container images. ECR is integrated with <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>, simplifying your development to a production workflow. ECR eliminates the need to operate your own container repositories or worry about scaling the underlying infrastructure by hosting your images in a highly available and scalable architecture. You can integrate with <a href="https://aws.amazon.com/iam">IAM</a> to provide resource-level control for each repository.</p> 
-<p>All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
-<b id="toc_0">Packaging an application in a Docker container</b> 
-<p>Genomic analysis often relies on open source software that is developed by academic groups or open-sourced by industry leaders. These applications have a range of requirements for libraries and reference data, and are typically executed using a Linux command line interface.</p> 
-<p>Docker containers provide a consistent, reproducible run-time environment for applications to run in, which results in reproducible results. Consequently, containerization of the applications using Docker has received much attention from the bioinformatics community, resulting in the development of application registries such as <a href="https://dockstore.org/">Dockstore.org</a>, <a href="http://biocontainers.pro/">BioContainers</a>, and the <a href="https://galaxyproject.org/admin/tools/docker/">Galaxy Tool Shed</a>. In this post, we cover several good practices for packing genomics applications in Docker containers, including:</p> 
-<li>Building your Dockerfile</li> 
-<li>Dealing with job multitenancy</li> 
-<li>Sharing data between jobs</li> 
-<b id="toc_1">Building your Dockerfile</b> 
-<p>Your Dockerfile contains all of the commands that you use to package your Docker container. In it, you pick a base image to build from, include any metadata to attribute to the image, describe how to build and configure the environment, and how to access the code running within it.</p> 
-<p>We recommend that you adopt a standard set of conventions for your Dockerfiles. Add metadata to describe the contained application, and have an order set of sections for application packaging needs. Here is an example from the provided <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/docker/Dockerfile">Isaac Dockerfile</a>:</p> 
-<pre><code class="language-none">FROM python:2.7
-# Metadata
-LABEL container.base.image=&quot;python:2.7&quot;
-LABEL software.name=&quot;iSAAC&quot;
-LABEL software.version=&quot;03.17.03.01&quot;
-LABEL software.description=&quot;Aligner for sequencing data&quot;
-LABEL software.website=&quot;https://github.com/Illumina/Isaac3&quot;
-LABEL software.documentation=&quot;https://github.com/Illumina/Isaac3/blob/master/src/markdown/manual.md&quot;
-LABEL software.license=&quot;GPLv3&quot;
-LABEL tags=&quot;Genomics&quot;
-RUN apt-get -y update &amp;&amp; \
-apt-get -y install zlib1g-dev gnuplot &amp;&amp; \
-apt-get clean
-RUN pip install boto3 awscli
-RUN git clone https://github.com/Illumina/Isaac3.git &amp;&amp; cd /Isaac3 &amp;&amp; git checkout 6f0191a4e0d4b332e8f34b7ced57dc6e6eb4f2f1
-RUN mkdir /iSAAC-build /isaac
-WORKDIR /iSAAC-build
-RUN /Isaac3/src/configure --prefix=/isaac
-RUN make
-RUN make install
-WORKDIR /
-RUN rm -rf /Isaac3 /iSAAC-build
-RUN chmod -R +x /isaac/bin/
-ENV PATH=&quot;/isaac/bin:$PATH&quot;
-ENV LD_LIBRARY_PATH=&quot;/usr/local/lib:/usr/lib:/isaac/libexec:${LD_LIBRARY_PATH}&quot;
-COPY isaac/src/run_isaac.py /
-COPY common_utils /common_utils
-ENTRYPOINT [&quot;python&quot;, &quot;/run_isaac.py&quot;]</code></pre> 
-<p>There are many ways to architect Docker containers, but we wanted to consolidate some recommendations that we have observed our customers successfully using:</p> 
-<li>Work off of a base image that satisfies most dependencies across a set of applications. In the code provided, we often use the <a href="https://github.com/docker-library/python/blob/a248f4583c5f788e1af02016f762cdc323ee5765/2.7/Dockerfile">official <code>python:2.7</code> image</a> from <a href="https://hub.docker.com/_/python/">Docker Hub</a>.</li> 
-<li>In the above Dockerfile, you can see that we have separated out the metadata, underlying system and library dependencies, application-specific dependencies, and the installation requirements into a logical ordered set for easier maintenance. It’s worth noting that if you are building a production application, you would traditionally have a golden set of images to build from and application artifacts to install that have been validated with internal processes.</li> 
-<li>Instead of building large datasets into the container itself, we recommend that you download reference data at runtime instead. This allows the decoupling of the algorithm from reference data updates, which could happen nightly. It also allows you to download a subset of all reference data for an algorithm that is specific to the running analysis, for example the particular species under study.</li> 
-<li>Provide an application entry point to both expose and limit the default functionality of the container image. In this example, we created a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/src/run_isaac.py">simple Python script</a> that takes care of downloading the dependencies from S3, such as reference data for your analysis, on the fly from a set of provided runtime parameters and stage results back into S3. We dive deeper into this script in the following section.</li> 
-<p>Often these shared dependencies are a mix of packaged code that is easily installable (in this case via pip) or private modules usually shared as part of internal source repositories, as is the case here.</p> 
-<p>When you build the Docker images, you should take care to include both the necessary private modules within the context of the build. The example below shows how you would accomplish that given a directory context with some dependencies a few levels higher that the Dockerfile. In the project, we provided a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/docker/Makefile">Makefile</a> for taking care of some of these items, but for clarity’s sake we issue the necessary Docker commands.</p> 
-<pre><code class="language-none"># Given the following partial directory tree structure
-# .
-# └── tools
-#     ├── common\_utils
-#     │   ├── __init__.py
-#     │   ├── job_utils.py
-#     │   └── s3_utils.py
-#     └── isaac
-#         └── docker
-#             ├── Dockerfile
-#             └── Makefile
-# cd &lt;git repository&gt;/tools/isaac/docker
-$ docker build -t isaac:03.17.03.01 \
--t isaac:latest \
--f Dockerfile ../..</code></pre> 
-<b id="toc_2">Job multitenancy and sharing data between jobs</b> 
-<p>Many bioinformatics tools have been developed to run in any Linux environment, and not necessarily optimized for cloud computing or multitenancy. To overcome these challenges, you can use a simple Python wrapper script for each tool that facilitates the deployment of a job.</p> 
-<p>Our tools have several of the same requirements, such as the need to read and write from S3 and deal with job multitenancy. For these common utilities, we built a separate <a href="https://github.com/awslabs/aws-batch-genomics/tree/master/tools/common_utils"><code>common_utils</code></a> package to import during the creation of the Docker image. These utilities deal with the previously mentioned common requirements, such as:</p> 
-<li style="list-style-type: none"> 
-<li><strong>Container placement</strong></li> 
-</ul> </li> 
-<p>To make your workflow as flexible as possible, each job should run independently. As a result, you cannot necessarily guarantee that different jobs in the same overall workflow run on the same instance. Using S3 as the location to exchange data between containers enables you to decouple storage of your intermediate files from compute. The <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/common_utils/s3_utils.py"><code>tools/common_utils/s3_utils.py</code></a> script contains the functions required to leverage S3.</p> 
-<li style="list-style-type: none"> 
-<li><strong>Multitenancy</strong></li> 
-</ul> </li> 
-<p>Multiple container jobs may run concurrently on the same instance. In these situations, it’s essential that your job writes to a unique subdirectory. An easy way to do this is to create a subfolder using a UUID and have your application write all of your data there.</p> 
-<li style="list-style-type: none"> 
-<li><strong>Cleanup</strong></li> 
-</ul> </li> 
-<p>As your jobs complete and write the output back to S3, you can delete the scratch data on your instance generated by that job. This allows you to optimize for cost by reusing EC2 instances if there are jobs remaining in the queue, rather than terminating the EC2 instances. As you ensure that you’re writing to a unique subdirectory in the multitenancy solution, you can simply delete that subdirectory to minimize your storage footprint.</p> 
-<p>Each of the Python wrappers takes in all of the requisite data dependencies, residing in S3, as command-line arguments and any other necessary commands to run the tool it wraps. It then handles all of the file downloading, running the bioinformatics tool, and uploading the files back to S3. For more information about each of these tools, see the READMEs for each individual tool.</p> 
-<b id="toc_3">Deploying images to Amazon ECR</b> 
-<p>Next, publish the Docker images to ECR. The first example below creates an ECR repository and collects the URI you provide to Docker in order to push the image to ECR. If a repository already exists for the container image, query for it, as shown in the second example.</p> 
-<pre><code class="language-none"># Create an ECR repository for Isaac, then copy the `repositoryUri` into a variable
-$ REPO\_URI=$(aws ecr create-repository \
---repository-name isaac \
---output text --query &quot;repository.repositoryUri&quot;)
-# If the repository already exists, then
-# query ECR for the `repositoryUri`
-$ REPO\_URI=$(aws ecr describe-repositories \
---repository-names isaac \
---output text --query &quot;repositories[0].repositoryUri&quot;)</code></pre> 
-<p>After you have a repository URI, you can tag the container image and push it to ECR.</p> 
-<pre><code class="language-none">$ eval $(aws ecr get-login)
-$ docker tag isaac:latest $(REPO\_URI):latest
-$ docker push $(REPO\_URI):latest
-$ docker tag isaac:03.17.03.01 $(REPO\_URI):03.17.03.01
-$ docker push $(REPO\_URI):03.17.03.01</code></pre> 
-<b id="toc_4">Conclusion</b> 
-<p>In part 2 of this series, we showed a practical example of packaging up a bioinformatics application within a Docker container, and publishing the container image to an ECR repository. Along the way, we discussed some generally applicable best practices and design decisions specific to this demonstration project.</p> 
-<p>Now that you have built one of the Docker containers, you can go ahead and build each of the containers. We have provided all of the necessary code within a GitHub repository and within that repository are specific instructions, as well as some helpers for building container images using GNU make.</p> 
-<p>In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3</a> of this series, you’ll dive deep into the batch processing layer and how to leverage the packaged applications within AWS Batch.</p> 
-<p>Other posts in this four-part series:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
-<p>Please leave any questions and comments below.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2123');
 });
 </script> 
 </article> 

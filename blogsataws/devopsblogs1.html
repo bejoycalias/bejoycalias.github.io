@@ -191,6 +191,120 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">UI Testing at Scale with AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Stas Neyman</span></span> | on 
+<time property="datePublished" datetime="2017-11-24T13:45:14+00:00">24 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/ui-testing-at-scale-with-aws-lambda/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This is a guest blog post by Wes Couch and Kurt Waechter from the Blackboard Internal Product Development team about their experience using AWS Lambda.</em></p> 
+<p>One year ago, one of our UI test suites took hours to run. Last month, it took 16 minutes. Today, it takes <strong>39 seconds</strong>. Here’s how we did it.</p> 
+<h4>The backstory:</h4> 
+<p>Blackboard is a global leader in delivering robust and innovative education software and services to clients in higher education, government, K12, and corporate training. We have a large product development team working across the globe in at least 10 different time zones, with an internal tools team providing support for quality and workflows. We have been using Selenium Webdriver to perform automated cross-browser UI testing since 2007. Because we are now practicing continuous delivery, the automated UI testing challenge has grown due to the faster release schedule. On top of that, every commit made to each branch triggers an execution of our automated UI test suite. If you have ever implemented an automated UI testing infrastructure, you know that it can be very challenging to scale and maintain. Although there are services that are useful for testing different browser/OS combinations, they don’t meet our scale needs.</p> 
+<p>It used to take three hours to synchronously run our functional UI suite, which revealed the obvious need for parallel execution. Previously, we used Mesos to orchestrate a Selenium Grid Docker container for each test run. This way, we were able to run eight concurrent threads for test execution, which took an average of 16 minutes. Although this setup is fine for a single workflow, the cracks started to show when we reached the scale required for Blackboard’s mature product lines. Going beyond eight concurrent sessions on a single container introduced performance problems that impact the reliability of tests (for example, issues in Webdriver or the browser popping up frequently). We tried Mesos and considered Kubernetes for Selenium Grid orchestration, but the answer to scaling a Selenium Grid was to think smaller, not larger. This led to our breakthrough with AWS Lambda.</p> 
+<p><span id="more-1936"></span></p> 
+<h4>The solution:</h4> 
+<p>We started using AWS Lambda for UI testing because it doesn’t require costly infrastructure or countless man hours to maintain. The steps we outline in this blog post took one work day, from inception to implementation. By simply packaging the UI test suite into a Lambda function, we can execute these tests in parallel on a massive scale. We use a custom JUnit test runner that invokes the Lambda function with a request to run each test from the suite. The runner then aggregates the results returned from each Lambda test execution.</p> 
+<p>Selenium is the industry standard for testing UI at scale. Although there are other options to achieve the same thing in Lambda, we chose this mature suite of tools. Selenium is backed by Google, Firefox, and others to help the industry drive their browsers with code. This makes Lambda and Selenium a compelling stack for achieving UI testing at scale.</p> 
+<h4>Making Chrome Run in Lambda</h4> 
+<p>Currently, Chrome for Linux will not run in Lambda due to an absent mount point. By rebuilding Chrome with a slight modification, as Marco L&uuml;thy originally <a href="https://github.com/adieuadieu/serverless-chrome/tree/master/chrome">demonstrated</a>, you can run it inside Lambda anyway! It took about two hours to build the current master branch of Chromium to build on a c4.4xlarge. Unfortunately, the current version of ChromeDriver, 2.33, does not support any version of Chrome above 62, so we’ll be using Marco’s modified version of version 60 for the near future.</p> 
+<h4>Required System Libraries</h4> 
+<p>The Lambda runtime environment comes with a subset of common shared libraries. This means we need to include some extra libraries to get Chrome and ChromeDriver to work. Anything that exists in the java resources folder during compile time is included in the base directory of the compiled jar file. When this jar file is deployed to Lambda, it is placed in the /var/task/ directory. This allows us to simply place the libraries in the java resources folder under a folder named lib/ so they are <a href="http://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html">right where they need to be</a> when the Lambda function is invoked.</p> 
+<p>To get these libraries, create an EC2 instance and choose the Amazon Linux AMI.</p> 
+<p><img class="alignnone size-full wp-image-1937" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Choose_an_AMI.png" alt="" width="2094" height="548" /></p> 
+<p>Next, use ssh to connect to the server. After you connect to the new instance, search for the libraries to find their locations.</p> 
+<pre><code class="lang-markup">sudo find / -name libgconf-2.so.4
+sudo find / -name libORBit-2.so.0
+</code></pre> 
+<p>Now that you have the locations of the libraries, copy these files from the EC2 instance and place them in the java resources folder under lib/.</p> 
+<h4>Packaging the Tests</h4> 
+<p>To deploy the test suite to Lambda, we used a simple Gradle tool called <a href="https://github.com/johnrengelman/shadow">ShadowJar</a>, which is similar to the <a href="https://maven.apache.org/plugins/maven-shade-plugin/">Maven Shade Plugin</a>. It packages the libraries and dependencies inside the jar that is built. Usually test dependencies and sources aren’t included in a jar, but for this instance we want to include them. To include the test dependencies, add this section to the build.gradle file.</p> 
+<pre><code class="lang-markup">shadowJar {
+from sourceSets.test.output
+configurations = [project.configurations.testRuntime]
+}
+</code></pre> 
+<h4>Deploying the Test Suite</h4> 
+<p>Now that our tests are packaged with the dependencies in a jar, we need to get them into a running Lambda function. We use &nbsp;simple SAM &nbsp;templates to upload the packaged jar into S3, and then deploy it to Lambda with our settings.</p> 
+<pre><code class="lang-json">{
+&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
+&quot;Transform&quot;: &quot;AWS::Serverless-2016-10-31&quot;,
+&quot;Resources&quot;: {
+&quot;LambdaTestHandler&quot;: {
+&quot;Type&quot;: &quot;AWS::Serverless::Function&quot;,
+&quot;Properties&quot;: {
+&quot;CodeUri&quot;: &quot;./build/libs/your-test-jar-all.jar&quot;,
+&quot;Runtime&quot;: &quot;java8&quot;,
+&quot;Handler&quot;: &quot;com.example.LambdaTestHandler::handleRequest&quot;,
+&quot;Role&quot;: &quot;&lt;YourLambdaRoleArn&gt;&quot;,
+&quot;Timeout&quot;: 300,
+&quot;MemorySize&quot;: 1536
+}
+}
+}
+}</code></pre> 
+<p>We use the maximum timeout available to ensure our tests have plenty of time to run. We also use the maximum memory size because this ensures our Lambda function can support Chrome and other resources required to run a UI test.</p> 
+<p>Specifying the handler is important because this class executes the desired test. The test handler should be able to receive a test class and method. With this information it will then execute the test and respond with the results.</p> 
+<pre><code class="lang-json">public LambdaTestResult handleRequest(TestRequest testRequest, Context context) {
+LoggerContainer.LOGGER = new Logger(context.getLogger());
+BlockJUnit4ClassRunner runner = getRunnerForSingleTest(testRequest);
+Result result = new JUnitCore().run(runner);
+return new LambdaTestResult(result);
+}
+</code></pre> 
+<h4>Creating a Lambda-Compatible ChromeDriver</h4> 
+<p>We provide developers with an easily accessible ChromeDriver for local test writing and debugging. When we are running tests on AWS, we have configured ChromeDriver to run them in Lambda.</p> 
+<p>To configure ChromeDriver, we first need to tell ChromeDriver where to find the Chrome binary. Because we know that ChromeDriver is going to be unzipped into the root task directory, we should point the ChromeDriver configuration at that location.</p> 
+<p>The settings for getting ChromeDriver running are mostly related to Chrome, which must have its working directories pointed at the tmp/ folder.</p> 
+<p>Start with the default DesiredCapabilities for ChromeDriver, and then add the following settings to enable your ChromeDriver to start in Lambda.</p> 
+<pre><code class="lang-json">public ChromeDriver createLambdaChromeDriver() {
+ChromeOptions options = new ChromeOptions();
+// Set the location of the chrome binary from the resources folder
+options.setBinary(&quot;/var/task/chrome&quot;);
+// Include these settings to allow Chrome to run in Lambda
+options.addArguments(&quot;--disable-gpu&quot;);
+options.addArguments(&quot;--headless&quot;);
+options.addArguments(&quot;--window-size=1366,768&quot;);
+options.addArguments(&quot;--single-process&quot;);
+options.addArguments(&quot;--no-sandbox&quot;);
+options.addArguments(&quot;--user-data-dir=/tmp/user-data&quot;);
+options.addArguments(&quot;--data-path=/tmp/data-path&quot;);
+options.addArguments(&quot;--homedir=/tmp&quot;);
+options.addArguments(&quot;--disk-cache-dir=/tmp/cache-dir&quot;);
+DesiredCapabilities desiredCapabilities = DesiredCapabilities.chrome();
+desiredCapabilities.setCapability(ChromeOptions.CAPABILITY, options);
+return new ChromeDriver(desiredCapabilities);
+}
+</code></pre> 
+<h4>Executing Tests in Parallel</h4> 
+<p>You can approach parallel test execution in Lambda in many different ways. Your approach depends on the structure and design of your test suite. For our solution, we implemented a custom test runner that uses reflection and JUnit libraries to create a list of test cases we want run. When we have the list, we create a TestRequest object to pass into the Lambda function that we have deployed. In this TestRequest, we place the class name, test method, and the test run identifier. When the Lambda function receives this TestRequest, our LambdaTestHandler generates and runs the JUnit test. After the test is complete, the test result is sent to the test runner. The test runner compiles a result after all of the tests are complete. By executing the same Lambda function multiple times with different test requests, we can effectively run the entire test suite in parallel.</p> 
+<p>To get screenshots and other test data, we pipe those files during test execution to an S3 bucket under the test run identifier prefix. When the tests are complete, we link the files to each test execution in the report generated from the test run. This lets us easily investigate test executions.</p> 
+<p><img class="alignnone wp-image-1941" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Parallell_testing.png" alt="" width="1587" height="673" /></p> 
+<p><img class="alignnone size-full wp-image-1942" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Parallell_testing2.png" alt="" width="1143" height="418" /></p> 
+<h4>Pro Tip: Dynamically Loading Binaries</h4> 
+<p><a href="http://docs.aws.amazon.com/lambda/latest/dg/limits.html">AWS Lambda has a limit of 250 MB of uncompressed space</a> for packaged Lambda functions. Because we have libraries and other dependencies to our test suite, we hit this limit when we tried to upload a function that contained Chrome and ChromeDriver (~140 MB). This test suite was not originally intended to be used with Lambda. Otherwise, we would have scrutinized some of the included libraries. To get around this limit, we used the Lambda functions temporary directory, which allows up to 500 MB of space at runtime. Downloading these binaries at runtime moves some of that space requirement into the temporary directory. This allows more room for libraries and dependencies. You can do this by grabbing Chrome and ChromeDriver from an S3 bucket and marking them as executable using built-in Java libraries. If you take this route, be sure to point to the new location for these executables in order to create a ChromeDriver.</p> 
+<pre><code class="lang-json">private static void downloadS3ObjectToExecutableFile(String key) throws IOException {
+File file = new File(&quot;/tmp/&quot; + key);
+GetObjectRequest request = new GetObjectRequest(&quot;s3-bucket-name&quot;, key);
+FileUtils.copyInputStreamToFile(s3client.getObject(request).getObjectContent(), file);
+file.setExecutable(true);
+}
+</code></pre> 
+<h4>Lambda-Selenium Project Source</h4> 
+<p>We have compiled an open source example that you can grab from the Blackboard Github repository. Grab the code and try it out!</p> 
+<p><a href="https://blackboard.github.io/lambda-selenium/">https://blackboard.github.io/lambda-selenium/</a></p> 
+<h4>Conclusion</h4> 
+<p>One year ago, one of our UI test suites took hours to run. Last month, it took 16 minutes. Today, it takes <strong>39 seconds</strong>. Thanks to AWS Lambda, we can reduce our build times and perform automated UI testing at scale!</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/devops/tag/testing/" rel="tag">Testing</a></span> 
+</footer> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Enable Caching for AWS CodeBuild</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1294,240 +1408,6 @@ git push</code></pre>
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/devops/tag/codebuild/" rel="tag">codebuild</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codecommit/" rel="tag">CodeCommit</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codedeploy/" rel="tag">CodeDeploy</a>, <a href="https://aws.amazon.com/blogs/devops/tag/codepipeline/" rel="tag">CodePipeline</a>, <a href="https://aws.amazon.com/blogs/devops/tag/devops/" rel="tag">DevOps</a>, <a href="https://aws.amazon.com/blogs/devops/tag/devsecops/" rel="tag">DevSecOps</a>, <a href="https://aws.amazon.com/blogs/devops/tag/security/" rel="tag">Security</a>, <a href="https://aws.amazon.com/blogs/devops/tag/systems-manager/" rel="tag">Systems Manager</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Build Serverless AWS CodeCommit Workflows using Amazon CloudWatch Events and JGit</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
-<time property="datePublished" datetime="2017-08-03T13:25:33+00:00">03 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codecommit/" title="View all posts in AWS CodeCommit*"><span property="articleSection">AWS CodeCommit*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/build-serverless-aws-codecommit-workflows-using-amazon-cloudwatch-events-and-jgit/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img src="https://s3.amazonaws.com/chrisb/samdengler.jpeg" /> Sam Dengler is a Solutions Architect at Amazon Web Services</p> 
-<b>Summary</b> 
-<p><a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> now supports <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/welcome.html">AWS CodeCommit</a> <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/EventTypes.html#codecommit_event_type">Repository State Changes</a> event types for activities like pushing new code to a repository. Using these new event types, customers can build Amazon CloudWatch Event rules to match AWS CodeCommit events and route them to one or more targets like an Amazon SNS Topic, AWS Step Functions state machine, or AWS Lambda function to trigger automated workflows to process repository changes.</p> 
-<p>In this blog, I will provide three examples for using AWS Lambda and JGit to build cost-effective serverless solutions to securely process AWS CodeCommit repository state changes:</p> 
-<li>Replicate CodeCommit Repository</li> 
-<li>Enforce Git Commit Message Policy</li> 
-<li>Backup Git Archive to Amazon S3</li> 
-<p>Source code and Amazon CloudFormation templates for the examples are located in the following GitHub repository: <a href="https://github.com/awslabs/serverless-codecommit-examples">https://github.com/awslabs/serverless-codecommit-examples</a>.</p> 
-<b>AWS CodeCommit CloudWatch Events</b> 
-<p>Amazon CloudWatch Events delivers a near real-time stream of system events that describe changes in AWS resources. Below is an example Amazon CloudWatch Event for one of the new AWS CodeCommit Repository State Changes event types, referenceUpdated. Any change to the repository will trigger a referenceUpdated event, however triggers for particular branches can be filtered using the referenceType and referenceName fields in the event details.</p> 
-<pre><code class="lang-json">{
-&quot;version&quot;: &quot;0&quot;,
-&quot;id&quot;: &quot;01234567-0123-0123-0123-012345678901&quot;,
-&quot;detail-type&quot;: &quot;CodeCommit Repository State Change&quot;,
-&quot;source&quot;: &quot;aws.codecommit&quot;,
-&quot;account&quot;: &quot;123456789012&quot;,
-&quot;time&quot;: &quot;2017-06-12T10:23:43Z&quot;,
-&quot;region&quot;: &quot;us-east-1&quot;,
-&quot;resources&quot;: [
-&quot;arn:aws:codecommit:us-east-1:123456789012:myRepo&quot;
-],
-&quot;detail&quot;: {
-&quot;event&quot;: &quot;referenceUpdated&quot;,
-&quot;repositoryName&quot;: &quot;myRepo&quot;,
-&quot;referenceType&quot;: &quot;head&quot;,
-&quot;referenceName&quot;: &quot;myBranch&quot;,
-&quot;commitId&quot;: &quot;3e5983EXAMPLE&quot;,
-&quot;oldCommitId&quot;: &quot;1a7813EXAMPLE&quot;
-}
-}</code></pre> 
-<p>We will use the Amazon CloudWatch Event’s fields to create a pattern to match the events for which we will trigger a target, in this case an AWS Lambda function.</p> 
-<b>Accessing AWS CodeCommit using HTTPS URLs</b> 
-<p>The HTTPS URL method for accessing an AWS CodeCommit repository is particularly suited to a serverless solution because an Amazon Lambda execution container already provides temporary AWS IAM key credentials associated to the function’s AWS IAM Execution Role. The function’s Execution Role is associated to one or more AWS IAM Policies, in which you specify permissions allowing the function to access AWS resources. For each function, we will limit the AWS IAM polices to only the AWS CodeCommit repository, Amazon S3 bucket, or Amazon SNS topics, following the AWS best practice to <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege">grant least privileged access</a>.</p> 
-<p>For example, the AWS IAM Policy snippet below restricts the Amazon Lambda function to pull from the source repository and push to the target repository.</p> 
-<pre><code class="lang-yaml">Policies:
-- Version: '2012-10-17'
-&nbsp;   Statement:
-&nbsp; &nbsp; &nbsp; - Effect: Allow
-&nbsp; &nbsp; &nbsp; &nbsp; Resource: !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepositoryName}'
-&nbsp; &nbsp; &nbsp; &nbsp; Action:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GetRepository'
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GitPull'
-&nbsp; &nbsp; &nbsp; - Effect: Allow
-&nbsp; &nbsp; &nbsp; &nbsp; Resource: !Sub 'arn:aws:codecommit:${TargetRepositoryRegion}:${AWS::AccountId}:${TargetRepositoryName}'
-&nbsp; &nbsp; &nbsp; &nbsp; Action:
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GetRepository'
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GitPush'</code></pre> 
-<p>When using the HTTPS URL access method, a credential helper is configured for the Git client, which executes the “aws codecommit credential-helper” command to provide a SigV4 compatible user name and password using AWS IAM credentials (<a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html#setting-up-https-unixes-credential-helper">see more</a>). When using JGit as the Git client, a CredentialsProvider can be supplied to Git commands to achieve the same result.</p> 
-<p>The Spring Cloud Config project provides an implementation of the JGit CredentialsProvider for AwsCodeCommit (<a href="https://github.com/spring-cloud/spring-cloud-config/blob/dd08a3bbf4f0ee0bbde0107f63677f180ac786cc/spring-cloud-config-server/src/main/java/org/springframework/cloud/config/server/support/AwsCodeCommitCredentialProvider.java">source</a>), which conveniently uses the AWS DefaultAWSCredentialsProviderChain to discover AWS credentials in the standard priority order supported by Amazon Lambda. The <a href="https://github.com/spring-cloud/spring-cloud-config/blob/dd08a3bbf4f0ee0bbde0107f63677f180ac786cc/spring-cloud-config-server/src/main/java/org/springframework/cloud/config/server/support/AwsCodeCommitCredentialProvider.java#L207">AwsCodeCommit.calculateCodeCommitPassword</a> method is particularly interesting to review as an example of SigV4 transformation logic.</p> 
-<p>Cloning a repository is repeated across examples, and the functionality has been delegated to a supporting CloneCommandBuilder Class below.</p> 
-<pre><code class="lang-java">public class CloneCommandBuilder {
-&nbsp; &nbsp; private File directory;
-&nbsp; &nbsp; public CloneCommandBuilder() throws IOException {
-&nbsp; &nbsp; &nbsp; &nbsp; directory = Files.createTempDirectory(null).toFile();
-&nbsp; &nbsp; }
-&nbsp; &nbsp; public CloneCommand buildCloneCommand(String sourceUrl) {
-&nbsp; &nbsp; &nbsp; &nbsp; return buildCloneCommand(sourceUrl, new AwsCodeCommitCredentialProvider());
-&nbsp; &nbsp; }
-&nbsp; &nbsp; public CloneCommand buildCloneCommand(String sourceUrl,
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; AwsCodeCommitCredentialProvider credentialsProvider) {
-&nbsp; &nbsp; &nbsp; &nbsp; return new CloneCommand().setDirectory(directory)
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setURI(sourceUrl)
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setCredentialsProvider(credentialsProvider)
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setBare(true);
-&nbsp; &nbsp; }
-}</code></pre> 
-<p>Next we’ll look at some examples to process the repository events using Amazon Lambda.</p> 
-<b>Example 1: Replicate CodeCommit Repository</b> 
-<p>Customers often need to replicate commits from one repository to another to support disaster recovery or cross region CI/CD pipelines. In this example, the Amazon Lambda function will clone a repository from the source and push to the target. This example is intended to update an existing target repository, which should not be empty before configuring replication prior to configuring replication.</p> 
-<p>Please note, Amazon Lambda functions are limited to 1.5GB memory, 512MB ephemeral disk capacity (“/tmp” space), and a 5 minute execution time. If your repository is unable to be processed within these limits, please see the <a href="https://aws.amazon.com/blogs/devops/replicating-and-automating-sync-ups-for-a-repository-with-aws-codecommit/">Replicating and Automating Sync-Ups for a Repository with AWS CodeCommit</a> blog article for an alternative approach to replicate repositories using an Amazon EC2 instance.</p> 
-<p>Let’s take a look at some code!</p> 
-<pre><code class="lang-java">public class ReplicateRepositoryHandler
-&nbsp; &nbsp; &nbsp; &nbsp; implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
-&nbsp; &nbsp; private static Logger logger = Logger.getLogger(ReplicateRepositoryHandler.class);
-&nbsp; &nbsp; private final String targetUrl;
-&nbsp; &nbsp; private final AwsCodeCommitCredentialProvider credentialsProvider;
-&nbsp; &nbsp; public ReplicateRepositoryHandler() {
-&nbsp; &nbsp; &nbsp; &nbsp; String targetName = System.getenv(&quot;TARGET_REPO_NAME&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; String targetRegion = System.getenv(&quot;TARGET_REPO_REGION&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata target = new CodeCommitMetadata(targetName, targetRegion);
-&nbsp; &nbsp; &nbsp; &nbsp; targetUrl = target.getCloneUrlHttp();
-&nbsp; &nbsp; &nbsp; &nbsp; credentialsProvider = new AwsCodeCommitCredentialProvider();
-&nbsp; &nbsp; }
-// ...</code></pre> 
-<p>On instantiation, the Amazon Lambda function discovers the target AWS CodeCommit repository HTTPS URL by querying the repository metadata using the target repository name and region. This discovery process is repeated across the examples, and the code has been delegated to the CodeCommitMetadata class below.</p> 
-<pre><code class="lang-java">public class CodeCommitMetadata {
-&nbsp; &nbsp; private RepositoryMetadata repositoryMetadata;
-&nbsp; &nbsp; public CodeCommitMetadata(String repoName, String repoRegion) {
-&nbsp; &nbsp; &nbsp; &nbsp; AWSCodeCommitClientBuilder builder = AWSCodeCommitClientBuilder.standard();
-&nbsp; &nbsp; &nbsp; &nbsp; AWSCodeCommit client = builder.withRegion(repoRegion).build();
-&nbsp; &nbsp; &nbsp; &nbsp; GetRepositoryRequest request = new GetRepositoryRequest();
-&nbsp; &nbsp; &nbsp; &nbsp; request.withRepositoryName(repoName);
-&nbsp; &nbsp; &nbsp; &nbsp; GetRepositoryResult result = client.getRepository(request);
-&nbsp; &nbsp; &nbsp; &nbsp; repositoryMetadata = result.getRepositoryMetadata();
-&nbsp; &nbsp; }
-&nbsp; &nbsp; public String getCloneUrlHttp() {
-&nbsp; &nbsp; &nbsp; &nbsp; return repositoryMetadata.getCloneUrlHttp();
-&nbsp; &nbsp; }
-}</code></pre> 
-<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the source repository name and region in the event are used to discover the source repository HTTPS URL. We use JGit to clone the source repository from this URL into a local repository stored in a temporary directory in the Amazon Lambda execution container.</p> 
-<pre><code class="lang-java">public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
-&nbsp; &nbsp; try {
-&nbsp; &nbsp; &nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
-&nbsp; &nbsp; &nbsp; &nbsp; String sourceRegion = event.getRegion();
-&nbsp; &nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
-&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
-&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
-&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
-// ...</code></pre> 
-<p>Once we’ve cloned the local repository to the Amazon Lambda execution container, the last step is to set the target AWS CodeCommit repository as a new remote location and push the local references using the reference specification “+refs/*:refs/*”.</p> 
-<pre><code class="lang-java">// push target repository
-git.push().setCredentialsProvider(credentialsProvider)
-&nbsp;  &nbsp; &nbsp;&nbsp; &nbsp; .setRemote(targetUrl)
-&nbsp;&nbsp; &nbsp; &nbsp;&nbsp; &nbsp; .setRefSpecs(new RefSpec(&quot;+refs/*:refs/*&quot;))
-&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp; .call();
-// ...</code></pre> 
-<p>In the next example, we’ll review how we can build a Lambda function to enforce commit message policies.</p> 
-<b>Example 2: Enforce Git Commit Message Policy</b> 
-<p>Some customers choose to enforce policies on a Git repository to maintain code quality. In this example, we use the same tools described above to clone a repository and validate the commit messages from the Git log using a regular expression.</p> 
-<pre><code class="lang-java">public class PolicyEnforcerHandler implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
-&nbsp; &nbsp; private static Logger logger = LoggerFactory.getLogger(ArchiveRepositoryHandler.class);
-&nbsp; &nbsp; private final String mainBranch;
-&nbsp; &nbsp; private final String snsTopicArn;
-&nbsp; &nbsp; private final Pattern pattern;
-&nbsp; &nbsp; private final AmazonSNS snsClient;
-&nbsp; &nbsp; public PolicyEnforcerHandler() {
-&nbsp; &nbsp; &nbsp; &nbsp; mainBranch = System.getenv(&quot;MAIN_BRANCH_NAME&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; snsTopicArn = System.getenv(&quot;SNS_TOPIC_ARN&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; String messageRegex = System.getenv(&quot;MESSAGE_REGEX&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; pattern = Pattern.compile(messageRegex);
-&nbsp; &nbsp; &nbsp; &nbsp; String snsRegion = snsTopicArn.split(&quot;:&quot;)[3];
-&nbsp; &nbsp; &nbsp; &nbsp; snsClient = AmazonSNSClientBuilder.standard().withRegion(snsRegion).build();
-&nbsp; &nbsp; }
-// ...</code></pre> 
-<p>On instantiation, the Amazon Lambda function compiles the regular expression for message validation and creates an Amazon SNS client to send notifications.</p> 
-<pre><code class="lang-java">@Override
-public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
-&nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
-&nbsp; &nbsp; String sourceRegion = event.getRegion();
-&nbsp; &nbsp; String commitId = event.getDetail().getCommitId();
-&nbsp; &nbsp; String oldCommitId = event.getDetail().getOldCommitId();
-&nbsp; &nbsp; try {
-&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
-&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
-&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
-&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
-&nbsp; &nbsp; &nbsp; &nbsp; // ...</code></pre> 
-<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the process to clone the repository is the same, discovering the AWS CodeCommit HTTPS URL from the AWS CloudWatch Event and cloning a bare Git repository to the Amazon Lambda execution container.</p> 
-<pre><code class="lang-java">// use the OldCommitId, or default to the main branch
-String toGitReference = Optional.ofNullable(oldCommitId).orElse(mainBranch);
-Repository repository = git.getRepository();
-ObjectId to = repository.resolve(toGitReference);
-ObjectId from = repository.resolve(commitId);
-// ...</code></pre> 
-<p>JGit RevWalk is used to determine the range of commits over which to validate the message policy. When commits are added to an existing branch, AWS CodeCommit will emit an referenceUpdated event, which includes commitId and oldCommitId fields that establish the range of commits.</p> 
-<p>When commits are added to a new branch, AWS CodeCommit will emit a referenceCreated event, which includes a commitId but not the oldCommitId. In this case, we will use the main branch name to determine the common ancestry of the commit chains, called the <a href="https://git-scm.com/docs/git-merge-base">merge base</a>, in order to establish the range of commits.</p> 
-<pre><code class="lang-java">// create a RevWalk and set the range of commits
-try (RevWalk walk = new RevWalk(repository)) {
-&nbsp; &nbsp; walk.markStart(walk.parseCommit(from));
-&nbsp; &nbsp; walk.markUninteresting(walk.parseCommit(to));
-// iterate the list of commits and validate each message
-&nbsp; &nbsp; for (RevCommit commit : walk) {
-&nbsp; &nbsp;     Matcher matcher = pattern.matcher(commit.getShortMessage());
-// publish a message to the topic if the message does not match
-&nbsp; &nbsp; &nbsp; &nbsp; if (!matcher.find()) {
-&nbsp; &nbsp; &nbsp; &nbsp;     String message = buildMessage(commit);
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logger.info(message);
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; snsClient.publish(snsTopicArn, message);
-&nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; }
-&nbsp; &nbsp;walk.dispose();
-}
-// ...</code></pre> 
-<p>Once the range has been established, we iterate the list of commit messages, testing each against the message policy regular expression. If the message does not match the regular expression, then it is out of compliance from the policy, and a message is published to the Amazon SNS topic for notification.</p> 
-<p>In the next example, I’ll review how to backup an archive of the files in a Git repository.</p> 
-<b>Example 3: Backup Git Archive to Amazon S3</b> 
-<p>The previous examples have focused on the bare Git repository <a href="https://git-scm.com/book/en/v2/Git-Internals-Git-Objects">objects</a>, however there are some use cases for processing the files in the Git repository at a particular reference. In this example, I’ll build a Lambda function to create a zip of the files in the repository and store it in Amazon S3 as a backup.</p> 
-<pre><code class="lang-java">public class ArchiveRepositoryHandler
-&nbsp; &nbsp; &nbsp; &nbsp; implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
-&nbsp; &nbsp; private static Logger logger = LoggerFactory.getLogger(ArchiveRepositoryHandler.class);
-private final String ZIP_FORMAT = &quot;zip&quot;
-&nbsp; &nbsp; private final String targetS3Bucket;
-&nbsp; &nbsp; private final AmazonS3 s3Client;
-&nbsp; &nbsp; public ArchiveRepositoryHandler() {
-&nbsp; &nbsp; &nbsp; &nbsp; targetS3Bucket = System.getenv(&quot;TARGET_S3_BUCKET&quot;);
-&nbsp; &nbsp; &nbsp; &nbsp; s3Client = AmazonS3ClientBuilder.defaultClient();
-&nbsp; &nbsp; &nbsp; &nbsp; ArchiveCommand.registerFormat(ZIP_FORMAT, new ZipFormat());
-&nbsp; &nbsp; }
-// ...</code></pre> 
-<p>On instantiation, the Amazon Lambda function creates an Amazon S3 client and registers the ZipFormat with JGit.</p> 
-<pre><code class="lang-java">@Override
-public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
-&nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
-&nbsp; &nbsp; String sourceRegion = event.getRegion();
-&nbsp; &nbsp; String commitId = event.getDetail().getCommitId();
-&nbsp; &nbsp; try {
-&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
-&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
-&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
-&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
-// ...</code></pre> 
-<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the process to clone the repository is the same, discovering the AWS CodeCommit HTTPS URL from the AWS CloudWatch Event and cloning a bare Git repository to the Amazon Lambda execution container.</p> 
-<pre><code class="lang-java">// create and upload archive for commitId
-File file = Files.createTempFile(null, null).toFile();
-try (OutputStream out = new FileOutputStream(file)) {
-ObjectId objectId = git.getRepository().resolve(commitId);
-git.archive().setTree(objectId)
-&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setFormat(ZIP_FORMAT)
-&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setOutputStream(out)
-&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .call();
-String key = sourceName + &quot;.&quot; + commitId + &quot;.&quot; + ZIP_FORMAT;
-s3Client.putObject(targetS3Bucket, key, file);
-}
-// ...</code></pre> 
-<p>Once the repository has been cloned, we use a JGit ArchiveCommand to create a zip artifact representing the working files of repository at the commit triggering the event. The generated zip artifact is then uploaded to Amazon S3 using the repository name and commit shortId as the key.</p> 
-<b>Conclusion</b> 
-<p>AWS CloudWatch Event’s support for AWS CodeCommit Repository State Changes event types opens possibilities to build event-driven source code workflow automation using the same AWS CloudWatch Events service that acts as an event bus across many AWS services. Combining this new capability with Amazon Lambda, the JGit client, and AWS IAM policy controls provides builders with a set of tools to build serverless solutions that securely access AWS resources, scale on demand, and are cost effective.</p> 
-<p>In this blog, I’ve demonstrated three example solutions built using these tools, however AWS CodeCommit’s integration with AWS CloudWatch Events allows you to integrate with other AWS CloudWatch Events targets, like Amazon SQS or AWS Step Functions.</p> 
-<p>I encourage you to visit the GitHub repository (<a href="https://github.com/awslabs/serverless-codecommit-examples">https://github.com/awslabs/serverless-codecommit-examples</a>), which has instructions to launch these examples in your own AWS account. Please share your ideas and questions in the comments below, or submit pull requests and issues to the GitHub repository!</p> 
-<footer> 
 </footer> 
 </article> 
 <p>
