@@ -191,6 +191,446 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1133x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Deploying an NGINX Reverse Proxy Sidecar Container on Amazon ECS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Peck</span></span> | on 
+<time property="datePublished" datetime="2017-08-03T14:54:02+00:00">03 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/nginx-reverse-proxy-sidecar-container-on-amazon-ecs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2525" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2525&amp;disqus_title=Deploying+an+NGINX+Reverse+Proxy+Sidecar+Container+on+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/nginx-reverse-proxy-sidecar-container-on-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2525');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Reverse proxies are a powerful software architecture primitive for fetching resources from a server on behalf of a client. They serve a number of purposes, from protecting servers from unwanted traffic to offloading some of the heavy lifting of HTTP traffic processing.</p> 
+<p>This post explains the benefits of a reverse proxy, and explains how to use <a href="https://www.nginx.com/resources/wiki/">NGINX</a> and <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service (Amazon ECS)</a> to easily implement and deploy a reverse proxy for your containerized application.</p> 
+<b>Components</b> 
+<p>NGINX is a high performance HTTP server that has achieved significant adoption because of its asynchronous event driven architecture. It can serve thousands of concurrent requests with a low memory footprint. This efficiency also makes it ideal as a reverse proxy.</p> 
+<p>Amazon ECS is a highly scalable, high performance container management service that supports Docker containers. It allows you to run applications easily on a managed cluster of Amazon EC2 instances. Amazon ECS helps you get your application components running on instances according to a specified configuration. It also helps scale out these components across an entire fleet of instances.</p> 
+<p>Sidecar containers are a common software pattern that has been embraced by engineering organizations. It’s a way to keep server side architecture easier to understand by building with smaller, modular containers that each serve a simple purpose. Just like an application can be powered by multiple microservices, each microservice can also be powered by multiple containers that work together. A sidecar container is simply a way to move part of the core responsibility of a service out into a containerized module that is deployed alongside a core application container.<span id="more-2525"></span></p> 
+<p>The following diagram shows how an NGINX reverse proxy sidecar container operates alongside an application server container:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy.png"><img class="aligncenter wp-image-2526 size-large" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1024x570.png" alt="" width="640" height="356" /></a></p> 
+<p>In this architecture, Amazon ECS has deployed two copies of an application stack that is made up of an NGINX reverse proxy side container and an application container. Web traffic from the public goes to an Application Load Balancer, which then distributes the traffic to one of the NGINX reverse proxy sidecars. The NGINX reverse proxy then forwards the request to the application server and returns its response to the client via the load balancer.</p> 
+<b>Reverse proxy for security</b> 
+<p>Security is one reason for using a reverse proxy in front of an application container. Any web server that serves resources to the public can expect to receive lots of unwanted traffic every day. Some of this traffic is relatively benign scans by researchers and tools, such as Shodan or nmap:</p> 
+<pre><code class="lang-bash">[18/May/2017:15:10:10 +0000] &quot;GET /YesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScanningForResearchPurposePleaseHaveALookAtTheUserAgentTHXYesThisIsAReallyLongRequestURLbutWeAreDoingItOnPurposeWeAreScann HTTP/1.1&quot; 404 1389 - Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.86 Safari/537.36
+[18/May/2017:18:19:51 +0000] &quot;GET /clientaccesspolicy.xml HTTP/1.1&quot; 404 322 - Cloud mapping experiment. Contact research@pdrlabs.net</code></pre> 
+<p>But other traffic is much more malicious. For example, here is what a web server sees while being scanned by the hacking tool <a href="https://en.wikipedia.org/wiki/ZmEu_(vulnerability_scanner)">ZmEu</a>, which scans web servers trying to find PHPMyAdmin installations to exploit:</p> 
+<pre><code class="lang-bash">[18/May/2017:16:27:39 +0000] &quot;GET /mysqladmin/scripts/setup.php HTTP/1.1&quot; 404 391 - ZmEu
+[18/May/2017:16:27:39 +0000] &quot;GET /web/phpMyAdmin/scripts/setup.php HTTP/1.1&quot; 404 394 - ZmEu
+[18/May/2017:16:27:39 +0000] &quot;GET /xampp/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
+[18/May/2017:16:27:40 +0000] &quot;GET /apache-default/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 405 - ZmEu
+[18/May/2017:16:27:40 +0000] &quot;GET /phpMyAdmin-2.10.0.0/scripts/setup.php HTTP/1.1&quot; 404 397 - ZmEu
+[18/May/2017:16:27:40 +0000] &quot;GET /mysql/scripts/setup.php HTTP/1.1&quot; 404 386 - ZmEu
+[18/May/2017:16:27:41 +0000] &quot;GET /admin/scripts/setup.php HTTP/1.1&quot; 404 386 - ZmEu
+[18/May/2017:16:27:41 +0000] &quot;GET /forum/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
+[18/May/2017:16:27:41 +0000] &quot;GET /typo3/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 396 - ZmEu
+[18/May/2017:16:27:42 +0000] &quot;GET /phpMyAdmin-2.10.0.1/scripts/setup.php HTTP/1.1&quot; 404 399 - ZmEu
+[18/May/2017:16:27:44 +0000] &quot;GET /administrator/components/com_joommyadmin/phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 418 - ZmEu
+[18/May/2017:18:34:45 +0000] &quot;GET /phpmyadmin/scripts/setup.php HTTP/1.1&quot; 404 390 - ZmEu
+[18/May/2017:16:27:45 +0000] &quot;GET /w00tw00t.at.blackhats.romanian.anti-sec:) HTTP/1.1&quot; 404 401 - ZmEu</code></pre> 
+<p>In addition, servers can also end up receiving unwanted web traffic that is intended for another server. In a cloud environment, an application may end up reusing an IP address that was formerly connected to another service. It’s common for misconfigured or misbehaving DNS servers to send traffic intended for a different host to an IP address now connected to your server.</p> 
+<p>It’s the responsibility of anyone running a web server to handle and reject potentially malicious traffic or unwanted traffic. Ideally, the web server can reject this traffic as early as possible, before it actually reaches the core application code. A reverse proxy is one way to provide this layer of protection for an application server. It can be configured to reject these requests before they reach the application server.</p> 
+<b>Reverse proxy for performance</b> 
+<p>Another advantage of using a reverse proxy such as NGINX is that it can be configured to offload some heavy lifting from your application container. For example, every HTTP server should support gzip. Whenever a client requests gzip encoding, the server compresses the response before sending it back to the client. This compression saves network bandwidth, which also improves speed for clients who now don’t have to wait as long for a response to fully download.</p> 
+<p>NGINX can be configured to accept a plaintext response from your application container and gzip encode it before sending it down to the client. This allows your application container to focus 100% of its CPU allotment on running business logic, while NGINX handles the encoding with its efficient gzip implementation.</p> 
+<p>An application may have security concerns that require SSL termination at the instance level instead of at the load balancer. NGINX can also be configured to terminate SSL before proxying the request to a local application container. Again, this also removes some CPU load from the application container, allowing it to focus on running business logic. It also gives you a cleaner way to patch any SSL vulnerabilities or update SSL certificates by updating the NGINX container without needing to change the application container.</p> 
+<b>NGINX configuration</b> 
+<p>Configuring NGINX for both traffic filtering and gzip encoding is shown below:</p> 
+<pre><code class="lang-bash">http {
+&nbsp; # NGINX will handle gzip compression of responses from the app server
+&nbsp; gzip on;
+&nbsp; gzip_proxied any;
+&nbsp; gzip_types text/plain application/json;
+&nbsp; gzip_min_length 1000;
+&nbsp;
+&nbsp; server {
+&nbsp;&nbsp;&nbsp; listen 80;
+&nbsp;
+&nbsp;&nbsp;&nbsp; # NGINX will reject anything not matching /api
+&nbsp;&nbsp;&nbsp; location /api {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # Reject requests with unsupported HTTP method
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; if ($request_method !~ ^(GET|POST|HEAD|OPTIONS|PUT|DELETE)$) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; return 405;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # Only requests matching the whitelist expectations will
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; # get sent to the application server
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_pass http://app:3000;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_http_version 1.1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Upgrade $http_upgrade;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Connection 'upgrade';
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header Host $host;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; proxy_cache_bypass $http_upgrade;
+&nbsp;&nbsp;&nbsp; }
+&nbsp; }
+}</code></pre> 
+<p>The above configuration only accepts traffic that matches the expression /api and has a recognized HTTP method. If the traffic matches, it is forwarded to a local application container accessible at the local hostname app. If the client requested gzip encoding, the plaintext response from that application container is gzip-encoded.</p> 
+<b>Amazon ECS configuration</b> 
+<p>Configuring ECS to run this NGINX container as a sidecar is also simple. ECS uses a core primitive called the task definition. Each task definition can include one or more containers, which can be linked to each other:</p> 
+<pre><code class="lang-json">&nbsp;{
+&nbsp;&nbsp;&quot;containerDefinitions&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;name&quot;: &quot;nginx&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;image&quot;: &quot;&lt;NGINX reverse proxy image URL here&gt;&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;memory&quot;: &quot;256&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cpu&quot;: &quot;256&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;essential&quot;: true,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;portMappings&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;containerPort&quot;: &quot;80&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;protocol&quot;: &quot;tcp&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;links&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;app&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]
+&nbsp;&nbsp;&nbsp;&nbsp; },
+&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;name&quot;: &quot;app&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;image&quot;: &quot;&lt;app image URL here&gt;&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;memory&quot;: &quot;256&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cpu&quot;: &quot;256&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;essential&quot;: true
+&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp; ],
+&nbsp;&nbsp; &quot;networkMode&quot;: &quot;bridge&quot;,
+&nbsp;&nbsp; &quot;family&quot;: &quot;application-stack&quot;
+}
+</code></pre> 
+<p>This task definition causes ECS to start both an NGINX container and an application container on the same instance. Then, the NGINX container is linked to the application container. This allows the NGINX container to send traffic to the application container using the hostname app.</p> 
+<p>The NGINX container has a port mapping that exposes port 80 on a publically accessible port but the application container does not. This means that the application container is not directly addressable. The only way to send it traffic is to send traffic to the NGINX container, which filters that traffic down. It only forwards to the application container if the traffic passes the whitelisted rules.</p> 
+<b>Conclusion</b> 
+<p>Running a sidecar container such as NGINX can bring significant benefits by making it easier to provide protection for application containers. Sidecar containers also improve performance by freeing your application container from various CPU intensive tasks. Amazon ECS makes it easy to run sidecar containers, and automate their deployment across your cluster.</p> 
+<p>To see the full code for this NGINX sidecar reference, or to try it out yourself, you can check out the open source <a href="https://github.com/awslabs/ecs-nginx-reverse-proxy/tree/master/reverse-proxy">NGINX reverse proxy reference architecture on GitHub</a>.</p> 
+<p>– Nathan<br /> <a href="https://twitter.com/nathankpeck" target="_blank"><img class="alignnone wp-image-2597 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/03/twitter_16.png" alt="" width="16" height="16" /></a>&nbsp;<a href="https://twitter.com/nathankpeck" target="_blank" rel="noopener noreferrer">@nathankpeck</a></p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/nginx/" rel="tag">nginx</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2525');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Deploying Java Microservices on Amazon EC2 Container Service</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-07-11T09:12:17+00:00">11 JUL 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/deploying-java-microservices-on-amazon-ec2-container-service/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2489" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2489&amp;disqus_title=Deploying+Java+Microservices+on+Amazon+EC2+Container+Service&amp;disqus_url=https://aws.amazon.com/blogs/compute/deploying-java-microservices-on-amazon-ec2-container-service/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2489');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>This post and accompanying code graciously contributed by:</p> 
+<table> 
+<tbody> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/huynhz.jpeg" alt="" width="120" height="160" /></td> 
+<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/magnusb.jpeg" alt="" width="119" height="160" /></td> 
+</tr> 
+<tr> 
+<td style="padding: 0px 30px 0px 0px"><b>Huy Huynh</b><br /> Sr. Solutions Architect</td> 
+<td style="padding: 0px 30px 0px 0px"><b>Magnus Bjorkman</b><br /> Solutions Architect</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>Java is a popular language used by many enterprises today. To simplify and accelerate Java application development, many companies are moving from a monolithic to microservices architecture. For some, it has become a strategic imperative. <a href="https://aws.amazon.com/containers/">Containerization</a> technology, such as <a href="https://aws.amazon.com/docker/">Docker</a>, lets enterprises build scalable, robust microservice architectures without major code rewrites.</p> 
+<p>In this post, I cover how to containerize a monolithic Java application to run on Docker. Then, I show how to deploy it on AWS using Amazon EC2 Container Service (<a href="https://aws.amazon.com/ecs/">Amazon ECS</a>), a high-performance container management service. Finally, I show how to break the monolith into multiple services, all running in containers on Amazon ECS.</p> 
+<p><span id="more-2489"></span></p> 
+<b>Application Architecture</b> 
+<p>For this example, I use the <a href="https://github.com/spring-projects/spring-petclinic">Spring Pet Clinic</a>, a monolithic Java application for managing a veterinary practice. It is a simple REST&nbsp;API, which allows the client to manage and view Owners, Pets, Vets, and Visits.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png"><img class="aligncenter wp-image-2498 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png" alt="" width="975" height="394" /></a></p> 
+<p>It is a simple three-tier architecture:</p> 
+<li><strong>Client</strong><br /> You simulate this by using curl commands.</li> 
+<li><strong>Web/app server</strong><br /> This is the Java and Spring-based application that you run using the embedded Tomcat. As part of this post, you run this within Docker containers.</li> 
+<li><strong>Database server</strong><br /> This is the relational database for your application that stores information about owners, pets, vets, and visits. For this post, use MySQL RDS.</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2.png"><img class="aligncenter size-medium wp-image-2499" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2-288x300.png" alt="" width="288" height="300" /></a></p> 
+<p>I decided to not put the database inside a container as containers were designed for applications and are transient in nature. The choice was made even easier because you have a fully managed database service available with <a href="https://aws.amazon.com/rds">Amazon RDS</a>.</p> 
+<p>RDS manages the work involved in setting up a relational database, from provisioning the infrastructure capacity that you request to installing the database software. After your database is up and running, RDS automates common administrative tasks, such as performing backups and patching the software that powers your database. With optional <a href="https://aws.amazon.com/rds/faqs/#36">Multi-AZ deployments</a>, Amazon RDS also manages synchronous data replication across Availability Zones with automatic failover.</p> 
+<b>Walkthrough</b> 
+<p>You can find the code for the example covered in this post at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/">amazon-ecs-java-microservices</a> on GitHub.</p> 
+<b>Prerequisites</b> 
+<p>You need the following to walk through this solution:</p> 
+<li>An AWS account</li> 
+<li>An access key and secret key for a user in the account</li> 
+<li>The AWS CLI installed</li> 
+<p>Also, install the latest versions of the following:</p> 
+<li>Java</li> 
+<li>Maven</li> 
+<li>Python</li> 
+<li>Docker</li> 
+<b>Step 1: Move the existing Java Spring application to a container deployed using Amazon ECS</b> 
+<p>First, move the existing monolith application to a container and deploy it using Amazon ECS. This is a great first step before breaking the monolith apart because you still get some benefits before breaking apart the monolith:</p> 
+<li>An improved pipeline. The container also allows an engineering organization to create a standard pipeline for the application lifecycle.</li> 
+<li>No mutations to machines.</li> 
+<p>You can find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/1_ECS_Java_Spring_PetClinic">1_ECS_Java_Spring_PetClinic</a>.</p> 
+<h3>Container deployment overview</h3> 
+<p>The following diagram is an overview of what the setup looks like for Amazon ECS and related services:</p> 
+<p><img class="aligncenter wp-image-2497 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/ecs-spring-monolithic-containers-1.png" alt="" width="262" height="300" /></p> 
+<p><strong>This setup consists of the following resources:</strong></p> 
+<li>The client application that makes a request to the load balancer.</li> 
+<li>The load balancer that distributes requests across all available ports and instances registered in the application’s target group using round-robin.</li> 
+<li>The target group that is updated by Amazon ECS to always have an up-to-date list of all the service containers in the cluster. This includes the port on which they are accessible.</li> 
+<li>One Amazon ECS cluster that hosts the container for the application.</li> 
+<li>A VPC network to host the Amazon ECS cluster and associated security groups.</li> 
+<p>Each container has a single application process that is bound to port 8080 within its namespace. In reality, all the containers are exposed on a different, randomly assigned port on the host.</p> 
+<p>The architecture is containerized but still monolithic because each container has all the same features of the rest of the containers</p> 
+<p><strong>The following is also part of the solution but not depicted in the above diagram:</strong></p> 
+<li>One <a href="https://aws.amazon.com/ecr/">Amazon EC2 Container Registry (Amazon ECR)</a>&nbsp;repository for the application.</li> 
+<li>A service/task definition that spins up containers on the instances of the Amazon ECS cluster.</li> 
+<li>A MySQL RDS instance that hosts the applications schema. The information about the MySQL RDS instance is sent in through environment variables to the containers, so that the application can connect to the MySQL RDS instance.</li> 
+<p>I have automated setup with the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/ecs-cluster.cf">1_ECS_Java_Spring_PetClinic/ecs-cluster.cf</a> AWS CloudFormation template and a <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/setup.py">Python script</a>.</p> 
+<p>The Python script calls the CloudFormation template for the initial setup of the VPC, Amazon ECS cluster, and RDS instance. It then extracts the outputs from the template and uses those for API calls to create Amazon ECR repositories, tasks, services, Application Load Balancer, and target groups.</p> 
+<h3>Environment variables and Spring properties binding</h3> 
+<p>As part of the Python script, you pass in a number of environment variables to the container as part of the task/container definition:</p> 
+<pre><code class="lang-json">'environment': [
+{
+'name': 'SPRING_PROFILES_ACTIVE',
+'value': 'mysql'
+},
+{
+'name': 'SPRING_DATASOURCE_URL',
+'value': my_sql_options['dns_name']
+},
+{
+'name': 'SPRING_DATASOURCE_USERNAME',
+'value': my_sql_options['username']
+},
+{
+'name': 'SPRING_DATASOURCE_PASSWORD',
+'value': my_sql_options['password']
+}
+],</code></pre> 
+<p>The preceding environment variables work in concert with the Spring property system. The value in the variable SPRING_PROFILES_ACTIVE, makes Spring use the MySQL version of the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/src/main/resources/application-mysql.properties">application property file</a>. The other environment files override the following properties in that file:</p> 
+<li><code class="lang-sql">spring.datasource.url</code></li> 
+<li><code class="lang-sql">spring.datasource.username</code></li> 
+<li><code class="lang-sql">spring.datasource.password</code></li> 
+<p>Optionally, you can also encrypt sensitive values by using <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager Parameter Store. Instead of handing in the password, you pass in a reference to the parameter and fetch the value as part of the container startup. For more information, see </a><a href="https://aws.amazon.com/blogs/compute/managing-secrets-for-amazon-ecs-applications-using-parameter-store-and-iam-roles-for-tasks/">Managing Secrets for Amazon ECS Applications Using Parameter Store and IAM Roles for Tasks</a><a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">.</a></p> 
+<h3>Spotify Docker Maven plugin</h3> 
+<p>Use the <a href="https://github.com/spotify/docker-maven-plugin">Spotify Docker Maven plugin</a> to create the image and push it directly to Amazon ECR. This allows you to do this as part of the regular Maven build. It also integrates the image generation as part of the overall build process. Use an explicit <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/1_ECS_Java_Spring_PetClinic/src/main/docker/Dockerfile">Dockerfile</a> as input to the plugin.</p> 
+<pre><code class="lang-sql">FROM frolvlad/alpine-oraclejdk8:slim
+VOLUME /tmp
+ADD spring-petclinic-rest-1.7.jar app.jar
+RUN sh -c 'touch /app.jar'
+ENV JAVA_OPTS=&quot;&quot;
+ENTRYPOINT [ &quot;sh&quot;, &quot;-c&quot;, &quot;java $JAVA_OPTS -Djava.security.egd=file:/dev/./urandom -jar /app.jar&quot; ]</code></pre> 
+<p>The Python script discussed earlier uses the <a href="https://aws.amazon.com/cli">AWS CLI</a> to authenticate you with AWS. The script places the token in the appropriate location so that the plugin can work directly against the Amazon ECR repository.</p> 
+<h3>Test setup</h3> 
+<p>You can test the setup by running the Python script:<br /> <code class="lang-python">python setup.py -m setup -r &lt;your region&gt;</code></p> 
+<p>After the script has successfully run, you can test by querying an endpoint:<br /> <code class="lang-python">curl &lt;your endpoint from output above&gt;/owner</code></p> 
+<p>You can clean this up before going to the next section:<br /> <code class="lang-python">python setup.py -m cleanup -r &lt;your region&gt;</code></p> 
+<b>Step 2: Converting the monolith into microservices running on Amazon ECS</b> 
+<p>The second step is to convert the monolith into microservices. For a real application, you would likely not do this as one step, but re-architect an application piece by piece. You would continue to run your monolith but it would keep getting smaller for each piece that you are breaking apart.</p> 
+<p>By migrating microservices, you would get four benefits associated with microservices:</p> 
+<li><b>Isolation of crashes</b><br /> If one microservice in your application is crashing, then only that part of your application goes down. The rest of your application continues to work properly.</li> 
+<li><b>Isolation of security</b><br /> When microservice best practices are followed, the result is that if an attacker compromises one service, they only gain access to the resources of that service. They can’t horizontally access other resources from other services without breaking into those services as well.</li> 
+<li><b>Independent scaling</b><br /> When features are broken out into microservices, then the amount of infrastructure and number of instances of each microservice class can be scaled up and down independently.</li> 
+<li><b>Development velocity</b><br /> In a monolith, adding a new feature can potentially impact every other feature that the monolith contains. On the other hand, a proper microservice architecture has new code for a new feature going into a new service. You can be confident that any code you write won’t impact the existing code at all, unless you explicitly write a connection between two microservices.</li> 
+<p>Find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/2_ECS_Java_Spring_PetClinic_Microservices">2_ECS_Java_Spring_PetClinic_Microservices</a>.<br /> You break apart the Spring Pet Clinic application by creating a microservice for each REST&nbsp;API operation, as well as creating one for the system services.</p> 
+<h3>Java code changes</h3> 
+<p>Comparing the project structure between the monolith and the microservices version, you can see that each service is now its own separate build.<br /> <strong>First, the monolith version:</strong><br /> <img class="aligncenter size-full wp-image-2500" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_3.png" alt="" width="379" height="377" /><br /> You can clearly see how each API operation is its own subpackage under the <i>org.springframework.samples.petclinic</i> package, all part of the same monolithic application.<br /> <strong>This changes as you break it apart in the microservices version:</strong><br /> <img class="aligncenter size-full wp-image-2501" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_4.png" alt="" width="392" height="477" /><br /> Now, each API operation is its own separate build, which you can build independently and deploy. You have also duplicated some code across the different microservices, such as the classes under the model subpackage. This is intentional as you don’t want to introduce artificial dependencies among the microservices and allow these to evolve differently for each microservice.</p> 
+<p>Also, make the dependencies among the API operations more loosely coupled. In the monolithic version, the components are tightly coupled and use object-based invocation.</p> 
+<p>Here is an example of this from the OwnerController operation, where the class is directly calling PetRepository to get information about pets. PetRepository is the Repository class (Spring data access layer) to the Pet table in the RDS instance for the Pet API:</p> 
+<pre><code class="lang-java">@RestController
+class OwnerController {
+@Inject
+private PetRepository pets;
+@Inject
+private OwnerRepository owners;
+private static final Logger logger = LoggerFactory.getLogger(OwnerController.class);
+@RequestMapping(value = &quot;/owner/{ownerId}/getVisits&quot;, method = RequestMethod.GET)
+public ResponseEntity&lt;List&lt;Visit&gt;&gt; getOwnerVisits(@PathVariable int ownerId){
+List&lt;Pet&gt; petList = this.owners.findById(ownerId).getPets();
+List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
+petList.forEach(pet -&gt; visitList.addAll(pet.getVisits()));
+return new ResponseEntity&lt;List&lt;Visit&gt;&gt;(visitList, HttpStatus.OK);
+}
+}</code></pre> 
+<p>In the microservice version, call the Pet API operation and not PetRepository directly. Decouple the components by using interprocess communication; in this case, the Rest API. This provides for fault tolerance and disposability.</p> 
+<pre><code class="lang-java">@RestController
+class OwnerController {
+@Value(&quot;#{environment['SERVICE_ENDPOINT'] ?: 'localhost:8080'}&quot;)
+private String serviceEndpoint;
+@Inject
+private OwnerRepository owners;
+private static final Logger logger = LoggerFactory.getLogger(OwnerController.class);
+@RequestMapping(value = &quot;/owner/{ownerId}/getVisits&quot;, method = RequestMethod.GET)
+public ResponseEntity&lt;List&lt;Visit&gt;&gt; getOwnerVisits(@PathVariable int ownerId){
+List&lt;Pet&gt; petList = this.owners.findById(ownerId).getPets();
+List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
+petList.forEach(pet -&gt; {
+logger.info(getPetVisits(pet.getId()).toString());
+visitList.addAll(getPetVisits(pet.getId()));
+});
+return new ResponseEntity&lt;List&lt;Visit&gt;&gt;(visitList, HttpStatus.OK);
+}
+private List&lt;Visit&gt; getPetVisits(int petId){
+List&lt;Visit&gt; visitList = new ArrayList&lt;Visit&gt;();
+RestTemplate restTemplate = new RestTemplate();
+Pet pet = restTemplate.getForObject(&quot;http://&quot;+serviceEndpoint+&quot;/pet/&quot;+petId, Pet.class);
+logger.info(pet.getVisits().toString());
+return pet.getVisits();
+}
+}</code></pre> 
+<p>You now have an additional method that calls the API. You are also handing in the service endpoint that should be called, so that you can easily inject dynamic endpoints based on the current deployment.</p> 
+<h3>Container deployment overview</h3> 
+<p>Here is an overview of what the setup looks like for Amazon ECS and the related services:<br /> <img class="aligncenter size-large wp-image-2496" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/ecs-spring-microservice-containers.png" alt="" width="640" height="731" /><br /> <b>This setup consists of the following resources:</b></p> 
+<li>The client application that makes a request to the load balancer.</li> 
+<li>The Application Load Balancer that inspects the client request. Based on routing rules, it directs the request to an instance and port from the target group that matches the rule.</li> 
+<li>The Application Load Balancer that has a target group for each microservice. The target groups are used by the corresponding services to register available container instances. Each target group has a path, so when you call the path for a particular microservice, it is mapped to the correct target group. This allows you to use one Application Load Balancer to serve all the different microservices, accessed by the path. For example, https:///owner/* would be mapped and directed to the Owner microservice.</li> 
+<li>One Amazon ECS cluster that hosts the containers for each microservice of the application.</li> 
+<li>A VPC network to host the Amazon ECS cluster and associated security groups.</li> 
+<p>Because you are running multiple containers on the same instances, use dynamic port mapping to avoid port clashing. By using dynamic port mapping, the container is allocated an anonymous port on the host to which the container port (8080) is mapped. The anonymous port is registered with the Application Load Balancer and target group so that traffic is routed correctly.</p> 
+<p><strong>The following is also part of the solution but not depicted in the above diagram:</strong></p> 
+<li>One Amazon ECR repository for each microservice.</li> 
+<li>A service/task definition per microservice that spins up containers on the instances of the Amazon ECS cluster.</li> 
+<li>A MySQL RDS instance that hosts the applications schema. The information about the MySQL RDS instance is sent in through environment variables to the containers. That way, the application can connect to the MySQL RDS instance.</li> 
+<p>I have again automated setup with the <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/2_ECS_Java_Spring_PetClinic_Microservices/ecs-cluster.cf">2_ECS_Java_Spring_PetClinic_Microservices/ecs-cluster.cf</a> CloudFormation template and a <a href="https://github.com/awslabs/amazon-ecs-java-microservices/blob/master/2_ECS_Java_Spring_PetClinic_Microservices/setup.py">Python script</a>.</p> 
+<p>The CloudFormation template remains the same as in the previous section. In the Python script, you are now building five different Java applications, one for each microservice (also includes a system application). There is a separate Maven POM file for each one. The resulting Docker image gets pushed to its own Amazon ECR repository, and is deployed separately using its own service/task definition. This is critical to get the benefits described earlier for microservices.</p> 
+<p>Here is an example of the POM file for the Owner microservice:</p> 
+<pre><code class="lang-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;project xmlns=&quot;http://maven.apache.org/POM/4.0.0&quot; xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot;
+xsi:schemaLocation=&quot;http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd&quot;&gt;
+&lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+&lt;groupId&gt;org.springframework.samples&lt;/groupId&gt;
+&lt;artifactId&gt;spring-petclinic-rest&lt;/artifactId&gt;
+&lt;version&gt;1.7&lt;/version&gt;
+&lt;parent&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+&lt;version&gt;1.5.2.RELEASE&lt;/version&gt;
+&lt;/parent&gt;
+&lt;properties&gt;
+&lt;!-- Generic properties --&gt;
+&lt;java.version&gt;1.8&lt;/java.version&gt;
+&lt;docker.registry.host&gt;${env.docker_registry_host}&lt;/docker.registry.host&gt;
+&lt;/properties&gt;
+&lt;dependencies&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;javax.inject&lt;/groupId&gt;
+&lt;artifactId&gt;javax.inject&lt;/artifactId&gt;
+&lt;version&gt;1&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;!-- Spring and Spring Boot dependencies --&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-data-rest&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-cache&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-data-jpa&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-web&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-starter-test&lt;/artifactId&gt;
+&lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;
+&lt;!-- Databases - Uses HSQL by default --&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.hsqldb&lt;/groupId&gt;
+&lt;artifactId&gt;hsqldb&lt;/artifactId&gt;
+&lt;scope&gt;runtime&lt;/scope&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;mysql&lt;/groupId&gt;
+&lt;artifactId&gt;mysql-connector-java&lt;/artifactId&gt;
+&lt;scope&gt;runtime&lt;/scope&gt;
+&lt;/dependency&gt;
+&lt;!-- caching --&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;javax.cache&lt;/groupId&gt;
+&lt;artifactId&gt;cache-api&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.ehcache&lt;/groupId&gt;
+&lt;artifactId&gt;ehcache&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;!-- end of webjars --&gt;
+&lt;dependency&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-devtools&lt;/artifactId&gt;
+&lt;scope&gt;runtime&lt;/scope&gt;
+&lt;/dependency&gt;
+&lt;/dependencies&gt;
+&lt;build&gt;
+&lt;plugins&gt;
+&lt;plugin&gt;
+&lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+&lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+&lt;/plugin&gt;
+&lt;plugin&gt;
+&lt;groupId&gt;com.spotify&lt;/groupId&gt;
+&lt;artifactId&gt;docker-maven-plugin&lt;/artifactId&gt;
+&lt;version&gt;0.4.13&lt;/version&gt;
+&lt;configuration&gt;
+&lt;imageName&gt;${env.docker_registry_host}/${project.artifactId}&lt;/imageName&gt;
+&lt;dockerDirectory&gt;src/main/docker&lt;/dockerDirectory&gt;
+&lt;useConfigFile&gt;true&lt;/useConfigFile&gt;
+&lt;registryUrl&gt;${env.docker_registry_host}&lt;/registryUrl&gt;
+&lt;!--dockerHost&gt;https://${docker.registry.host}&lt;/dockerHost--&gt;
+&lt;resources&gt;
+&lt;resource&gt;
+&lt;targetPath&gt;/&lt;/targetPath&gt;
+&lt;directory&gt;${project.build.directory}&lt;/directory&gt;
+&lt;include&gt;${project.build.finalName}.jar&lt;/include&gt;
+&lt;/resource&gt;
+&lt;/resources&gt;
+&lt;forceTags&gt;false&lt;/forceTags&gt;
+&lt;imageTags&gt;
+&lt;imageTag&gt;${project.version}&lt;/imageTag&gt;
+&lt;/imageTags&gt;
+&lt;/configuration&gt;
+&lt;/plugin&gt;
+&lt;/plugins&gt;
+&lt;/build&gt;
+&lt;/project&gt;</code></pre> 
+<h3>Test setup</h3> 
+<p>You can test this by running the Python script:</p> 
+<p><code class="lang-python">python setup.py -m setup -r &lt;your region&gt;</code></p> 
+<p>After the script has successfully run, you can test by querying an endpoint:</p> 
+<p><code class="lang-python">curl &lt;your endpoint from output above&gt;/owner</code></p> 
+<b>Conclusion</b> 
+<p>Migrating a monolithic application to a containerized set of microservices can seem like a daunting task. Following the steps outlined in this post, you can begin to containerize monolithic Java apps, taking advantage of the container runtime environment, and beginning the process of re-architecting into microservices. On the whole, containerized microservices are faster to develop, easier to iterate on, and more cost effective to maintain and secure.</p> 
+<p>This post focused on the first steps of microservice migration. You can learn more about optimizing and scaling your microservices with components such as service discovery, blue/green deployment, circuit breakers, and configuration servers at <a href="http://aws.amazon.com/containers">http://aws.amazon.com/containers</a>.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2489');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Manage Kubernetes Clusters on AWS Using Kops</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1268,490 +1708,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2071');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building High-Throughput Genomics Batch Workflows on AWS: Workflow Layer (Part 4 of 4)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-06-01T17:43:43+00:00">01 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-batch/" title="View all posts in AWS Batch*"><span property="articleSection">AWS Batch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2161" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2161&amp;disqus_title=Building+High-Throughput+Genomics+Batch+Workflows+on+AWS%3A+Workflow+Layer+%28Part+4+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2161');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
-<p>This post is the fourth in a series on how to build a genomics workflow on AWS. In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1</a>, we introduced a general architecture, shown below, and highlighted the three common layers in a batch workflow:</p> 
-<li>Job</li> 
-<li><a href="https://aws.amazon.com/batch/">Batch</a></li> 
-<li>Workflow</li> 
-<p>In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2</a>, you built a Docker container for each job that needed to run as part of your workflow, and stored them in <a href="https://aws.amazon.com/ecr">Amazon ECR</a>.</p> 
-<p>In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3</a>, you tackled the batch layer and built a scalable, elastic, and easily maintainable batch engine using <a href="https://aws.amazon.com/batch">AWS Batch</a>. This solution took care of dynamically scaling your compute resources in response to the number of runnable jobs in your job queue length as well as managed job placement.<span id="more-2161"></span></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
-<p>In part 4, you build out the workflow layer of your solution using <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> and <a href="https://aws.amazon.com/lambda">AWS Lambda</a>. You then run an end-to-end genomic analysis―specifically known as exome secondary analysis―for many times at a cost of less than $1 per exome.</p> 
-<p>Step Functions makes it easy to coordinate the components of your applications using visual workflows. Building applications from individual components that each perform a single function lets you scale and change your workflow quickly. You can use the graphical console to arrange and visualize the components of your application as a series of steps, which simplify building and running multi-step applications. You can change and add steps without writing code, so you can easily evolve your application and innovate faster.</p> 
-<p>An added benefit of using Step Functions to define your workflows is that the state machines you create are immutable. While you can delete a state machine, you cannot alter it after it is created. For regulated workloads where auditing is important, you can be assured that state machines you used in production cannot be altered.</p> 
-<p>In this blog post, you will create a Lambda state machine to orchestrate your batch workflow. For more information on how to create a basic state machine, please see this <a href="https://docs.aws.amazon.com/step-functions/latest/dg/hello-lambda.html">Step Functions tutorial</a>.</p> 
-<p>All code related to this blog series can be found in the associated GitHub repository <a href="https://github.com/awslabs/aws-batch-genomics">here</a>.</p> 
-<b id="toc_0">Build a state machine building block</b> 
-<p>To skip the following steps, we have provided an <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/workflow/deploy_state_machine.yaml">AWS CloudFormation template</a> that can deploy your Step Functions state machine. You can use this in combination with the setup you did in part 3 to quickly set up the environment in which to run your analysis.</p> 
-<p>The state machine is composed of smaller state machines that submit a job to AWS Batch, and then poll and check its execution.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/Polling-State-Machine.png"><img class="aligncenter size-medium wp-image-2174" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/Polling-State-Machine-300x265.png" alt="" width="300" height="265" /></a></p> 
-<p>The steps in this building block state machine are as follows:</p> 
-<ol> 
-<li><strong>A job is submitted.</strong><br /> Each analytical module/job has its own Lambda function for submission and calls the <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/batch/runner/batch_submit_job.py">batchSubmitJob Lambda function</a> that you built in the previous blog post. You will build these specialized Lambda functions in the following section.</li> 
-<li><strong>The state machine queries the AWS Batch API for the job status.</strong><br /> This is also a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/batch/runner/batch_get_job_status.py">Lambda function</a>.</li> 
-<li><strong>The job status is checked to see if the job has completed.</strong><br /> If the job status equals SUCCESS, proceed to log the final job status. If the job status equals FAILED, end the execution of the state machine. In all other cases, wait 30 seconds and go back to Step 2.</li> 
-</ol> 
-<p>Here is the JSON representing this state machine.</p> 
-<pre><code class="language-none">{
-&quot;Comment&quot;: &quot;A simple example that submits a Job to AWS Batch&quot;,
-&quot;StartAt&quot;: &quot;SubmitJob&quot;,
-&quot;States&quot;: {
-&quot;SubmitJob&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:&lt;account-id&gt;::function:batchSubmitJob&quot;,
-&quot;Next&quot;: &quot;GetJobStatus&quot;
-},
-&quot;GetJobStatus&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:&lt;account-id&gt;:function:batchGetJobStatus&quot;,
-&quot;Next&quot;: &quot;CheckJobStatus&quot;,
-&quot;InputPath&quot;: &quot;$&quot;,
-&quot;ResultPath&quot;: &quot;$.status&quot;
-},
-&quot;CheckJobStatus&quot;: {
-&quot;Type&quot;: &quot;Choice&quot;,
-&quot;Choices&quot;: [
-{
-&quot;Variable&quot;: &quot;$.status&quot;,
-&quot;StringEquals&quot;: &quot;FAILED&quot;,
-&quot;End&quot;: true
-},
-{
-&quot;Variable&quot;: &quot;$.status&quot;,
-&quot;StringEquals&quot;: &quot;SUCCEEDED&quot;,
-&quot;Next&quot;: &quot;GetFinalJobStatus&quot;
-}
-],
-&quot;Default&quot;: &quot;Wait30Seconds&quot;
-},
-&quot;Wait30Seconds&quot;: {
-&quot;Type&quot;: &quot;Wait&quot;,
-&quot;Seconds&quot;: 30,
-&quot;Next&quot;: &quot;GetJobStatus&quot;
-},
-&quot;GetFinalJobStatus&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:&lt;account-id&gt;:function:batchGetJobStatus&quot;,
-&quot;End&quot;: true
-}
-}
-}</code></pre> 
-<b id="toc_1">Building the Lambda functions for the state machine</b> 
-<p>You need two basic Lambda functions for this state machine. The first one submits a job to AWS Batch and the second checks the status of the AWS Batch job that was submitted.</p> 
-<p>In AWS Step Functions, you specify an input as JSON that is read into your state machine. Each state receives the aggregate of the steps immediately preceding it, and you can specify which components a state passes on to its children. Because you are using Lambda functions to execute tasks, one of the easiest routes to take is to modify the input JSON, represented as a Python dictionary, within the Lambda function and return the entire dictionary back for the next state to consume.</p> 
-<b id="toc_2">Building the batchSubmitIsaacJob Lambda function</b> 
-<p>For Step 1 above, you need a Lambda function for each of the steps in your analysis workflow. As you created a generic Lambda function in the previous post to submit a batch job (batchSubmitJob), you can use that function as the basis for the specialized functions you’ll include in this state machine. Here is such a Lambda function for the Isaac aligner.</p> 
-<pre><code class="language-none">from __future__ import print_function
-import boto3
-import json
-import traceback
-lambda_client = boto3.client('lambda')
-def lambda_handler(event, context):
-try:
-# Generate output put
-bam_s3_path = '/'.join([event['resultsS3Path'], event['sampleId'], 'bam/'])
-depends_on = event['dependsOn'] if 'dependsOn' in event else []
-# Generate run command
-command = [
-'--bam_s3_folder_path', bam_s3_path,
-'--fastq1_s3_path', event['fastq1S3Path'],
-'--fastq2_s3_path', event['fastq2S3Path'],
-'--reference_s3_path', event['isaac']['referenceS3Path'],
-'--working_dir', event['workingDir']
-]
-if 'cmdArgs' in event['isaac']:
-command.extend(['--cmd_args', event['isaac']['cmdArgs']])
-if 'memory' in event['isaac']:
-command.extend(['--memory', event['isaac']['memory']])
-# Submit Payload
-response = lambda_client.invoke(
-FunctionName='batchSubmitJob',
-InvocationType='RequestResponse',
-LogType='Tail',
-Payload=json.dumps(dict(
-dependsOn=depends_on,
-containerOverrides={
-'command': command,
-},
-jobDefinition=event['isaac']['jobDefinition'],
-jobName='-'.join(['isaac', event['sampleId']]),
-jobQueue=event['isaac']['jobQueue']
-)))
-response_payload = response['Payload'].read()
-# Update event
-event['bamS3Path'] = bam_s3_path
-event['jobId'] = json.loads(response_payload)['jobId']
-return event
-except Exception as e:
-traceback.print_exc()
-raise e</code></pre> 
-<p>In the Lambda console, create a Python 2.7 Lambda function named batchSubmitIsaacJob and paste in the above code. Use the LambdaBatchExecutionRole that you created in the previous post. For more information, see <a href="https://docs.aws.amazon.com/lambda/latest/dg/get-started-create-function.html">Step 2.1: Create a Hello World Lambda Function</a>.</p> 
-<p>This Lambda function reads in the inputs passed to the state machine it is part of, formats the data for the batchSubmitJob Lambda function, invokes that Lambda function, and then modifies the event dictionary to pass onto the subsequent states. You can repeat these for each of the other tools, which can be found in the tools//lambda/lambda_function.py script in the GitHub repo.</p> 
-<b id="toc_3">Building the batchGetJobStatus Lambda function</b> 
-<p>For Step 2 above, the process queries the AWS Batch DescribeJobs API action with jobId to identify the state that the job is in. You can put this into a Lambda function to integrate it with Step Functions.</p> 
-<p>In the Lambda console, create a new Python 2.7 function with the LambdaBatchExecutionRole IAM role. Name your function batchGetJobStatus and paste in the following code. This is similar to the <code>batch-get-job-python27</code> Lambda blueprint.</p> 
-<pre><code class="language-none">from __future__ import print_function
-import boto3
-import json
-print('Loading function')
-batch_client = boto3.client('batch')
-def lambda_handler(event, context):
-# Log the received event
-print(&quot;Received event: &quot; + json.dumps(event, indent=2))
-# Get jobId from the event
-job_id = event['jobId']
-try:
-response = batch_client.describe_jobs(
-jobs=[job_id]
-)
-job_status = response['jobs'][0]['status']
-return job_status
-except Exception as e:
-print(e)
-message = 'Error getting Batch Job status'
-print(message)
-raise Exception(message)</code></pre> 
-<b id="toc_4">Structuring state machine input</b> 
-<p>You have structured the state machine input so that general file references are included at the top-level of the JSON object, and any job-specific items are contained within a nested JSON object. At a high level, this is what the input structure looks like:</p> 
-<pre><code class="language-none">{
-&quot;general_field_1&quot;: &quot;value1&quot;,
-&quot;general_field_2&quot;: &quot;value2&quot;,
-&quot;general_field_3&quot;: &quot;value3&quot;,
-&quot;job1&quot;: {},
-&quot;job2&quot;: {},
-&quot;job3&quot;: {}
-}</code></pre> 
-<b id="toc_5">Building the full state machine</b> 
-<p>By chaining these state machine components together, you can quickly build flexible workflows that can process genomes in multiple ways. The development of the larger state machine that defines the entire workflow uses four of the above building blocks. You use the Lambda functions that you built in the previous section. Rename each building block submission to match the tool name.</p> 
-<p>We have provided a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/workflow/deploy_state_machine.yaml">CloudFormation template</a> to deploy your state machine and the associated IAM roles. In the <a href="https://console.aws.amazon.com/cloudformation">CloudFormation console</a>, select Create Stack, choose your template (deploy_state_machine.yaml), and enter in the ARNs for the Lambda functions you created.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/cfn_parameters.png"><img class="aligncenter size-full wp-image-2167" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/cfn_parameters.png" alt="" width="1898" height="1232" /></a></p> 
-<p>Continue through the rest of the steps and deploy your stack. Be sure to check the box next to <strong>“I acknowledge that AWS CloudFormation might create IAM resources.”</strong></p> 
-<p>Once the CloudFormation stack is finished deploying, you should see the following image of your state machine.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/statemachine_workflow.png"><img class="aligncenter size-full wp-image-2168" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/statemachine_workflow.png" alt="" width="1795" height="1691" /></a></p> 
-<p>In short, you first submit a job for Isaac, which is the aligner you are using for the analysis. Next, you use parallel state to split your output from “GetFinalIsaacJobStatus” and send it to both your variant calling step, Strelka, and your QC step, Samtools Stats. These then are run in parallel and you annotate the results from your Strelka step with snpEff.</p> 
-<b id="toc_6">Putting it all together</b> 
-<p>Now that you have built all of the components for a genomics secondary analysis workflow, test the entire process.</p> 
-<p>We have provided sequences from an Illumina sequencer that cover a region of the genome known as the exome. Most of the positions in the genome that we have currently associated with disease or human traits reside in this region, which is 1–2% of the entire genome. The workflow that you have built works for both analyzing an exome, as well as an entire genome.</p> 
-<p>Additionally, we have provided prebuilt reference genomes for Isaac, located at:</p> 
-<pre><code class="language-none">s3://aws-batch-genomics-resources/reference/</code></pre> 
-<p>If you are interested, we have provided a script that sets up all of that data. To execute that script, run the following command on a large EC2 instance:</p> 
-<pre><code class="language-none">make reference REGISTRY=&lt;your-ecr-registry&gt;</code></pre> 
-<p>Indexing and preparing this reference takes many hours on a large-memory EC2 instance. Be careful about the costs involved and note that the data is available through the prebuilt reference genomes.</p> 
-<b id="toc_7">Starting the execution</b> 
-<p>In a previous section, you established a provenance for the JSON that is fed into your state machine. For ease, we have auto-populated the input JSON for you to the state machine. You can also find this in the GitHub repo under <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/workflow/test.input.json">workflow/test.input.json</a>:</p> 
-<pre><code class="language-none">{
-&quot;fastq1S3Path&quot;: &quot;s3://aws-batch-genomics-resources/fastq/SRR1919605_1.fastq.gz&quot;,
-&quot;fastq2S3Path&quot;: &quot;s3://aws-batch-genomics-resources/fastq/SRR1919605_2.fastq.gz&quot;,
-&quot;referenceS3Path&quot;: &quot;s3://aws-batch-genomics-resources/reference/hg38.fa&quot;,
-&quot;resultsS3Path&quot;: &quot;s3://&lt;bucket&gt;/genomic-workflow/results&quot;,
-&quot;sampleId&quot;: &quot;NA12878_states_1&quot;,
-&quot;workingDir&quot;: &quot;/scratch&quot;,
-&quot;isaac&quot;: {
-&quot;jobDefinition&quot;: &quot;isaac-myenv:1&quot;,
-&quot;jobQueue&quot;: &quot;arn:aws:batch:us-east-1:&lt;account-id&gt;:job-queue/highPriority-myenv&quot;,
-&quot;referenceS3Path&quot;: &quot;s3://aws-batch-genomics-resources/reference/isaac/&quot;
-},
-&quot;samtoolsStats&quot;: {
-&quot;jobDefinition&quot;: &quot;samtools_stats-myenv:1&quot;,
-&quot;jobQueue&quot;: &quot;arn:aws:batch:us-east-1:&lt;account-id&gt;:job-queue/lowPriority-myenv&quot;
-},
-&quot;strelka&quot;: {
-&quot;jobDefinition&quot;: &quot;strelka-myenv:1&quot;,
-&quot;jobQueue&quot;: &quot;arn:aws:batch:us-east-1:&lt;account-id&gt;:job-queue/highPriority-myenv&quot;,
-&quot;cmdArgs&quot;: &quot; --exome &quot;
-},
-&quot;snpEff&quot;: {
-&quot;jobDefinition&quot;: &quot;snpeff-myenv:1&quot;,
-&quot;jobQueue&quot;: &quot;arn:aws:batch:us-east-1:&lt;account-id&gt;:job-queue/lowPriority-myenv&quot;,
-&quot;cmdArgs&quot;: &quot; -t hg38 &quot;
-}
-}</code></pre> 
-<p>You are now at the stage to run your full genomic analysis. Copy the above to a new text file, change paths and ARNs to the ones that you created previously, and save your JSON input as input.states.json.</p> 
-<p>In the CLI, execute the following command. You need the ARN of the state machine that you created in the previous post:</p> 
-<pre><code class="language-none">aws stepfunctions start-execution --state-machine-arn &lt;your-state-machine-arn&gt; --input file://input.states.json</code></pre> 
-<p>Your analysis has now started. By using Spot Instances with AWS Batch, you can quickly scale out your workflows while concurrently optimizing for cost. While this is not guaranteed, most executions of the workflows presented here should cost under $1 for a full analysis.</p> 
-<b id="toc_8">Monitoring the execution</b> 
-<p>The output from the above CLI command gives you the ARN that describes the specific execution. Copy that and navigate to the Step Functions console. Select the state machine that you created previously and paste the ARN into the search bar.</p> 
-<p>The screen shows information about your specific execution. On the left, you see where your execution currently is in the workflow.</p> 
-<p>In the following screenshot, you can see that your workflow has successfully completed the alignment job and moved onto the subsequent steps, which are variant calling and generating quality information about your sample.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/stepfunctions_midworkflow.png"><img class="aligncenter size-full wp-image-2170" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/stepfunctions_midworkflow.png" alt="" width="1945" height="1170" /></a></p> 
-<p>You can also navigate to the AWS Batch console and see that progress of all of your jobs reflected there as well.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/batch_dashboard.png"><img class="aligncenter size-full wp-image-2171" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/02/batch_dashboard.png" alt="" width="1945" height="687" /></a></p> 
-<p>Finally, after your workflow has completed successfully, check out the S3 path to which you wrote all of your files. If you run a <code>ls –recursive</code> command on the S3 results path, specified in the input to your state machine execution, you should see something similar to the following:</p> 
-<pre><code class="language-none">2017-05-02 13:46:32 6475144340 genomic-workflow/results/NA12878_run1/bam/sorted.bam
-2017-05-02 13:46:34    7552576 genomic-workflow/results/NA12878_run1/bam/sorted.bam.bai
-2017-05-02 13:46:32         45 genomic-workflow/results/NA12878_run1/bam/sorted.bam.md5
-2017-05-02 13:53:20      68769 genomic-workflow/results/NA12878_run1/stats/bam_stats.dat
-2017-05-02 14:05:12        100 genomic-workflow/results/NA12878_run1/vcf/stats/runStats.tsv
-2017-05-02 14:05:12        359 genomic-workflow/results/NA12878_run1/vcf/stats/runStats.xml
-2017-05-02 14:05:12  507577928 genomic-workflow/results/NA12878_run1/vcf/variants/genome.S1.vcf.gz
-2017-05-02 14:05:12     723144 genomic-workflow/results/NA12878_run1/vcf/variants/genome.S1.vcf.gz.tbi
-2017-05-02 14:05:12  507577928 genomic-workflow/results/NA12878_run1/vcf/variants/genome.vcf.gz
-2017-05-02 14:05:12     723144 genomic-workflow/results/NA12878_run1/vcf/variants/genome.vcf.gz.tbi
-2017-05-02 14:05:12   30783484 genomic-workflow/results/NA12878_run1/vcf/variants/variants.vcf.gz
-2017-05-02 14:05:12    1566596 genomic-workflow/results/NA12878_run1/vcf/variants/variants.vcf.gz.tbi</code></pre> 
-<b id="toc_9">Modifications to the workflow</b> 
-<p>You have now built and run your genomics workflow. While diving deep into modifications to this architecture are beyond the scope of these posts, we wanted to leave you with several suggestions of how you might modify this workflow to satisfy additional business requirements.</p> 
-<li><strong>Job tracking with Amazon DynamoDB</strong><br /> In many cases, such as if you are offering Genomics-as-a-Service, you might want to track the state of your jobs with DynamoDB to get fine-grained records of how your jobs are running. This way, you can easily identify the cost of individual jobs and workflows that you run.</li> 
-<li><strong>Resuming from failure</strong><br /> Both AWS Batch and Step Functions natively support job retries and can cover many of the standard cases where a job might be interrupted. There may be cases, however, where your workflow might fail in a way that is unpredictable. In this case, you can use <a href="https://docs.aws.amazon.com/step-functions/latest/dg/tutorial-handling-error-conditions.html">custom error handling with AWS Step Functions</a> to build out a workflow that is even more resilient. Also, you can build in fail states into your state machine to fail at any point, such as if a batch job fails after a certain number of retries.</li> 
-<li><strong>Invoking Step Functions from Amazon API Gateway</strong><br /> You can use API Gateway to build an API that acts as a “front door” to Step Functions. You can create a POST method that contains the input JSON to feed into the state machine you built. For more information, see the <a href="https://aws.amazon.com/blogs/compute/implementing-serverless-manual-approval-steps-in-aws-step-functions-and-amazon-api-gateway/">Implementing Serverless Manual Approval Steps in AWS Step Functions and Amazon API Gateway</a> blog post.</li> 
-<b id="toc_10">Conclusion</b> 
-<p>While the approach we have demonstrated in this series has been focused on genomics, it is important to note that this can be generalized to nearly any high-throughput batch workload. We hope that you have found the information useful and that it can serve as a jump-start to building your own batch workloads on AWS with native AWS services.</p> 
-<p>For more information about how AWS can enable your genomics workloads, be sure to check out the <a href="https://aws.amazon.com/health/genomics/">AWS Genomics</a> page.</p> 
-<p>Other posts in this four-part series:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
-<p>Please leave any questions and comments below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/batch/" rel="tag">Batch</a>, <a href="https://aws.amazon.com/blogs/compute/tag/genomics/" rel="tag">genomics</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a>, <a href="https://aws.amazon.com/blogs/compute/tag/workflow/" rel="tag">workflow</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2161');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building High-Throughput Genomic Batch Workflows on AWS: Batch Layer (Part 3 of 4)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-05-31T17:45:09+00:00">31 MAY 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-batch/" title="View all posts in AWS Batch*"><span property="articleSection">AWS Batch*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2142" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2142&amp;disqus_title=Building+High-Throughput+Genomic+Batch+Workflows+on+AWS%3A++Batch+Layer+%28Part+3+of+4%29&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2142');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg"><img class="alignnone size-full wp-image-2114" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Aaron.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</strong></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg"><img class="alignnone size-full wp-image-2115" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Angel.jpeg" alt="" width="119" height="160" /></a></p> 
-<p><strong>Angel Pizarro is a Scientific Computing Technical Business Development Manager at AWS</strong></p> 
-<p>This post is the third in a series on how to build a genomics workflow on AWS. In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1</a>, we introduced a general architecture, shown below, and highlighted the three common layers in a batch workflow:</p> 
-<li>Job</li> 
-<li><a href="https://aws.amazon.com/batch/">Batch</a></li> 
-<li>Workflow</li> 
-<p>In <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2</a>, you built a Docker container for each job that needed to run as part of your workflow, and stored them in <a href="https://aws.amazon.com/ecr">Amazon ECR</a>.<span id="more-2142"></span></p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png"><img class="aligncenter size-full wp-image-2106" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/05/30/Batch-overview.png" alt="" width="3237" height="1795" /></a></p> 
-<p>In Part 3, you tackle the batch layer and build a scalable, elastic, and easily maintainable batch engine using <a href="https://aws.amazon.com/batch">AWS Batch</a>.</p> 
-<p>AWS Batch enables developers, scientists, and engineers to easily and efficiently run hundreds of thousands of batch computing jobs on AWS. It dynamically provisions the optimal quantity and type of compute resources (for example, CPU or memory optimized instances) based on the volume and specific resource requirements of the batch jobs that you submit. With AWS Batch, you do not need to install and manage your own batch computing software or server clusters, which allows you to focus on analyzing results, such as those of your genomic analysis.</p> 
-<b id="toc_0">Integrating applications into AWS Batch</b> 
-<p>If you are new to AWS Batch, we recommend reading <a href="http://docs.aws.amazon.com/batch/latest/userguide/get-set-up-for-aws-batch.html">Setting Up AWS Batch</a> to ensure that you have the proper permissions and AWS environment.</p> 
-<p>After you have a working environment, you define several types of resources:</p> 
-<li>IAM roles that provide service permissions</li> 
-<li>A compute environment that launches and terminates compute resources for jobs</li> 
-<li>A custom Amazon Machine Image (AMI)</li> 
-<li>A job queue to submit the units of work and to schedule the appropriate resources within the compute environment to execute those jobs</li> 
-<li>Job definitions that define how to execute an application</li> 
-<p>After the resources are created, you’ll test the environment and create an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function to send generic jobs to the queue.</p> 
-<p>This genomics workflow covers the basic steps. For more information, see <a href="http://docs.aws.amazon.com/batch/latest/userguide/Batch_GetStarted.html">Getting Started with AWS Batch</a>.</p> 
-<b id="toc_1">Creating the necessary IAM roles</b> 
-<p>AWS Batch simplifies batch processing by managing a number of underlying AWS services so that you can focus on your applications. As a result, you create IAM roles that give the service permissions to act on your behalf. In this section, deploy the <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> template <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/batch/setup/iam.template.yaml">included in the GitHub repository</a> and extract the ARNs for later use.</p> 
-<p>To deploy the stack, go to the top level in the <a href="https://github.com/awslabs/aws-batch-genomics">repo</a> with the following command:</p> 
-<pre><code class="language-none">aws cloudformation create-stack --template-body file://batch/setup/iam.template.yaml --stack-name iam --capabilities CAPABILITY_NAMED_IAM</code></pre> 
-<p>You can capture the output from this stack in the <strong>Outputs</strong> tab in the CloudFormation console:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/iam_cfn_output.png"><img class="aligncenter size-full wp-image-2145" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/iam_cfn_output.png" alt="" width="1945" height="450" /></a></p> 
-<b id="toc_2">Creating the compute environment</b> 
-<p>In AWS Batch, you will set up a managed compute environments. Managed compute environments automatically launch and terminate compute resources on your behalf based on the aggregate resources needed by your jobs, such as vCPU and memory, and simple boundaries that you define.</p> 
-<p>When defining your compute environment, specify the following:</p> 
-<li>Desired instance types in your environment</li> 
-<li>Min and max vCPUs in the environment</li> 
-<li>The Amazon Machine Image (AMI) to use</li> 
-<li>Percentage value for bids on the <a href="https://aws.amazon.com/ec2/spot/">Spot Market</a> and VPC subnets that can be used.</li> 
-<p>AWS Batch then provisions an elastic and heterogeneous pool of <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances based on the aggregate resource requirements of jobs sitting in the RUNNABLE state. If a mix of CPU and memory-intensive jobs are ready to run, AWS Batch provisions the appropriate ratio and size of CPU and memory-optimized instances within your environment. For this post, you will use the simplest configuration, in which instance types are set to “optimal” allowing AWS Batch to choose from the latest C, M, and R EC2 instance families.</p> 
-<p>While you could create this compute environment in the console, we provide the following CLI commands. Replace the subnet IDs and key name with your own private subnets and key, and the image-id with the image you will build in the next section.</p> 
-<pre><code class="language-none">ACCOUNTID=&lt;your account id&gt;
-SERVICEROLE=&lt;from output in CloudFormation template&gt;
-IAMFLEETROLE=&lt;from output in CloudFormation template&gt;
-JOBROLEARN=&lt;from output in CloudFormation template&gt;
-SUBNETS=&lt;comma delimited list of subnets&gt;
-SECGROUPS=&lt;your security groups&gt;
-SPOTPER=50 # percentage of on demand
-IMAGEID=&lt;ami-id corresponding to the one you created&gt;
-INSTANCEROLE=&lt;from output in CloudFormation template&gt;
-REGISTRY=${ACCOUNTID}.dkr.ecr.us-east-1.amazonaws.com
-KEYNAME=&lt;your key name&gt;
-MAXCPU=1024 # max vCPUs in compute environment
-ENV=myenv
-# Creates the compute environment
-aws batch create-compute-environment --compute-environment-name genomicsEnv-$ENV --type MANAGED --state ENABLED --service-role ${SERVICEROLE} --compute-resources type=SPOT,minvCpus=0,maxvCpus=$MAXCPU,desiredvCpus=0,instanceTypes=optimal,imageId=$IMAGEID,subnets=$SUBNETS,securityGroupIds=$SECGROUPS,ec2KeyPair=$KEYNAME,instanceRole=$INSTANCEROLE,bidPercentage=$SPOTPER,spotIamFleetRole=$IAMFLEETROLE</code></pre> 
-<b id="toc_3">Creating the custom AMI for AWS Batch</b> 
-<p>While you can use default Amazon ECS-optimized AMIs with AWS Batch, you can also provide your own image in managed compute environments. Use this feature to provision additional scratch EBS storage on each of the instances that AWS Batch launches, and to encrypt both the Docker and scratch EBS volumes.</p> 
-<p>The process for <a href="http://docs.aws.amazon.com/batch/latest/userguide/create-batch-ami.html">creating a custom AMI for AWS Batch</a> is well-documented. Because AWS Batch has the <a href="https://docs.aws.amazon.com/batch/latest/userguide/compute_resource_AMIs.html#batch-ami-spec">same requirements for your AMI</a> as Amazon ECS, use the default <a href="https://aws.amazon.com/marketplace/search/results?x=0&amp;y=0&amp;searchTerms=Amazon+ECS-Optimized+Amazon+Linux+AMI&amp;page=1&amp;ref_=nav_search_box">Amazon ECS-optimized Amazon Linux AMI</a> as a base and change it in the following ways:</p> 
-<li>Attach a 1 TB scratch volume to <code>/dev/sdb</code></li> 
-<li>Set the EBS encryption options on both the Docker volume and the new scratch volume</li> 
-<li>Modify the <code>/etc/fstab</code> file so that the scratch volume is mounted to <code>/docker_scratch</code> on system start</li> 
-<p>The first two tasks can be addressed in the console. Use the standard EC2 instance launch process to spin up a small t2.micro instance of the ECS-optimized AMI. In the <strong>Add Storage</strong> step, add the scratch volume and make sure that you select the <strong>Encrypted</strong> boxes for both the Docker and scratch volume.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_ecs_setup.png"><img class="aligncenter size-full wp-image-2146" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_ecs_setup.png" alt="" width="1950" height="554" /></a></p> 
-<p>After your instance has launched, record the IP address and then SSH into the instance. Copy and paste the following code:</p> 
-<pre><code class="language-none">
-sudo yum -y update
-sudo mkfs -t ext4 /dev/xvdb
-sudo mkdir /docker_scratch
-sudo echo -e '/dev/xvdb\t/docker_scratch\text4\tdefaults\t0\t0' | sudo tee -a /etc/fstab
-sudo mount –a
-sudo stop ecs
-sudo rm -rf /var/lib/ecs/data/ecs_agent_data.json
-</code></pre> 
-<p>This auto-mounts your scratch volume to <code>/docker_scratch</code>, which is your scratch directory for batch processing. The last two commands stop the ECS agent and remove any persistent data checkpoint files. Next, <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-an-ami-ebs.html">create your new AMI</a> and record the image ID.</p> 
-<b id="toc_4">Creating the job queues</b> 
-<p>AWS Batch job queues are used to coordinate the submission of batch jobs. Your jobs are submitted to job queues, which can be mapped to one or more compute environments. Job queues have priority relative to each other. You can also specify the order in which they consume resources from your compute environments.</p> 
-<p>In this solution, use two job queues. The first is for high priority jobs, such as alignment or variant calling. Set this with a high priority (1000) and map back to the previously created compute environment. Next, set a second job queue for low priority jobs, such as quality statistics generation. To create these compute environments, enter the following CLI commands:</p> 
-<pre><code class="language-none">aws batch create-job-queue --job-queue-name highPriority-${ENV} --compute-environment-order order=0,computeEnvironment=genomicsEnv-${ENV}  --priority 1000 --state ENABLED
-aws batch create-job-queue --job-queue-name lowPriority-${ENV} --compute-environment-order order=0,computeEnvironment=genomicsEnv-${ENV}  --priority 1 --state ENABLED</code></pre> 
-<b id="toc_5">Creating the job definitions</b> 
-<p>To run the Isaac aligner container image locally, supply the Amazon S3 locations for the FASTQ input sequences, the reference genome to align to, and the output BAM file. For more information, see <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/tools/isaac/README.md">tools/isaac/README.md</a>.</p> 
-<p>The Docker container itself also requires some information on a suitable mountable volume so that it can read and write files temporary files without running out of space.</p> 
-<p>Note: In the following example, the FASTQ files as well as the reference files to run are in a publicly available bucket.</p> 
-<pre><code class="language-none">FASTQ1=s3://aws-batch-genomics-resources/fastq/SRR1919605_1.fastq.gz
-FASTQ2=s3://aws-batch-genomics-resources/fastq/SRR1919605_2.fastq.gz
-REF=s3://aws-batch-genomics-resources/reference/isaac/
-BAM=s3://mybucket/genomic-workflow/test_results/bam/
-mkdir ~/scratch
-docker run --rm -ti -v $(HOME)/scratch:/scratch $REPO_URI --bam_s3_folder_path $BAM \
---fastq1_s3_path $FASTQ1 \
---fastq2_s3_path $FASTQ2 \
---reference_s3_path $REF \
---working_dir /scratch </code></pre> 
-<p>Locally running containers can typically expand their CPU and memory resource headroom. In AWS Batch, the CPU and memory requirements are hard limits and are allocated to the container image at runtime.</p> 
-<p>Isaac is a fairly resource-intensive algorithm, as it creates an uncompressed index of the reference genome in memory to match the query DNA sequences. The large memory space is shared across multiple CPU threads, and Isaac can scale almost linearly with the number of CPU threads given to it as a parameter.</p> 
-<p>To fit these characteristics, choose an optimal instance size to maximize the number of CPU threads based on a given large memory footprint, and deploy a Docker container that uses all of the instance resources. In this case, we chose a host instance with 80+ GB of memory and 32+ vCPUs. The following code is example JSON that you can pass to the AWS CLI to create a job definition for Isaac.</p> 
-<pre><code class="language-none">aws batch register-job-definition --job-definition-name isaac-${ENV} --type container --retry-strategy attempts=3 --container-properties '
-{&quot;image&quot;: &quot;'${REGISTRY}'/isaac&quot;,
-&quot;jobRoleArn&quot;:&quot;'${JOBROLEARN}'&quot;,
-&quot;memory&quot;:80000,
-&quot;vcpus&quot;:32,
-&quot;mountPoints&quot;: [{&quot;containerPath&quot;: &quot;/scratch&quot;, &quot;readOnly&quot;: false, &quot;sourceVolume&quot;: &quot;docker_scratch&quot;}],
-&quot;volumes&quot;: [{&quot;name&quot;: &quot;docker_scratch&quot;, &quot;host&quot;: {&quot;sourcePath&quot;: &quot;/docker_scratch&quot;}}]
-}'</code></pre> 
-<p>You can copy and paste the following code for the other three job definitions:</p> 
-<pre><code class="language-none">aws batch register-job-definition --job-definition-name strelka-${ENV} --type container --retry-strategy attempts=3 --container-properties '
-{&quot;image&quot;: &quot;'${REGISTRY}'/strelka&quot;,
-&quot;jobRoleArn&quot;:&quot;'${JOBROLEARN}'&quot;,
-&quot;memory&quot;:32000,
-&quot;vcpus&quot;:32,
-&quot;mountPoints&quot;: [{&quot;containerPath&quot;: &quot;/scratch&quot;, &quot;readOnly&quot;: false, &quot;sourceVolume&quot;: &quot;docker_scratch&quot;}],
-&quot;volumes&quot;: [{&quot;name&quot;: &quot;docker_scratch&quot;, &quot;host&quot;: {&quot;sourcePath&quot;: &quot;/docker_scratch&quot;}}]
-}'
-aws batch register-job-definition --job-definition-name snpeff-${ENV} --type container --retry-strategy attempts=3 --container-properties '
-{&quot;image&quot;: &quot;'${REGISTRY}'/snpeff&quot;,
-&quot;jobRoleArn&quot;:&quot;'${JOBROLEARN}'&quot;,
-&quot;memory&quot;:10000,
-&quot;vcpus&quot;:4,
-&quot;mountPoints&quot;: [{&quot;containerPath&quot;: &quot;/scratch&quot;, &quot;readOnly&quot;: false, &quot;sourceVolume&quot;: &quot;docker_scratch&quot;}],
-&quot;volumes&quot;: [{&quot;name&quot;: &quot;docker_scratch&quot;, &quot;host&quot;: {&quot;sourcePath&quot;: &quot;/docker_scratch&quot;}}]
-}'
-aws batch register-job-definition --job-definition-name samtoolsStats-${ENV} --type container --retry-strategy attempts=3 --container-properties '
-{&quot;image&quot;: &quot;'${REGISTRY}'/samtools_stats&quot;,
-&quot;jobRoleArn&quot;:&quot;'${JOBROLEARN}'&quot;,
-&quot;memory&quot;:10000,
-&quot;vcpus&quot;:4,
-&quot;mountPoints&quot;: [{&quot;containerPath&quot;: &quot;/scratch&quot;, &quot;readOnly&quot;: false, &quot;sourceVolume&quot;: &quot;docker_scratch&quot;}],
-&quot;volumes&quot;: [{&quot;name&quot;: &quot;docker_scratch&quot;, &quot;host&quot;: {&quot;sourcePath&quot;: &quot;/docker_scratch&quot;}}]
-}'</code></pre> 
-<p>The value for “image” comes from the previous post on creating a Docker image and publishing to ECR. The value for jobRoleArn you can find from the output of the CloudFormation template that you deployed earlier. In addition to providing the number of CPU cores and memory required by Isaac, you also give it a storage volume for scratch and staging. The volume comes from the previously defined custom AMI.</p> 
-<b id="toc_6">Testing the environment</b> 
-<p>After you have created the Isaac job definition, you can submit the job using the <a href="http://docs.aws.amazon.com/batch/latest/APIReference/API_SubmitJob.html">AWS Batch submitJob</a> API action. While the base mappings for Docker run are taken care of in the job definition that you just built, the specific job parameters should be specified in the container overrides section of the API call. Here’s what this would look like in the CLI, using the same parameters as in the bash commands shown earlier:</p> 
-<pre><code class="language-none">aws batch submit-job --job-name testisaac --job-queue highPriority-${ENV} --job-definition isaac-${ENV}:1 --container-overrides '{
-&quot;command&quot;: [
-&quot;--bam_s3_folder_path&quot;, &quot;s3://mybucket/genomic-workflow/test_batch/bam/&quot;,
-&quot;--fastq1_s3_path&quot;, &quot;s3://aws-batch-genomics-resources/fastq/ SRR1919605_1.fastq.gz&quot;,
-&quot;--fastq2_s3_path&quot;, &quot;s3://aws-batch-genomics-resources/fastq/SRR1919605_2.fastq.gz&quot;,
-&quot;--reference_s3_path&quot;, &quot;s3://aws-batch-genomics-resources/reference/isaac/&quot;,
-&quot;--working_dir&quot;, &quot;/scratch&quot;,
-&quot;—cmd_args&quot;, &quot; --exome &quot;,]
-}'</code></pre> 
-<p>When you execute a submitJob call, jobId is returned. You can then track the progress of your job using the describeJobs API action:</p> 
-<pre><code class="language-none">aws batch describe-jobs –jobs &lt;jobId returned from submitJob&gt;</code></pre> 
-<p>You can also track the progress of all of your jobs in the AWS Batch console dashboard.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_dashboard.png"><img class="aligncenter size-full wp-image-2147" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_dashboard.png" alt="" width="1945" height="687" /></a></p> 
-<p>To see exactly where a RUNNING job is at, use the link in the AWS Batch console to direct you to the appropriate location in CloudWatch logs.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_cwl.png"><img class="aligncenter size-full wp-image-2148" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/01/batch_cwl.png" alt="" width="1945" height="1016" /></a></p> 
-<b id="toc_7">Completing the batch environment setup</b> 
-<p>To finish, create a Lambda function to submit a generic AWS Batch job.</p> 
-<p>In the Lambda console, create a Python 2.7 Lambda function named batchSubmitJob. Copy and paste the following code. This is similar to the <code>batch-submit-job-python27</code> Lambda blueprint. Use the LambdaBatchExecutionRole that you created earlier. For more information about creating functions, see <a href="https://docs.aws.amazon.com/lambda/latest/dg/get-started-create-function.html">Step 2.1: Create a Hello World Lambda Function</a>.</p> 
-<pre><code class="language-none">from __future__ import print_function
-import json
-import boto3
-batch_client = boto3.client('batch')
-def lambda_handler(event, context):
-# Log the received event
-print(&quot;Received event: &quot; + json.dumps(event, indent=2))
-# Get parameters for the SubmitJob call
-# http://docs.aws.amazon.com/batch/latest/APIReference/API_SubmitJob.html
-job_name = event['jobName']
-job_queue = event['jobQueue']
-job_definition = event['jobDefinition']
-# containerOverrides, dependsOn, and parameters are optional
-container_overrides = event['containerOverrides'] if event.get('containerOverrides') else {}
-parameters = event['parameters'] if event.get('parameters') else {}
-depends_on = event['dependsOn'] if event.get('dependsOn') else []
-try:
-response = batch_client.submit_job(
-dependsOn=depends_on,
-containerOverrides=container_overrides,
-jobDefinition=job_definition,
-jobName=job_name,
-jobQueue=job_queue,
-parameters=parameters
-)
-# Log response from AWS Batch
-print(&quot;Response: &quot; + json.dumps(response, indent=2))
-# Return the jobId
-event['jobId'] = response['jobId']
-return event
-except Exception as e:
-print(e)
-message = 'Error getting Batch Job status'
-print(message)
-raise Exception(message)</code></pre> 
-<b id="toc_8">Conclusion</b> 
-<p>In part 3 of this series, you successfully set up your data processing, or batch, environment in AWS Batch. We also provided a <a href="https://github.com/awslabs/aws-batch-genomics/blob/master/batch/setup/create_batch_env.py">Python script</a> in the corresponding GitHub repo that takes care of all of the above CLI arguments for you, as well as building out the job definitions for all of the jobs in the workflow: Isaac, Strelka, SAMtools, and snpEff. You can check the script’s README for additional documentation.</p> 
-<p>In Part 4, you’ll cover the workflow layer using <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> and <a href="https://aws.amazon.com/lambda">AWS Lambda</a>.</p> 
-<p>Other posts in this four-part series:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-introduction-part-1-of-4/">Part 1: Introduction</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-job-layer-part-2-of-4/">Part 2: Job Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomic-batch-workflows-on-aws-batch-layer-part-3-of-4/">Part 3: Batch Layer</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">Part 4: Workflow Layer</a></li> 
-<p>Please leave any questions and comments below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/batch/" rel="tag">Batch</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecr/" rel="tag">ECR</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecs/" rel="tag">ECS</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2142');
 });
 </script> 
 </article> 

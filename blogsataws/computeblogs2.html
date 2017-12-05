@@ -191,6 +191,164 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Under the Hood: Task Networking for Amazon ECS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T21:27:01+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3199" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3199&amp;disqus_title=Under+the+Hood%3A+Task+Networking+for+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3199');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of ECS&nbsp;Sr. Software Dev Engineer Anirudh Aithal.</em></p> 
+<p>Today, AWS&nbsp;announced <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-ecs-introduces-awsvpc-networking-mode-for-containers-to-support-full-networking-capabilities/">task networking</a> for <a href="https://aws.amazon.com/ecs">Amazon ECS</a>, which enables <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html">elastic network interfaces</a> to be attached to containers.</p> 
+<p>In this post, I take a closer look at how this new container-native “awsvpc” network mode is implemented using <a href="https://github.com/containernetworking/cni">container networking interface</a> plugins on ECS managed instances (referred to as container instances).</p> 
+<p>This post is a deep dive into how task networking works with Amazon ECS. If you want to learn more about how you can start using task networking for your containerized applications, see <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a>. Cloud Native Computing Foundation (CNCF) hosts the <a href="https://github.com/containernetworking/cni">Container Networking Interface (CNI)</a> project, which consists of a specification and libraries for writing plugins to configure network interfaces in Linux containers. For more about cloud native computing in AWS, see Adrian Cockcroft’s post on <a href="https://medium.com/@adrianco/cloud-native-computing-5f0f41a982bf">Cloud Native Computing</a>.</p> 
+<p><span id="more-3199"></span></p> 
+<b>Container instance setup</b> 
+<p>Before I discuss the details of enabling task networking on container instances, look at how a typical instance looks in ECS.</p> 
+<p><img class="aligncenter size-full wp-image-3200" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_1.png" alt="" width="408" height="341" /></p> 
+<p>The diagram above shows a typical container instance. The <a href="https://github.com/aws/amazon-ecs-agent/">ECS agent</a>, which itself is running as a container, is responsible for:</p> 
+<li>Registering the EC2 instance with the ECS backend</li> 
+<li>Ensuring that task state changes communicated to it by the ECS backend are enacted on the container instance</li> 
+<li>Interacting with the Docker daemon to create, start, stop, and monitor</li> 
+<li>Relaying container state and task state transitions to the ECS backend</li> 
+<p>Because the ECS agent is just acting as the supervisor for containers under its management, it offloads the problem of setting up networking for containers to either the Docker daemon (for containers configured with one of Docker’s default networking modes) or a set of CNI plugins (for containers in task with networking mode set to <code class="lang-bash">awsvpc</code>).</p> 
+<p>In either case, network stacks of containers are configured via network namespaces. As per the <code class="lang-bash">ip-netns(8)</code> manual, “<em>A network namespace is logically another copy of the network stack, with its own routes, firewall rules, and network devices</em>.” The network namespace construct makes the partitioning of network stack between processes and containers running on a host possible.</p> 
+<b>Network namespaces and CNI plugins</b> 
+<p>CNI plugins are executable files that comply with the <a href="https://github.com/containernetworking/cni/blob/master/SPEC.md">CNI specification</a> and configure the network connectivity of containers. The CNI project defines a specification for the plugins and provides a library for interacting with plugins, thus providing a consistent, reliable, and simple interface with which to interact with the plugins.</p> 
+<p>You specify the container or its network namespace and invoke the plugin with the ADD command to add network interfaces to a container, and then the DEL command to tear them down. For example, the reference <a href="https://github.com/containernetworking/plugins/tree/master/plugins/main/bridge">bridge plugin</a> adds all containers on the same host into a bridge that resides in the host network namespace.</p> 
+<p>This plugin model fits in nicely with the ECS agent’s “<em>minimal intrusion in the container lifecycle</em>” model, as the agent doesn’t need to concern itself with the details of the network setup for containers. It’s also an extensible model, which allows the agent to switch to a different set of plugins if the need arises in future. Finally, the ECS agent doesn’t need to monitor the liveliness of these plugins as they are only invoked when required.</p> 
+<b>Invoking CNI plugins from the ECS agent</b> 
+<p>When ECS attaches an elastic network interface to the instance and sends the message to the agent to provision the elastic network interface for containers in a task, the elastic network interface (as with any network device) shows up in the global default network namespace of the host. The ECS agent invokes a chain of CNI plugins to ensure that the elastic network interface is configured appropriately in the container’s network namespace. You can review these plugins in the <a href="https://github.com/aws/amazon-ecs-cni-plugins">amazon-ecs-cni-plugins GitHub repo</a>.</p> 
+<p>The first plugin invoked in this chain is the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/eni">ecs-eni</a>&nbsp;plugin,&nbsp;which ensures that the elastic network interface is attached to container’s network namespace and configured with the VPC-allocated IP addresses and the default route to use the subnet gateway. The container also needs to make HTTP requests to the credentials endpoint (hosted by the ECS agent) for getting IAM role credentials. This is handled by the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ecs-bridge">ecs-bridge</a> and <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ipam">ecs-ipam</a> plugins, which are invoked next. The CNI library provides mechanisms to interpret the results from the execution of these plugins, which results in an efficient error handling in the agent. The following diagram illustrates the different steps in this process:</p> 
+<p><img class="aligncenter size-full wp-image-3202" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_2.png" alt="" width="862" height="491" /></p> 
+<p>To avoid the race condition between configuring the network stack and commands being invoked in application containers, the ECS agent creates an additional “pause” container for each task before starting the containers in the task definition. It then sets up the network namespace of the pause container by executing the previously mentioned CNI plugins. It also starts the rest of the containers in the task so that they share their network stack of the pause container. This means that all containers in a task are addressable by the IP addresses of the elastic network interface, and they can communicate with each other over the <code class="lang-bash">localhost</code> interface.</p> 
+<p>In this example setup, you have two containers in a task behind an elastic network interface. The following commands show that they have a similar view of the network stack and can talk to each other over the localhost interface.</p> 
+<h3>List the last three containers running on the host (you launched a task with two containers and the ECS agent launched the additional container to configure the network namespace):</h3> 
+<pre><code class="lang-bash"><b>$ docker ps -n 3 --format &quot;{{.ID}}\t{{.Names}}\t{{.Command}}\t{{.Status}}&quot;</b>
+7d7b7fbc30b9	ecs-front-envoy-5-envoy-sds-ecs-ce8bd9eca6dd81a8d101	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
+dfdcb2acfc91	ecs-front-envoy-5-front-envoy-faeae686adf9c1d91000	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
+f731f6dbb81c	ecs-front-envoy-5-internalecspause-a8e6e19e909fa9c9e901	&quot;./pause&quot;	Up 3 days</code></pre> 
+<h3>List interfaces for these containers and make sure that they are the same:</h3> 
+<pre><code class="lang-bash"><b>$ for id in `docker ps -n 3 -q`; do pid=`docker inspect $id -f '{{.State.Pid}}'`; echo container $id; sudo nsenter -t $pid -n ip link show; done</b>
+container 7d7b7fbc30b9
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
+link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
+link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
+27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
+link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
+container dfdcb2acfc91
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
+link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
+link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
+27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
+link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
+container f731f6dbb81c
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
+link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
+link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
+27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
+link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff</code></pre> 
+<b>Conclusion</b> 
+<p>All of this work means that you can use the new <code class="lang-bash">awsvpc</code> networking mode and benefit from native networking support for your containers. You can learn more about using <code class="lang-bash">awsvpc</code> mode in <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a> or the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html">ECS documentation</a>.</p> 
+<p>I&nbsp;appreciate your feedback in the comments section. You can also reach&nbsp;me on GitHub in either the <a href="https://github.com/aws/amazon-ecs-cni-plugins">ECS CNI Plugins</a> or the <a href="https://github.com/aws/amazon-ecs-agent">ECS Agent</a> repositories.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-ecs/" rel="tag">Amazon ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/containers/" rel="tag">Containers</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/task-networking/" rel="tag">Task Networking</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3199');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/18/cross-account-integration-with-amazon-sns_img1-1260x459.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Cross-Account Integration with Amazon SNS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T12:51:03+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-queue-service-sqs/" title="View all posts in Amazon Simple Queue Service (SQS)*"><span property="articleSection">Amazon Simple Queue Service (SQS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2726" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2726&amp;disqus_title=Cross-Account+Integration+with+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2726');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h4>Contributed by Zak Islam, Senior Manager, Software Development, AWS Messaging</h4> 
+<p>&nbsp;</p> 
+<p><a href="https://aws.amazon.com/sns/">Amazon Simple Notification Service</a>&nbsp;(Amazon SNS)&nbsp;is a fully managed AWS service that makes it easy to decouple your application components and fan-out messages. SNS provides topics (similar to topics in message brokers such as RabbitMQ or ActiveMQ) that you can use to create 1:1, 1:N, or N:N producer/consumer design patterns. For more information about how to send messages from SNS to Amazon SQS, AWS Lambda, or HTTP(S) endpoints in the same account, see <a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messages to Amazon SQS Queues</a>.</p> 
+<p>SNS can be used to send messages within a single account or to resources in different accounts to create administrative isolation. This enables administrators to grant only the minimum level of permissions required to process a workload (for example, limiting the scope of your application account to only send messages and to deny deletes). This approach is commonly known as the “principle of least privilege.” If you are interested, read more about AWS’s <a href="https://aws.amazon.com/answers/account-management/aws-multi-account-security-strategy/">multi-account security strategy</a>.</p> 
+<p>This is great from a security perspective, but why would you want to share messages between accounts? It may sound scary, but it’s a common practice to isolate application components (such as producer and consumer) to operate using different AWS accounts to lock down privileges in case credentials are exposed. In this post, I go slightly deeper and explore how to set up your SNS topic so that it can route messages to SQS queues that are owned by a separate AWS account.</p> 
+<b>Potential use cases</b> 
+<p style="text-align: left">First, look at a common order processing design pattern:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png"><img class="aligncenter wp-image-3138 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png" alt="" width="1200" height="500" /></a></p> 
+<p><span id="more-2726"></span>This is a simple architecture. A web server submits an order directly to an SNS topic, which then fans out messages to two SQS queues. One SQS queue is used to track all incoming orders for audits (such as anti-entropy, comparing the data of all replicas and updating each replica to the newest version). The other is used to pass the request to the order processing systems.</p> 
+<p>Imagine now that a few years have passed, and your downstream processes no longer scale, so you are kicking around the idea of a re-architecture project. To thoroughly test your system, you need a way to replay your production messages in your development system. Sure, you can build a system to replicate and replay orders from your production environment in your development environment. Wouldn’t it be easier to subscribe your development queues to the production SNS topic so you can test your new system in real time? That’s exactly what you can do here.</p> 
+<p>Here’s another use case. As your business grows, you recognize the need for more metrics from your order processing pipeline. The analytics team at your company has built a metrics aggregation service and ingests data via a central SQS queue. Their architecture is as follows:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png"><img class="size-full wp-image-3139 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png" alt="" width="1200" height="400" /></a></p> 
+<p>Again, it’s a fairly simple architecture. All data is ingested via SQS queues (master_ingest_queue, in this case). You subscribe the master_ingest_queue, running under the analytics team’s AWS account, to the topic that is in the order management team’s account.</p> 
+<b>Making it work</b> 
+<p>Now that you’ve seen a few scenarios, let’s dig into the details. There are a couple of ways to link an SQS queue to an SNS topic (subscribe a queue to a topic):</p> 
+<ol> 
+<li>The queue owner can create a subscription to the topic.</li> 
+<li>The topic owner can subscribe a queue in another account to the topic.</li> 
+</ol> 
+<b>Queue owner subscription</b> 
+<p>What happens when the queue owner subscribes to a topic? In this case, assume that the topic owner has given permission to the subscriber’s account to call the Subscribe API action using the topic ARN (Amazon Resource Name). For the examples below, also assume the following:</p> 
+<li>&nbsp;<em>Topic_Owner</em> is the identifier for the account that owns the topic <em>MainTopic</em></li> 
+<li><em>Queue_Owner</em> is the identifier for the account that owns the queue subscribed to the main topic</li> 
+<p>To enable the subscriber to subscribe to a topic, the topic owner must add the sns:Subscribe and topic ARN to the topic policy via the AWS Management Console, as follows:</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Id&quot;:&quot;MyTopicSubscribePolicy&quot;,
+&quot;Statement&quot;:[{
+&quot;Sid&quot;:&quot;Allow-other-account-to-subscribe-to-topic&quot;,
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Principal&quot;:{
+&quot;AWS&quot;:&quot;Topic_Owner&quot;
+},
+&quot;Action&quot;:&quot;sns:Subscribe&quot;,
+&quot;Resource&quot;:&quot;arn:aws:sns:us-east-1:Queue_Owner:MainTopic&quot;
+}
+]
+}</code></pre> 
+<p>After this has been set up, the subscriber (using account <em>Queue_Owner</em>) can call Subscribe to link the queue to the topic. After the queue has been successfully subscribed, SNS starts to publish notifications. In this case, neither the topic owner nor the subscriber have had to process any kind of confirmation message.</p> 
+<b>Topic owner subscription</b> 
+<p>The second way to subscribe an SQS queue to an SNS topic is to have the <em>Topic_Owner</em> account initiate the subscription for the queue from account <em>Queue_Owner</em>. In this case, SNS first sends a confirmation message to the queue. To confirm the subscription, a user who can read messages from the queue must visit the URL specified in the&nbsp;SubscribeURL&nbsp;value in the message. Until the subscription is confirmed, no notifications published to the topic are sent to the queue. To confirm a subscription, you can use the SQS console or the&nbsp;ReceiveMessage&nbsp;API action.</p> 
+<b>What’s next?</b> 
+<p>In this post, I covered a few simple use cases but the principles can be extended to complex systems as well. As you architect new systems and refactor existing ones, think about where you can leverage queues (SQS) and topics (SNS) to build a loosely coupled system that can be quickly and easily extended to meet your business need.</p> 
+<p>For step by step instructions, see&nbsp;<a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.cross.account.html">Sending Amazon SNS messages to an Amazon SQS queue in a different account</a>. You can also visit the following resources to get started working with message queues and topics:</p> 
+<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-messages-distributed-applications/">Send Messages Between Distributed Applications with Amazon SQS</a></span></li> 
+<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">Send&nbsp;Fanout Event Notifications with Amazon SNS and Amazon SQS</a></span></li> 
+<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</a></li> 
+<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a></li> 
+<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sns/getting-started/">Getting started with Amazon SNS</a></li> 
+<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sqs/getting-started/">Getting started with Amazon SQS</a></li> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2726');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/route-53-healthcheck.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Building a Multi-region Serverless Application with Amazon API Gateway and AWS Lambda</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -530,7 +688,7 @@ AWS.Blog.commenting('#aws-comment-trigger-3096');
 by 
 <span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
 <time property="datePublished" datetime="2017-10-24T13:38:16+00:00">24 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-2861" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2861&amp;disqus_title=Automating+Security+Group+Updates+with+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -1332,240 +1490,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2947');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Using Enhanced Request Authorizers in Amazon API Gateway</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Stefano Buliani</span></span> | on 
-<time property="datePublished" datetime="2017-09-27T10:05:56+00:00">27 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity &amp; Compliance*"><span property="articleSection">Security, Identity &amp; Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/using-enhanced-request-authorizers-in-amazon-api-gateway/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2917" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2917&amp;disqus_title=Using+Enhanced+Request+Authorizers+in+Amazon+API+Gateway&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-enhanced-request-authorizers-in-amazon-api-gateway/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2917');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Recently, AWS introduced a new type of authorizer in <a href="https://aws.amazon.com/api-gateway/" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a>, <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-api-gateway-now-supports-enhanced-request-authorizers/" target="_blank" rel="noopener noreferrer">enhanced request authorizers</a>. Previously, custom authorizers received only the bearer token included in the request and the ARN of the API Gateway method being called. Enhanced request authorizers receive all of the headers, query string, and path parameters as well as the request context. This enables you to make more sophisticated authorization decisions based on parameters such as the client IP address, user agent, or a query string parameter alongside the client bearer token.</p> 
-<h3>Enhanced request authorizer configuration</h3> 
-<p>From the API Gateway console, you can declare a new enhanced request authorizer by selecting the <strong>Request</strong> option as the AWS Lambda event payload:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-10.13.18-AM.png"><img class="size-medium wp-image-2924 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-10.13.18-AM-215x300.png" alt="Create enhanced request authorizer" width="215" height="300" /></a></p> 
-<p>&nbsp;</p> 
-<p>Just like normal custom authorizers, API Gateway can cache the policy returned by your Lambda function. With enhanced request authorizers, however, you can also specify the values that form the unique key of a policy in the cache. For example, if your authorization decision is based on both the bearer token and the IP address of the client, both values should be part of the unique key in the policy cache. The identity source parameter lets you specify these values as <a href="http://docs.aws.amazon.com/apigateway/latest/developerguide/request-response-data-mappings.html" target="_blank" rel="noopener noreferrer">mapping expressions</a>:</p> 
-<li>The bearer token appears in the Authorization header</li> 
-<li>The client IP address is stored in the sourceIp parameter of the request context.</li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-1.54.04-PM.png"><img class="size-medium wp-image-2925 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Screen-Shot-2017-09-13-at-1.54.04-PM-300x163.png" alt="Configure identity sources" width="300" height="163" /></a></p> 
-<p>&nbsp;</p> 
-<h3>Using enhanced request authorizers with Swagger</h3> 
-<p>You can also define enhanced request authorizers in your Swagger (<a href="https://www.openapis.org" target="_blank" rel="noopener noreferrer">Open API</a>) definitions. In the following example, you can see that all of the options configured in the API Gateway console are available as custom extensions in the API definition. For example, the <i>identitySource</i> field is a comma-separated list of mapping expressions.</p> 
-<pre><code class="lang-yaml">securityDefinitions:
-IpAuthorizer:
-type: &quot;apiKey&quot;
-name: &quot;IpAuthorizer&quot;
-in: &quot;header&quot;
-x-amazon-apigateway-authtype: &quot;custom&quot;
-x-amazon-apigateway-authorizer:
-authorizerResultTtlInSeconds: 300
-identitySource: &quot;method.request.header.Authorization, context.identity.sourceIp&quot;
-authorizerUri: &quot;arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:XXXXXXXXXX:function:py-ip-authorizer/invocations&quot;
-type: &quot;request&quot;
-</code></pre> 
-<p>After you have declared your authorizer in the security definitions section, you can use it in your API methods:</p> 
-<pre><code class="lang-yaml">---
-swagger: &quot;2.0&quot;
-info:
-title: &quot;request-authorizer-demo&quot;
-basePath: &quot;/dev&quot;
-paths:
-/hello:
-get:
-security:
-- IpAuthorizer: []
-...
-</code></pre> 
-<h3>Enhanced request authorizer Lambda functions</h3> 
-<p>Enhanced request authorizer <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">Lambda</a> functions receive an event object that is similar to proxy integrations. It contains all of the information about a request, excluding the body.</p> 
-<pre><code class="lang-json">{
-&quot;methodArn&quot;: &quot;arn:aws:execute-api:us-east-1:XXXXXXXXXX:xxxxxx/dev/GET/hello&quot;,
-&quot;resource&quot;: &quot;/hello&quot;,
-&quot;requestContext&quot;: {
-&quot;resourceId&quot;: &quot;xxxx&quot;,
-&quot;apiId&quot;: &quot;xxxxxxxxx&quot;,
-&quot;resourcePath&quot;: &quot;/hello&quot;,
-&quot;httpMethod&quot;: &quot;GET&quot;,
-&quot;requestId&quot;: &quot;9e04ff18-98a6-11e7-9311-ef19ba18fc8a&quot;,
-&quot;path&quot;: &quot;/dev/hello&quot;,
-&quot;accountId&quot;: &quot;XXXXXXXXXXX&quot;,
-&quot;identity&quot;: {
-&quot;apiKey&quot;: &quot;&quot;,
-&quot;sourceIp&quot;: &quot;58.240.196.186&quot;
-},
-&quot;stage&quot;: &quot;dev&quot;
-},
-&quot;queryStringParameters&quot;: {},
-&quot;httpMethod&quot;: &quot;GET&quot;,
-&quot;pathParameters&quot;: {},
-&quot;headers&quot;: {
-&quot;cache-control&quot;: &quot;no-cache&quot;,
-&quot;x-amzn-ssl-client-hello&quot;: &quot;AQACJAMDAAAAAAAAAAAAAAAAAAAAAAAAAAAA…&quot;,
-&quot;Accept-Encoding&quot;: &quot;gzip, deflate&quot;,
-&quot;X-Forwarded-For&quot;: &quot;54.240.196.186, 54.182.214.90&quot;,
-&quot;Accept&quot;: &quot;*/*&quot;,
-&quot;User-Agent&quot;: &quot;PostmanRuntime/6.2.5&quot;,
-&quot;Authorization&quot;: &quot;hello&quot;
-},
-&quot;stageVariables&quot;: {},
-&quot;path&quot;: &quot;/hello&quot;,
-&quot;type&quot;: &quot;REQUEST&quot;
-}
-</code></pre> 
-<p>The following enhanced request authorizer snippet is written in Python and compares the source IP address against a list of valid IP addresses. The comments in the code explain what happens in each step.</p> 
-<pre><code class="lang-python">...
-VALID_IPS = [&quot;58.240.195.186&quot;, &quot;201.246.162.38&quot;]
-def lambda_handler(event, context):
-# Read the client’s bearer token.
-jwtToken = event[&quot;headers&quot;][&quot;Authorization&quot;]
-# Read the source IP address for the request form 
-# for the API Gateway context object.
-clientIp = event[&quot;requestContext&quot;][&quot;identity&quot;][&quot;sourceIp&quot;]
-# Verify that the client IP address is allowed.
-# If it’s not valid, raise an exception to make sure
-# that API Gateway returns a 401 status code.
-if clientIp not in VALID_IPS:
-raise Exception('Unauthorized')
-# Only allow hello users in!
-if not validate_jwt(userId):
-raise Exception('Unauthorized')
-# Use the values from the event object to populate the 
-# required parameters in the policy object.
-policy = AuthPolicy(userId, event[&quot;requestContext&quot;][&quot;accountId&quot;])
-policy.restApiId = event[&quot;requestContext&quot;][&quot;apiId&quot;]
-policy.region = event[&quot;methodArn&quot;].split(&quot;:&quot;)[3]
-policy.stage = event[&quot;requestContext&quot;][&quot;stage&quot;]
-# Use the scopes from the bearer token to make a 
-# decision on which methods to allow in the API.
-policy.allowMethod(HttpVerb.GET, '/hello')
-# Finally, build the policy.
-authResponse = policy.build()
-return authResponse
-...
-</code></pre> 
-<h3>Conclusion</h3> 
-<p>API Gateway customers build complex APIs, and authorization decisions often go beyond the simple properties in a JWT token. For example, users may be allowed to call the “list cars” endpoint but only with a specific subset of filter parameters. With enhanced request authorizers, you have access to all request parameters. You can centralize all of your application’s access control decisions in a Lambda function, making it easier to manage your application security.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/api-gateway/" rel="tag">api gateway</a>, <a href="https://aws.amazon.com/blogs/compute/tag/authorization/" rel="tag">authorization</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/request/" rel="tag">request</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2917');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Automating Amazon EBS Snapshot Management with AWS Step Functions and Amazon CloudWatch Events</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-09-18T13:06:35+00:00">18 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2753" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2753&amp;disqus_title=Automating+Amazon+EBS+Snapshot+Management+with+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2753');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg" alt="" width="119" height="160" class="alignnone size-full wp-image-2754" /></a></p> 
-<p><strong>Brittany Doncaster, Solutions Architect</strong></p> 
-<p>Business continuity is important for building mission-critical workloads on AWS. As an AWS customer, you might define recovery point objectives (RPO) and recovery time objectives (RTO) for different tier applications in your business. After the RPO and RTO requirements are defined, it is up to your architects to determine how to meet those requirements.</p> 
-<p>You probably store persistent data in <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> volumes, which live within a single Availability Zone. And, following best practices, you take snapshots of your EBS volumes to back up the data on <a href="https://aws.amazon.com/s3">Amazon S3</a>, which provides 11 9's of durability. If you are following these best practices, then you've probably recognized the need to manage the number of snapshots you keep for a particular EBS volume and delete older, unneeded snapshots. Doing this cleanup helps save on storage costs.</p> 
-<p>Some customers also have policies stating that backups need to be stored a certain number of miles away as part of a disaster recovery (DR) plan. To meet these requirements, customers copy their EBS snapshots to the DR region. Then, the same snapshot management and cleanup has to also be done in the DR region.</p> 
-<p>All of this snapshot management logic consists of different components. You would first tag your snapshots so you could manage them. Then, determine how many snapshots you currently have for a particular EBS volume and assess that value against a retention rule. If the number of snapshots was greater than your retention value, then you would clean up old snapshots. And finally, you might copy the latest snapshot to your DR region. All these steps are just an example of a simple snapshot management workflow. But how do you automate something like this in AWS? How do you do it without servers?</p> 
-<p>One of the most powerful AWS services released in 2016 was <a href="http://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a>. It enables you to build event-driven IT automation, based on events happening within your AWS infrastructure. CloudWatch Events integrates with <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to let you execute your custom code when one of those events occurs. However, the actions to take based on those events aren't always composed of a single Lambda function. Instead, your business logic may consist of multiple steps (like in the case of the example snapshot management flow described earlier). And you may want to run those steps in sequence or in parallel. You may also want to have retry logic or exception handling for each step.</p> 
-<p><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> serves just this purpose―to help you coordinate your functions and microservices. Step Functions enables you to simplify your effort and pull the error handling, retry logic, and workflow logic out of your Lambda code. Step Functions integrates with Lambda to provide a mechanism for building complex serverless applications. Now, you can kick off a Step Functions state machine based on a CloudWatch event.</p> 
-<p>In this post, I discuss how you can target Step Functions in a CloudWatch Events rule. This allows you to have event-driven snapshot management based on snapshot completion events firing in CloudWatch Event rules.</p> 
-<p>As an example of what you could do with Step Functions and CloudWatch Events, we've developed a <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">reference architecture</a> that performs management of your EBS snapshots.</p> 
-<b id="toc_1">Automating EBS Snapshot Management with Step Functions</b> 
-<p>This architecture assumes that you have already <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/TakeScheduledSnapshot.html">set up CloudWatch Events to create the snapshots on a schedule</a> or that you are using some other means of creating snapshots according to your needs.</p> 
-<p>This architecture covers the pieces of the workflow that need to happen after a snapshot has been created.</p> 
-<li>It <a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-for-ebs-snapshots/">creates a CloudWatch Events rule</a> to invoke a Step Functions state machine execution when an EBS snapshot is created.</li> 
-<li>The state machine then tags the snapshot, cleans up the oldest snapshots if the number of snapshots is greater than the defined number to retain, and copies the snapshot to a DR region.</li> 
-<li>When the DR region snapshot copy is completed, another state machine kicks off in the DR region. The new state machine has a similar flow and uses some of the same Lambda code to clean up the oldest snapshots that are greater than the defined number to retain.</li> 
-<li>Also, both state machines demonstrate how you can use Step Functions to handle errors within your workflow. Any errors that are caught during execution result in the execution of a Lambda function that writes a message to an SNS topic. Therefore, if any errors occur, you can subscribe to the SNS topic and get notified.</li> 
-<p>The following is an architecture diagram of the reference architecture:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png" alt="" width="975" height="753" class="aligncenter size-full wp-image-2763" /></a></p> 
-<b id="toc_2">Creating the Lambda functions and Step Functions state machines</b> 
-<p>First, pull the code from GitHub and use the <a href="https://aws.amazon.com/cli">AWS CLI</a> to create S3 buckets for the Lambda code in the primary and DR regions. For this example, assume that the primary region is us-west-2 and the DR region is us-east-2. Run the following commands, replacing the italicized text in &lt;&gt; with your own unique bucket names.</p> 
-<pre><code class="language-none">git clone https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt.git
-cd aws-step-functions-ebs-snapshot-mgmt/
-aws s3 mb s3://<i>&lt;primary region bucket name&gt;</i> --region us-west-2
-aws s3 mb s3://<i>&lt;DR region bucket name&gt;</i> --region us-east-2</code></pre> 
-<p>Next, use the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a> (SAM), which uses AWS CloudFormation to deploy the Lambda functions and Step Functions state machines in the primary and DR regions. Replace the italicized text in &lt;&gt; with the S3 bucket names that you created earlier.</p> 
-<pre><code class="language-none">aws cloudformation package --template-file PrimaryRegionTemplate.yaml --s3-bucket <i>&lt;primary region bucket name&gt;</i>  --output-template-file tempPrimary.yaml --region us-west-2
-aws cloudformation deploy --template-file tempPrimary.yaml --stack-name ebsSnapshotMgmtPrimary --capabilities CAPABILITY_IAM --region us-west-2
-aws cloudformation package --template-file DR_RegionTemplate.yaml --s3-bucket <i>&lt;DR region bucket name&gt;</i> --output-template-file tempDR.yaml  --region us-east-2
-aws cloudformation deploy --template-file tempDR.yaml --stack-name ebsSnapshotMgmtDR --capabilities CAPABILITY_IAM --region us-east-2</code></pre> 
-<b id="toc_3">CloudWatch event rule verification</b> 
-<p>The CloudFormation templates deploy the following resources:</p> 
-<li>The Lambda functions that are coordinated by Step Functions</li> 
-<li>The Step Functions state machine</li> 
-<li>The SNS topic</li> 
-<li>The CloudWatch Events rules that trigger the state machine execution</li> 
-<p>So, all of the CloudWatch event rules have been created for you by performing the preceding commands. The next section demonstrates how you could create the CloudWatch event rule manually. To jump straight to testing the workflow, see the “Testing in your Account” section. Otherwise, you begin by setting up the CloudWatch event rule in the primary region for the createSnapshot event and also the CloudWatch event rule in the DR region for the copySnapshot command.</p> 
-<p>First, open the CloudWatch console in the primary region.</p> 
-<p>Choose <strong>Create Rule</strong> and create a rule for the createSnapshot command, with your newly created Step Function state machine as the target.</p> 
-<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
-<li><strong>Service Name</strong>: EC2</li> 
-<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
-<li><strong>Specific Event</strong>: createSnapshot</li> 
-<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then choose the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png" alt="" width="975" height="772" class="aligncenter size-full wp-image-2764" /></a></p> 
-<p>Choose <strong>Configure Details</strong> and give the rule a name and description.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png" alt="" width="975" height="310" class="aligncenter size-full wp-image-2765" /></a></p> 
-<p>Choose <strong>Create Rule</strong>. You now have a CloudWatch Events rule that triggers a Step Functions state machine execution when the EBS snapshot creation is complete.</p> 
-<p>Now, set up the CloudWatch Events rule in the DR region as well. This looks almost same, but is based off the copySnapshot event instead of createSnapshot.</p> 
-<p>In the upper right corner in the console, switch to your DR region. Choose <strong>CloudWatch</strong>, <strong>Create Rule</strong>.</p> 
-<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
-<li><strong>Service Name</strong>: EC2</li> 
-<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
-<li><strong>Specific Event</strong>: copySnapshot</li> 
-<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then select the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like in the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png" alt="" width="975" height="649" class="aligncenter size-full wp-image-2766" /></a></p> 
-<p>As in the primary region, choose <strong>Configure Details</strong> and then give this rule a name and description. Complete the creation of the rule.</p> 
-<b id="toc_4">Testing in your account</b> 
-<p>To test this setup, open the EC2 console and choose <strong>Volumes</strong>. Select a volume to snapshot. Choose <strong>Actions</strong>, <strong>Create Snapshot</strong>, and then create a snapshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png" alt="" width="589" height="264" class="aligncenter size-full wp-image-2767" /></a></p> 
-<p>This results in a new execution of your state machine in the primary and DR regions. You can view these executions by going to the Step Functions console and selecting your state machine.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png" alt="" width="975" height="191" class="aligncenter size-full wp-image-2768" /></a></p> 
-<p>From there, you can see the execution of the state machine.</p> 
-<p>Primary region state machine:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png" alt="" width="975" height="420" class="aligncenter size-full wp-image-2769" /></a></p> 
-<p>DR region state machine:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png"><img src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png" alt="" width="975" height="499" class="aligncenter size-full wp-image-2770" /></a></p> 
-<p>I've also provided CloudFormation templates that perform all the earlier setup without using git clone and running the CloudFormation commands. Choose the <strong>Launch Stack</strong> buttons below to launch the primary and DR region stacks in Dublin and Ohio, respectively. From there, you can pick up at the Testing in Your Account section above to finish the example. All of the code for this example architecture is located in the <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">aws-step-functions-ebs-snapshot-mgmt</a> AWSLabs repo.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=step-functions-ebs-mgmt-primary&amp;templateURL=https://s3-eu-west-1.amazonaws.com/step-functions-ref-archs-eu-west-1/PrimaryRegionTemplateV2.json"><img src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" alt="Launch EBS Snapshot Management into Ireland with CloudFormation" style="max-width:100%" /></a><br /> <strong>Primary Region eu-west-1 (Ireland) </strong><br /> <br /> <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/new?stackName=step-functions-ebs-mgmt-dr&amp;templateURL=https://s3.us-east-2.amazonaws.com/step-functions-ref-archs-east-2/DRRegionTemplateV2.json"><img src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" alt="Launch EBS Snapshot Management into Ohio with CloudFormation" style="max-width:100%" /></a><br /> <strong>DR Region us-east-2 (Ohio) </strong></p> 
-<b id="toc_5">Summary</b> 
-<p>This reference architecture is just an example of how you can use Step Functions and CloudWatch Events to build event-driven IT automation. The possibilities are endless:</p> 
-<li>Use this pattern to perform other common cleanup type jobs such as managing Amazon RDS snapshots, old versions of Lambda functions, or old Amazon ECR images—all triggered by scheduled events.</li> 
-<li>Use Trusted Advisor events to identify unused EC2 instances or EBS volumes, then coordinate actions on them, such as alerting owners, stopping, or snapshotting.</li> 
-<p>Happy coding and please let me know what useful state machines you build!</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/cloudwatch-events/" rel="tag">CloudWatch Events</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ebs/" rel="tag">ebs</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ec2/" rel="tag">EC2</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2753');
 });
 </script> 
 </article> 

@@ -191,6 +191,182 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Implementing Canary Deployments of AWS Lambda Functions with Alias Traffic Shifting</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2017-11-30T11:25:26+00:00">30 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codedeploy/" title="View all posts in AWS CodeDeploy*"><span property="articleSection">AWS CodeDeploy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3399" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3399&amp;disqus_title=Implementing+Canary+Deployments+of+AWS+Lambda+Functions+with+Alias+Traffic+Shifting&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3399');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of Ryan Green, Software Development Engineer, AWS Serverless</em></p> 
+<p>The concepts of <a href="https://d0.awsstatic.com/whitepapers/AWS_Blue_Green_Deployments.pdf">blue/green</a> and canary deployments have been around for a while now and have been well-established as best-practices for reducing the risk of software deployments.</p> 
+<p>In a traditional, horizontally scaled application, copies of the application code are deployed to multiple nodes (instances, containers, on-premises servers, etc.), typically behind a load balancer. In these applications, deploying new versions of software to too many nodes at the same time can impact application availability as there may not be enough healthy nodes to service requests during the deployment. This aggressive approach to deployments also drastically increases the blast radius of software bugs introduced in the new version and does not typically give adequate time to safely assess the quality of the new version against production traffic.</p> 
+<p>In such applications, one commonly accepted solution to these problems is to <a href="http://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html">slowly and incrementally</a> roll out application software across the nodes in the fleet while simultaneously verifying application health (canary deployments). Another solution is to stand up an entirely different fleet and weight (or flip) traffic over to the new fleet after verification, ideally with some production traffic (blue/green). Some teams deploy to a single host (“one box environment”), where the new release can bake for some time before promotion to the rest of the fleet. Techniques like this enable the maintainers of complex systems to safely test in production while minimizing customer impact.</p> 
+<b>Enter Serverless</b> 
+<p>There is somewhat of an impedance mismatch when mapping these concepts to a serverless world. You can’t incrementally deploy your software across a fleet of servers when there are no servers!* In fact, even the term “deployment” takes on a different meaning with functions as a service (FaaS). In <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, a “deployment” can be roughly modeled as a call to <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/create-function.html">CreateFunction</a>, <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-function-code.html">UpdateFunctionCode</a>, or <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> (I won’t get into the semantics of whether updating configuration counts as a deployment), all of which may affect the version of code that is invoked by clients.</p> 
+<p>The abstractions provided by Lambda remove the need for developers to be concerned about servers and Availability Zones, and this provides a powerful opportunity to greatly simplify the process of deploying software.<br /> <em>*Of course there are servers, but they are abstracted away from the developer.</em></p> 
+<b>Traffic shifting with Lambda aliases</b> 
+<p>Before the release of <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-traffic-shifting-using-aliases.html">traffic shifting for Lambda aliases</a>, deployments of a Lambda function could only be performed in a single “flip” by updating function code for version $LATEST, or by updating an alias to target a different function version. After the update propagates, typically within a few seconds, 100% of function invocations execute the new version. Implementing canary deployments with this model required the development of an additional routing layer, further adding development time, complexity, and invocation latency.<br /> While rolling back a bad deployment of a Lambda function is a trivial operation and takes effect near instantaneously, deployments of new versions for critical functions can still be a potentially nerve-racking experience.</p> 
+<p>With the introduction of alias traffic shifting, it is now possible to trivially implement canary deployments of Lambda functions. By updating additional version weights on an alias, invocation traffic is routed to the new function versions based on the weight specified. Detailed <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html">CloudWatch metric</a>s for the alias and version can be analyzed during the deployment, or other health checks performed, to ensure that the new version is healthy before proceeding.</p> 
+<p>Note: Sometimes the term “canary deployments” refers to the release of software to a subset of users. In the case of alias traffic shifting, the new version is released to some percentage of all users. It’s not possible to shard based on identity without adding an additional routing layer.</p> 
+<h3>Examples</h3> 
+<p>The simplest possible use of a canary deployment looks like the following:</p> 
+<pre><code># Update $LATEST version of function
+aws lambda update-function-code --function-name myfunction ….
+# Publish new version of function
+aws lambda publish-version --function-name myfunction
+# Point alias to new version, weighted at 5% (original version at 95% of traffic)
+aws lambda update-alias --function-name myfunction --name myalias --routing-config '{&quot;AdditionalVersionWeights&quot; : {&quot;2&quot; : 0.05} }'
+# Verify that the new version is healthy
+…
+# Set the primary version on the alias to the new version and reset the additional versions (100% weighted)
+aws lambda update-alias --function-name myfunction --name myalias --function-version 2 --routing-config '{}'
+</code></pre> 
+<p>This is begging to be automated! Here are a few options.</p> 
+<h3>Simple deployment automation</h3> 
+<p>This simple Python script runs as a Lambda function and deploys another function (how meta!) by incrementally increasing the weight of the new function version over a prescribed number of steps, while checking the health of the new version. If the health check fails, the alias is rolled back to its initial version. The health check is implemented as a simple check against the existence of Errors metrics in CloudWatch for the alias and new version.</p> 
+<p><a href="https://github.com/awslabs/aws-lambda-deploy">GitHub aws-lambda-deploy repo</a></p> 
+<p><strong>Install:</strong></p> 
+<pre><code>git clone <a href="https://github.com/awslabs/aws-lambda-deploy">https://github.com/awslabs/aws-lambda-deploy</a>
+cd aws-lambda-deploy
+export BUCKET_NAME=[YOUR_S3_BUCKET_NAME_FOR_BUILD_ARTIFACTS]
+./install.sh
+</code></pre> 
+<p><strong>Run:</strong></p> 
+<pre><code># Rollout version 2 incrementally over 10 steps, with 120s between each step
+aws lambda invoke --function-name SimpleDeployFunction --log-type Tail --payload \
+'{&quot;function-name&quot;: &quot;MyFunction&quot;,
+&quot;alias-name&quot;: &quot;MyAlias&quot;,
+&quot;new-version&quot;: &quot;2&quot;,
+&quot;steps&quot;: 10,
+&quot;interval&quot; : 120,
+&quot;type&quot;: &quot;linear&quot;
+}' output
+</code></pre> 
+<p><strong>Description of input parameters</strong></p> 
+<li><strong>function-name</strong>: The name of the Lambda function to deploy</li> 
+<li><strong>alias-name</strong>: The name of the alias used to invoke the Lambda function</li> 
+<li><strong>new-version</strong>: The version identifier for the new version to deploy</li> 
+<li><strong>steps</strong>: The number of times the new version weight is increased</li> 
+<li><strong>interval</strong>: The amount of time (in seconds) to wait between weight updates</li> 
+<li><strong>type</strong>: The function to use to generate the weights. Supported values: “linear”</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png"><img class="aligncenter size-full wp-image-3406" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" alt="" width="974" height="310" /></a></p> 
+<p>Because this runs as a Lambda function, it is subject to the maximum timeout of 5 minutes. This may be acceptable for many use cases, but to achieve a slower rollout of the new version, a different solution is required.</p> 
+<h3>Step Functions workflow</h3> 
+<p>This <a href="https://github.com/awslabs/aws-lambda-deploy/blob/master/template.yml#L119">state machine</a> performs essentially the same task as the simple deployment function, but it runs as an asynchronous workflow in <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a>. A nice property of Step Functions is that the maximum deployment timeout has now increased from 5 minutes to 1 year!</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png"><img class="aligncenter size-full wp-image-3405" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png" alt="" width="377" height="609" /></a></p> 
+<p>The step function incrementally updates the new version weight based on the steps parameter, waiting for some time based on the interval parameter, and performing health checks between updates. If the health check fails, the alias is rolled back to the original version and the workflow fails.</p> 
+<p>For example, to execute the workflow:</p> 
+<pre><code>export STATE_MACHINE_ARN=`aws cloudformation describe-stack-resources --stack-name aws-lambda-deploy-stack --logical-resource-id DeployStateMachine --output text | cut&nbsp; -d$'\t' -f3`
+aws stepfunctions start-execution --state-machine-arn $STATE_MACHINE_ARN --input '{
+&quot;function-name&quot;: &quot;MyFunction&quot;,
+&quot;alias-name&quot;: &quot;MyAlias&quot;,
+&quot;new-version&quot;: &quot;2&quot;,
+&quot;steps&quot;: 10,
+&quot;interval&quot;: 120,
+&quot;type&quot;: &quot;linear&quot;}'
+</code></pre> 
+<h3>Getting feedback on the deployment</h3> 
+<p>Because the state machine runs asynchronously, retrieving feedback on the deployment requires polling for the execution status using <a href="http://docs.aws.amazon.com/step-functions/latest/apireference/API_DescribeExecution.html">DescribeExecution</a> or implementing an asynchronous notification (using SNS or email, for example) from the Rollback or Finalize functions. A <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html">CloudWatch alarm</a> could also be created to alarm based on the “ExecutionsFailed” metric for the state machine.</p> 
+<h3>A note on health checks and observability</h3> 
+<p>Weighted rollouts like this are considerably more successful if the code is being exercised and monitored continuously. In this example, it would help to have some automation continuously invoking the alias and reporting metrics on these invocations, such as client-side success rates and latencies.</p> 
+<p>The absence of Lambda Errors metrics used in these examples can be misleading if the function is not getting invoked. It’s also recommended to instrument your Lambda functions with custom metrics, in addition to Lambda’s built-in metrics, that can be used to monitor health during deployments.</p> 
+<b>Extensibility</b> 
+<p>These examples could be easily extended in various ways to support different use cases. For example:</p> 
+<li><strong>Health check implementations</strong>: CloudWatch alarms, automatic invocations with payload assertions, querying external systems, etc.</li> 
+<li><strong>Weight increase functions</strong>: Exponential, geometric progression, single canary step, etc.</li> 
+<li><strong>Custom success/failure notifications</strong>: SNS, email, CI/CD systems, service discovery systems, etc.</li> 
+<b>Traffic shifting with SAM and CodeDeploy</b> 
+<p>Using the Lambda <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> operation with additional version weights provides a powerful primitive for you to implement custom traffic shifting solutions for Lambda functions.</p> 
+<p>For those not interested in building custom deployment solutions, <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> provides an intuitive turn-key implementation of this functionality integrated directly into the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a>. Traffic-shifted deployments can be declared in a SAM template, and CodeDeploy manages the function rollout as part of the CloudFormation stack update. CloudWatch alarms can also be configured to trigger a stack rollback if something goes wrong.</p> 
+<p>i.e.</p> 
+<pre><code>MyFunction:
+Type: AWS::Serverless::Function
+Properties:
+FunctionName: MyFunction
+AutoPublishAlias: MyFunctionInvokeAlias
+DeploymentPreference:
+Type: Linear10PercentEvery1Minute
+Role:
+Fn::GetAtt: [ DeploymentRole, Arn ]
+Alarms:
+- { Ref: MyFunctionErrorsAlarm }
+...
+</code></pre> 
+<p>For more information about using CodeDeploy with SAM, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/automating-updates-to-serverless-apps.html">Automating Updates to Serverless Apps</a>.</p> 
+<b>Conclusion</b> 
+<p>It is often the simple features that provide <a href="https://en.wikipedia.org/wiki/Pareto_principle">the most value</a>. As I demonstrated in this post, serverless architectures allow the complex deployment orchestration used in traditional applications to be replaced with a simple Lambda function or Step Functions workflow. By allowing invocation traffic to be easily weighted to multiple function versions, Lambda alias traffic shifting provides a simple but powerful feature that I hope empowers you to easily implement safe deployment workflows for your Lambda functions.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/canary/" rel="tag">canary</a>, <a href="https://aws.amazon.com/blogs/compute/tag/codedeploy/" rel="tag">codedeploy</a>, <a href="https://aws.amazon.com/blogs/compute/tag/sam/" rel="tag">SAM</a>, <a href="https://aws.amazon.com/blogs/compute/tag/step-functions/" rel="tag">Step Functions</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3399');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Fargate: A Product Overview</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Deepak Dayama</span></span> | on 
+<time property="datePublished" datetime="2017-11-29T08:45:18+00:00">29 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/aws-fargate-a-product-overview/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3387" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3387&amp;disqus_title=AWS+Fargate%3A++A+Product+Overview&amp;disqus_url=https://aws.amazon.com/blogs/compute/aws-fargate-a-product-overview/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3387');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>It was just about three years ago that AWS announced Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>), to run and manage containers at scale on AWS. With Amazon ECS, you’ve been able to run your workloads at high scale and availability without having to worry about running your own cluster management and container orchestration software.</p> 
+<p>Today, AWS announced the availability of <a href="https://aws.amazon.com/fargate">AWS Fargate</a> – a technology that enables you to use containers as a fundamental compute primitive without having to manage the underlying instances. With Fargate, you don’t need to provision, configure, or scale virtual machines in your clusters to run containers. Fargate can be used with Amazon ECS today, with plans to support Amazon Elastic Container Service for Kubernetes (<a href="https://aws.amazon.com/eks">Amazon EKS</a>) in the future.</p> 
+<p>Fargate has flexible configuration options so you can closely match your application needs and granular, per-second billing.</p> 
+<b>Amazon ECS with Fargate</b> 
+<p>Amazon ECS enables you to run containers at scale. This service also provides native integration into the AWS platform with VPC networking, load balancing, IAM, Amazon CloudWatch Logs, and CloudWatch metrics. These deep integrations make the Amazon ECS <em>task</em> a first-class object within the AWS platform.</p> 
+<p>To run tasks, you first need to stand up a cluster of instances, which involves picking the right types of instances and sizes, setting up Auto Scaling, and right-sizing the cluster for performance. With Fargate, you can leave all that behind and focus on defining your application and policies around permissions and scaling.</p> 
+<p><img class="aligncenter size-full wp-image-3390" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/29/fargate-1.png" alt="" width="975" height="294" /></p> 
+<p>The same container management capabilities remain available so you can continue to scale your container deployments. With Fargate, the only entity to manage is the task. You don’t need to manage the instances or supporting software like Docker daemon or the Amazon ECS agent.</p> 
+<p>Fargate capabilities are available natively within Amazon ECS. This means that you don’t need to learn new API actions or primitives to run containers on Fargate.</p> 
+<p>Using Amazon ECS, Fargate is a launch type option. You continue to define the applications the same way by using task definitions. In contrast, the EC2 launch type gives you more control of your server clusters and provides a broader range of customization options.</p> 
+<p>For example, a RunTask command example is pasted below with the Fargate launch type:</p> 
+<p><code class="lang-bash">aws ecs run-task --launch-type FARGATE --cluster fargate-test --task-definition nginx --network-configuration</code><br /> <code class="lang-bash">&quot;awsvpcConfiguration={subnets=[subnet-b563fcd3]}&quot; </code></p> 
+<b>Key features of Fargate</b> 
+<p><strong>Resource-based pricing and per second billing</strong><br /> You pay by the task size and only for the time for which resources are consumed by the task. The price for CPU and memory is charged on a per-second basis. There is a one-minute minimum charge.</p> 
+<p><strong>Flexible configurations options</strong><br /> Fargate is available with 50 different combinations of CPU and memory to closely match your application needs. You can use 2 GB per vCPU anywhere up to 8 GB per vCPU for various configurations. Match your workload requirements closely, whether they are general purpose, compute, or memory optimized.</p> 
+<p><strong>Networking</strong><br /> All Fargate tasks run within your own VPC. Fargate supports the recently launched <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">awsvpc networking mode</a> and the elastic network interface for a task is visible in the subnet where the task is running. This provides the separation of responsibility so you retain full control of networking policies for your applications via VPC features like security groups, routing rules, and NACLs. Fargate also supports public IP addresses.</p> 
+<p><strong>Load Balancing</strong><br /> ECS Service Load Balancing &nbsp;for the Application Load Balancer and Network Load Balancer is supported. For the Fargate launch type, you specify the IP addresses of the Fargate tasks to register with the load balancers.</p> 
+<p><strong>Permission tiers</strong><br /> Even though there are no instances to manage with Fargate, you continue to group tasks into logical clusters. This allows you to manage who can run or view services within the cluster. The task IAM role is still applicable. Additionally, there is a new Task Execution Role that grants Amazon ECS permissions to perform operations such as pushing logs to CloudWatch Logs or pulling image from Amazon Elastic Container Registry (Amazon ECR).</p> 
+<p><strong>Container Registry Support</strong><br /> Fargate provides seamless authentication to help pull images from Amazon ECR via the Task Execution Role. Similarly, if you are using a public repository like DockerHub, you can continue to do so.</p> 
+<p><strong>Amazon ECS CLI<br /> </strong>The Amazon ECS CLI provides high-level commands to help simplify to create and run Amazon ECS clusters, tasks, and services. The latest version of the CLI now supports running tasks and services with Fargate.</p> 
+<p><strong>EC2 and Fargate Launch Type Compatibility<br /> </strong>All Amazon ECS clusters are heterogeneous – you can run both Fargate and Amazon ECS tasks in the same cluster. This enables teams working on different applications to choose their own cadence of moving to Fargate, or to select a launch type that meets their requirements without breaking the existing model. You can make an existing ECS task definition compatible with the Fargate launch type and run it as a Fargate service, and vice versa. Choosing a launch type is not a one-way door!</p> 
+<p><strong>Logging and Visibility</strong><br /> With Fargate, you can send the application logs to CloudWatch logs. Service metrics (CPU and Memory utilization) are available as part of CloudWatch metrics. AWS partners for visibility, monitoring and application performance management including Datadog, Aquasec, Splunk, Twistlock, and New Relic also support Fargate tasks.</p> 
+<b>Conclusion</b> 
+<p>Fargate enables you to run containers without having to manage the underlying infrastructure. Today, Fargate is availabe for Amazon ECS, and in 2018, Amazon EKS. Visit the <a href="https://aws.amazon.com/fargate">Fargate product page</a> to learn more, or get started in the <a href="https://console.aws.amazon.com/ecs/home?region=us-east-1#/getStarted">AWS Console</a>.</p> 
+<p>–Deepak Dayama</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3387');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Simplify Your Pub/Sub Messaging with Amazon SNS Message Filtering</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1889,164 +2065,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3212');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Under the Hood: Task Networking for Amazon ECS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-11-14T21:27:01+00:00">14 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3199" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3199&amp;disqus_title=Under+the+Hood%3A+Task+Networking+for+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3199');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post courtesy of ECS&nbsp;Sr. Software Dev Engineer Anirudh Aithal.</em></p> 
-<p>Today, AWS&nbsp;announced <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-ecs-introduces-awsvpc-networking-mode-for-containers-to-support-full-networking-capabilities/">task networking</a> for <a href="https://aws.amazon.com/ecs">Amazon ECS</a>, which enables <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html">elastic network interfaces</a> to be attached to containers.</p> 
-<p>In this post, I take a closer look at how this new container-native “awsvpc” network mode is implemented using <a href="https://github.com/containernetworking/cni">container networking interface</a> plugins on ECS managed instances (referred to as container instances).</p> 
-<p>This post is a deep dive into how task networking works with Amazon ECS. If you want to learn more about how you can start using task networking for your containerized applications, see <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a>. Cloud Native Computing Foundation (CNCF) hosts the <a href="https://github.com/containernetworking/cni">Container Networking Interface (CNI)</a> project, which consists of a specification and libraries for writing plugins to configure network interfaces in Linux containers. For more about cloud native computing in AWS, see Adrian Cockcroft’s post on <a href="https://medium.com/@adrianco/cloud-native-computing-5f0f41a982bf">Cloud Native Computing</a>.</p> 
-<p><span id="more-3199"></span></p> 
-<b>Container instance setup</b> 
-<p>Before I discuss the details of enabling task networking on container instances, look at how a typical instance looks in ECS.</p> 
-<p><img class="aligncenter size-full wp-image-3200" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_1.png" alt="" width="408" height="341" /></p> 
-<p>The diagram above shows a typical container instance. The <a href="https://github.com/aws/amazon-ecs-agent/">ECS agent</a>, which itself is running as a container, is responsible for:</p> 
-<li>Registering the EC2 instance with the ECS backend</li> 
-<li>Ensuring that task state changes communicated to it by the ECS backend are enacted on the container instance</li> 
-<li>Interacting with the Docker daemon to create, start, stop, and monitor</li> 
-<li>Relaying container state and task state transitions to the ECS backend</li> 
-<p>Because the ECS agent is just acting as the supervisor for containers under its management, it offloads the problem of setting up networking for containers to either the Docker daemon (for containers configured with one of Docker’s default networking modes) or a set of CNI plugins (for containers in task with networking mode set to <code class="lang-bash">awsvpc</code>).</p> 
-<p>In either case, network stacks of containers are configured via network namespaces. As per the <code class="lang-bash">ip-netns(8)</code> manual, “<em>A network namespace is logically another copy of the network stack, with its own routes, firewall rules, and network devices</em>.” The network namespace construct makes the partitioning of network stack between processes and containers running on a host possible.</p> 
-<b>Network namespaces and CNI plugins</b> 
-<p>CNI plugins are executable files that comply with the <a href="https://github.com/containernetworking/cni/blob/master/SPEC.md">CNI specification</a> and configure the network connectivity of containers. The CNI project defines a specification for the plugins and provides a library for interacting with plugins, thus providing a consistent, reliable, and simple interface with which to interact with the plugins.</p> 
-<p>You specify the container or its network namespace and invoke the plugin with the ADD command to add network interfaces to a container, and then the DEL command to tear them down. For example, the reference <a href="https://github.com/containernetworking/plugins/tree/master/plugins/main/bridge">bridge plugin</a> adds all containers on the same host into a bridge that resides in the host network namespace.</p> 
-<p>This plugin model fits in nicely with the ECS agent’s “<em>minimal intrusion in the container lifecycle</em>” model, as the agent doesn’t need to concern itself with the details of the network setup for containers. It’s also an extensible model, which allows the agent to switch to a different set of plugins if the need arises in future. Finally, the ECS agent doesn’t need to monitor the liveliness of these plugins as they are only invoked when required.</p> 
-<b>Invoking CNI plugins from the ECS agent</b> 
-<p>When ECS attaches an elastic network interface to the instance and sends the message to the agent to provision the elastic network interface for containers in a task, the elastic network interface (as with any network device) shows up in the global default network namespace of the host. The ECS agent invokes a chain of CNI plugins to ensure that the elastic network interface is configured appropriately in the container’s network namespace. You can review these plugins in the <a href="https://github.com/aws/amazon-ecs-cni-plugins">amazon-ecs-cni-plugins GitHub repo</a>.</p> 
-<p>The first plugin invoked in this chain is the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/eni">ecs-eni</a>&nbsp;plugin,&nbsp;which ensures that the elastic network interface is attached to container’s network namespace and configured with the VPC-allocated IP addresses and the default route to use the subnet gateway. The container also needs to make HTTP requests to the credentials endpoint (hosted by the ECS agent) for getting IAM role credentials. This is handled by the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ecs-bridge">ecs-bridge</a> and <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ipam">ecs-ipam</a> plugins, which are invoked next. The CNI library provides mechanisms to interpret the results from the execution of these plugins, which results in an efficient error handling in the agent. The following diagram illustrates the different steps in this process:</p> 
-<p><img class="aligncenter size-full wp-image-3202" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_2.png" alt="" width="862" height="491" /></p> 
-<p>To avoid the race condition between configuring the network stack and commands being invoked in application containers, the ECS agent creates an additional “pause” container for each task before starting the containers in the task definition. It then sets up the network namespace of the pause container by executing the previously mentioned CNI plugins. It also starts the rest of the containers in the task so that they share their network stack of the pause container. This means that all containers in a task are addressable by the IP addresses of the elastic network interface, and they can communicate with each other over the <code class="lang-bash">localhost</code> interface.</p> 
-<p>In this example setup, you have two containers in a task behind an elastic network interface. The following commands show that they have a similar view of the network stack and can talk to each other over the localhost interface.</p> 
-<h3>List the last three containers running on the host (you launched a task with two containers and the ECS agent launched the additional container to configure the network namespace):</h3> 
-<pre><code class="lang-bash"><b>$ docker ps -n 3 --format &quot;{{.ID}}\t{{.Names}}\t{{.Command}}\t{{.Status}}&quot;</b>
-7d7b7fbc30b9	ecs-front-envoy-5-envoy-sds-ecs-ce8bd9eca6dd81a8d101	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
-dfdcb2acfc91	ecs-front-envoy-5-front-envoy-faeae686adf9c1d91000	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
-f731f6dbb81c	ecs-front-envoy-5-internalecspause-a8e6e19e909fa9c9e901	&quot;./pause&quot;	Up 3 days</code></pre> 
-<h3>List interfaces for these containers and make sure that they are the same:</h3> 
-<pre><code class="lang-bash"><b>$ for id in `docker ps -n 3 -q`; do pid=`docker inspect $id -f '{{.State.Pid}}'`; echo container $id; sudo nsenter -t $pid -n ip link show; done</b>
-container 7d7b7fbc30b9
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
-container dfdcb2acfc91
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
-container f731f6dbb81c
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff</code></pre> 
-<b>Conclusion</b> 
-<p>All of this work means that you can use the new <code class="lang-bash">awsvpc</code> networking mode and benefit from native networking support for your containers. You can learn more about using <code class="lang-bash">awsvpc</code> mode in <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a> or the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html">ECS documentation</a>.</p> 
-<p>I&nbsp;appreciate your feedback in the comments section. You can also reach&nbsp;me on GitHub in either the <a href="https://github.com/aws/amazon-ecs-cni-plugins">ECS CNI Plugins</a> or the <a href="https://github.com/aws/amazon-ecs-agent">ECS Agent</a> repositories.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-ecs/" rel="tag">Amazon ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/containers/" rel="tag">Containers</a>, <a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/task-networking/" rel="tag">Task Networking</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3199');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/18/cross-account-integration-with-amazon-sns_img1-1260x459.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Cross-Account Integration with Amazon SNS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> | on 
-<time property="datePublished" datetime="2017-11-14T12:51:03+00:00">14 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-queue-service-sqs/" title="View all posts in Amazon Simple Queue Service (SQS)*"><span property="articleSection">Amazon Simple Queue Service (SQS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2726" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2726&amp;disqus_title=Cross-Account+Integration+with+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2726');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h4>Contributed by Zak Islam, Senior Manager, Software Development, AWS Messaging</h4> 
-<p>&nbsp;</p> 
-<p><a href="https://aws.amazon.com/sns/">Amazon Simple Notification Service</a>&nbsp;(Amazon SNS)&nbsp;is a fully managed AWS service that makes it easy to decouple your application components and fan-out messages. SNS provides topics (similar to topics in message brokers such as RabbitMQ or ActiveMQ) that you can use to create 1:1, 1:N, or N:N producer/consumer design patterns. For more information about how to send messages from SNS to Amazon SQS, AWS Lambda, or HTTP(S) endpoints in the same account, see <a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messages to Amazon SQS Queues</a>.</p> 
-<p>SNS can be used to send messages within a single account or to resources in different accounts to create administrative isolation. This enables administrators to grant only the minimum level of permissions required to process a workload (for example, limiting the scope of your application account to only send messages and to deny deletes). This approach is commonly known as the “principle of least privilege.” If you are interested, read more about AWS’s <a href="https://aws.amazon.com/answers/account-management/aws-multi-account-security-strategy/">multi-account security strategy</a>.</p> 
-<p>This is great from a security perspective, but why would you want to share messages between accounts? It may sound scary, but it’s a common practice to isolate application components (such as producer and consumer) to operate using different AWS accounts to lock down privileges in case credentials are exposed. In this post, I go slightly deeper and explore how to set up your SNS topic so that it can route messages to SQS queues that are owned by a separate AWS account.</p> 
-<b>Potential use cases</b> 
-<p style="text-align: left">First, look at a common order processing design pattern:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png"><img class="aligncenter wp-image-3138 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png" alt="" width="1200" height="500" /></a></p> 
-<p><span id="more-2726"></span>This is a simple architecture. A web server submits an order directly to an SNS topic, which then fans out messages to two SQS queues. One SQS queue is used to track all incoming orders for audits (such as anti-entropy, comparing the data of all replicas and updating each replica to the newest version). The other is used to pass the request to the order processing systems.</p> 
-<p>Imagine now that a few years have passed, and your downstream processes no longer scale, so you are kicking around the idea of a re-architecture project. To thoroughly test your system, you need a way to replay your production messages in your development system. Sure, you can build a system to replicate and replay orders from your production environment in your development environment. Wouldn’t it be easier to subscribe your development queues to the production SNS topic so you can test your new system in real time? That’s exactly what you can do here.</p> 
-<p>Here’s another use case. As your business grows, you recognize the need for more metrics from your order processing pipeline. The analytics team at your company has built a metrics aggregation service and ingests data via a central SQS queue. Their architecture is as follows:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png"><img class="size-full wp-image-3139 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png" alt="" width="1200" height="400" /></a></p> 
-<p>Again, it’s a fairly simple architecture. All data is ingested via SQS queues (master_ingest_queue, in this case). You subscribe the master_ingest_queue, running under the analytics team’s AWS account, to the topic that is in the order management team’s account.</p> 
-<b>Making it work</b> 
-<p>Now that you’ve seen a few scenarios, let’s dig into the details. There are a couple of ways to link an SQS queue to an SNS topic (subscribe a queue to a topic):</p> 
-<ol> 
-<li>The queue owner can create a subscription to the topic.</li> 
-<li>The topic owner can subscribe a queue in another account to the topic.</li> 
-</ol> 
-<b>Queue owner subscription</b> 
-<p>What happens when the queue owner subscribes to a topic? In this case, assume that the topic owner has given permission to the subscriber’s account to call the Subscribe API action using the topic ARN (Amazon Resource Name). For the examples below, also assume the following:</p> 
-<li>&nbsp;<em>Topic_Owner</em> is the identifier for the account that owns the topic <em>MainTopic</em></li> 
-<li><em>Queue_Owner</em> is the identifier for the account that owns the queue subscribed to the main topic</li> 
-<p>To enable the subscriber to subscribe to a topic, the topic owner must add the sns:Subscribe and topic ARN to the topic policy via the AWS Management Console, as follows:</p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;:&quot;2012-10-17&quot;,
-&quot;Id&quot;:&quot;MyTopicSubscribePolicy&quot;,
-&quot;Statement&quot;:[{
-&quot;Sid&quot;:&quot;Allow-other-account-to-subscribe-to-topic&quot;,
-&quot;Effect&quot;:&quot;Allow&quot;,
-&quot;Principal&quot;:{
-&quot;AWS&quot;:&quot;Topic_Owner&quot;
-},
-&quot;Action&quot;:&quot;sns:Subscribe&quot;,
-&quot;Resource&quot;:&quot;arn:aws:sns:us-east-1:Queue_Owner:MainTopic&quot;
-}
-]
-}</code></pre> 
-<p>After this has been set up, the subscriber (using account <em>Queue_Owner</em>) can call Subscribe to link the queue to the topic. After the queue has been successfully subscribed, SNS starts to publish notifications. In this case, neither the topic owner nor the subscriber have had to process any kind of confirmation message.</p> 
-<b>Topic owner subscription</b> 
-<p>The second way to subscribe an SQS queue to an SNS topic is to have the <em>Topic_Owner</em> account initiate the subscription for the queue from account <em>Queue_Owner</em>. In this case, SNS first sends a confirmation message to the queue. To confirm the subscription, a user who can read messages from the queue must visit the URL specified in the&nbsp;SubscribeURL&nbsp;value in the message. Until the subscription is confirmed, no notifications published to the topic are sent to the queue. To confirm a subscription, you can use the SQS console or the&nbsp;ReceiveMessage&nbsp;API action.</p> 
-<b>What’s next?</b> 
-<p>In this post, I covered a few simple use cases but the principles can be extended to complex systems as well. As you architect new systems and refactor existing ones, think about where you can leverage queues (SQS) and topics (SNS) to build a loosely coupled system that can be quickly and easily extended to meet your business need.</p> 
-<p>For step by step instructions, see&nbsp;<a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.cross.account.html">Sending Amazon SNS messages to an Amazon SQS queue in a different account</a>. You can also visit the following resources to get started working with message queues and topics:</p> 
-<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-messages-distributed-applications/">Send Messages Between Distributed Applications with Amazon SQS</a></span></li> 
-<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">Send&nbsp;Fanout Event Notifications with Amazon SNS and Amazon SQS</a></span></li> 
-<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</a></li> 
-<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a></li> 
-<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sns/getting-started/">Getting started with Amazon SNS</a></li> 
-<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sqs/getting-started/">Getting started with Amazon SQS</a></li> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2726');
 });
 </script> 
 </article> 
