@@ -191,6 +191,496 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Disabling Intel Hyper-Threading Technology on Amazon EC2 Windows Instances</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Brian Beach</span></span> | on 
+<time property="datePublished" datetime="2017-09-06T13:18:39+00:00">06 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2352" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2352&amp;disqus_title=Disabling+Intel+Hyper-Threading+Technology+on+Amazon+EC2+Windows+Instances&amp;disqus_url=https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-ec2-windows-instances/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2352');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In a prior post, <a href="https://aws.amazon.com/blogs/compute/disabling-intel-hyper-threading-technology-on-amazon-linux/">Disabling Intel Hyper-Threading on Amazon Linux</a>, I investigated how the Linux kernel enumerates CPUs. I also discussed the options to disable Intel Hyper-Threading (HT Technology) in Amazon Linux running on <a href="https://aws.amazon.com/ec2">Amazon EC2</a>.</p> 
+<p>In this post, I do the same for Microsoft Windows Server 2016 running on EC2 instances. I begin with a quick review of HT Technology and the reasons you might want to disable it. I also recommend that you take a moment to review the prior post for a more thorough foundation.</p> 
+<b>HT Technology</b> 
+<p>HT Technology makes a single physical processor appear as multiple logical processors. Each core in an Intel Xeon processor has two threads of execution. Most of the time, these threads can progress independently; one thread executing while the other is waiting on a relatively slow operation (for example, reading from memory) to occur. However, the two threads do share resources and occasionally one thread is forced to wait while the other is executing.</p> 
+<p>There a few unique situations where disabling HT Technology can improve performance. One example is high performance computing (HPC) workloads that rely heavily on floating point operations. In these rare cases, it can be advantageous to disable HT Technology. However, these cases are rare, and for the overwhelming majority of workloads you should leave it enabled. I recommend that you test with and without HT Technology enabled, and only disable threads if you are sure it will improve performance.</p> 
+<p><span id="more-2352"></span></p> 
+<b>Exploring HT Technology on Microsoft Windows</b> 
+<p>Here’s how Microsoft Windows enumerates CPUs. As before, I am running these examples on an m4.2xlarge. I also chose to run Windows Server 2016, but you can walk through these exercises on any version of Windows. Remember that the m4.2xlarge has eight vCPUs, and each vCPU is a thread of an Intel Xeon core. Therefore, the m4.2xlarge has four cores, each of which run two threads, resulting in eight vCPUs.</p> 
+<p>Windows does not have a built-in utility to examine CPU configuration, but you can download the <a href="https://technet.microsoft.com/en-us/sysinternals/cc835722.aspx">Sysinternals coreinfo utility</a> from Microsoft’s website. This utility provides useful information about the system CPU and memory topology. For this walkthrough, you enumerate the individual CPUs, which you can do by running <code class="lang-powershell">coreinfo -c</code>. For example:</p> 
+<pre><code class="lang-powershell">C:\Users\Administrator &gt;coreinfo -c
+Coreinfo v3.31 - Dump information on system CPU and memory topology
+Copyright (C) 2008-2014 Mark Russinovich
+Sysinternals - www.sysinternals.com
+Logical to Physical Processor Map:
+**------ Physical Processor 0 (Hyperthreaded)
+--**---- Physical Processor 1 (Hyperthreaded)
+----**-- Physical Processor 2 (Hyperthreaded)
+------** Physical Processor 3 (Hyperthreaded)</code></pre> 
+<p>As you can see from the screenshot, the coreinfo utility displays a table where each row is a physical core and each column is a logical CPU. In other words, the two asterisks on the first line indicate that CPU 0 and CPU 1 are the two threads in the first physical core. Therefore, my m4.2xlarge has for four physical processors and each processor has two threads resulting in eight total CPUs, just as expected.</p> 
+<p>It is interesting to note that Windows Server 2016 enumerates CPUs in a different order than Linux. Remember from the prior post that Linux enumerated the first thread in each core, followed by the second thread in each core. You can see from the output earlier that Windows Server 2016, enumerates both threads in the first core, then both threads in the second core, and so on. The diagram below shows the relationship of CPUs to cores and threads in both operating systems.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin1-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin1-1.png" /></a></p> 
+<p>In the Linux post, I disabled CPUs 4–6, leaving one thread per core, and effectively disabling HT Technology. You can see from the diagram that you must disable the odd-numbered threads (that is, 1, 3, 5, and 7) to achieve the same result in Windows. Here’s how to do that.</p> 
+<b>Disabling HT Technology on Microsoft Windows</b> 
+<p>In Linux, you can globally disable CPUs dynamically. In Windows, there is no direct equivalent that I could find, but there are a few alternatives.</p> 
+<p>First, you can disable CPUs using the msconfig.exe tool. If you choose <strong>Boot, Advanced Options</strong>, you have the option to set the number of processors. In the example below, I limit my m4.2xlarge to four CPUs. Restart for this change to take effect.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin2-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin2-1.png" /></a></p> 
+<p>Unfortunately, Windows does not disable hyperthreaded CPUs first and then real cores, as Linux does. As you can see in the following output, coreinfo reports that my c4.2xlarge has two real cores and four hyperthreads, after rebooting. Msconfig.exe is useful for disabling cores, but it does not allow you to disable HT Technology.</p> 
+<p><strong>Note:</strong> If you have been following along, you can re-enable all your CPUs by unselecting the <strong>Number of processors</strong> check box and rebooting your system.</p> 
+<p>&nbsp;</p> 
+<pre><code class="lang-powershell">C:\Users\Administrator &gt;coreinfo -c
+Coreinfo v3.31 - Dump information on system CPU and memory topology
+Copyright (C) 2008-2014 Mark Russinovich
+Sysinternals - www.sysinternals.com
+Logical to Physical Processor Map:
+**-- Physical Processor 0 (Hyperthreaded)
+--** Physical Processor 1 (Hyperthreaded)</code></pre> 
+<p>While you cannot disable HT Technology systemwide, Windows does allow you to associate a particular process with one or more CPUs. Microsoft calls this, “processor affinity”. To see an example, use the following steps.</p> 
+<ol> 
+<li>Launch an instance of Notepad.</li> 
+<li>Open Windows Task Manager and choose <strong>Processes</strong>.</li> 
+<li>Open the context (right click) menu on notepad.exe and choose <strong>Set Affinity…</strong>.</li> 
+</ol> 
+<p>This brings up the Processor Affinity dialog box.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin3-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin3-1.png" /></a></p> 
+<p>As you can see, all the CPUs are allowed to run this instance of notepad.exe. You can uncheck a few CPUs to exclude them. Windows is smart enough to allow any scheduled operations to continue to completion on disabled CPUs. It then saves its state at the next scheduling event, and resumes those operations on another CPU. To ensure that only one thread in each core is able to run a process, you uncheck every other core. This effectively disables HT Technology for this process. For example:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin4-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/08/HTWin4-1.png" /></a></p> 
+<p>Of course, this can be tedious when you have a large number of cores. Remember that the x1.32xlarge has 128 CPUs. Luckily, you can set the affinity of a running process from PowerShell using the <code class="lang-powershell">Get-Process</code> cmdlet. For example:</p> 
+<pre><code class="lang-powershell">PS C:\&amp;gt; (Get-Process -Name 'notepad').ProcessorAffinity = 0x55;</code></pre> 
+<p>The <strong>ProcessorAffinity</strong> attribute takes a bitmask in hexadecimal format. 0x55 in hex is equivalent to 01010101 in binary. Think of the binary encoding as 1=enabled and 0=disabled. This is slightly confusing, but we work left to right so that CPU 0 is the rightmost bit and CPU 7 is the leftmost bit. Therefore, 01010101 means that the first thread in each CPU is enabled just as it was in the diagram earlier.</p> 
+<p>The calculator built into Windows includes a “programmer view” that helps you convert from hexadecimal to binary. In addition, the ProcessorAffinity attribute is a 64-bit number. Therefore, you can only configure the processor affinity on systems up to 64 CPUs. At the moment, only the x1.32xlarge has more than 64 vCPUs.</p> 
+<p>In the preceding examples, you changed the processor affinity of a running process. Sometimes, you want to start a process with the affinity already configured. You can do this using the start command. The start command includes an affinity flag that takes a hexadecimal number like the PowerShell example earlier.</p> 
+<pre><code class="lang-powershell">C:\Users\Administrator&amp;gt;start /affinity 55 notepad.exe</code></pre> 
+<p>It is interesting to note that a child process inherits the affinity from its parent. For example, the following commands create a batch file that launches Notepad, and starts the batch file with the affinity set. If you examine the instance of Notepad launched by the batch file, you see that the <strong>affinity</strong> has been applied to as well.</p> 
+<pre><code class="lang-powershell">C:\Users\Administrator&amp;gt;echo notepad.exe &gt; test.bat
+C:\Users\Administrator&amp;gt;start /affinity 55 test.bat</code></pre> 
+<p>This means that you can set the affinity of your task scheduler and any tasks that the scheduler starts inherits the affinity. So, you can disable every other thread when you launch the scheduler and effectively disable HT Technology for all of the tasks as well. Be sure to test this point, however, as some schedulers override the normal inheritance behavior and explicitly set processor affinity when starting a child process.</p> 
+<b>Conclusion</b> 
+<p>While the Windows operating system does not allow you to disable logical CPUs, you can set processor affinity on individual processes. You also learned that Windows Server 2016 enumerates CPUs in a different order than Linux. Therefore, you can effectively disable HT Technology by restricting a process to every other CPU. Finally, you learned how to set affinity of both new and running processes using Task Manager, PowerShell, and the start command.</p> 
+<p>Note: this technical approach has nothing to do with control over software licensing, or licensing rights, which are sometimes linked to the number of “CPUs” or “cores.” For licensing purposes, those are legal terms, not technical terms. This post did not cover anything about software licensing or licensing rights.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2352');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Messaging Fanout Pattern for Serverless Architectures Using Amazon SNS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> and 
+<span property="author" typeof="Person"><span property="name">Sam Dengler</span></span> | on 
+<time property="datePublished" datetime="2017-08-22T15:52:19+00:00">22 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2554" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2554&amp;disqus_title=Messaging+Fanout+Pattern+for+Serverless+Architectures+Using+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2554');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<table> 
+<tbody> 
+<tr> 
+<td valign="center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/26/fsd-150x150.jpg" /></td> 
+<td valign="center"> <h5>Sam Dengler, Amazon Web Services Solutions Architect</h5> </td> 
+</tr> 
+</tbody> 
+</table> 
+<p>Serverless architectures allow solution builders to focus on solving challenges particular to their business, without assuming the overhead of managing infrastructure in AWS. <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> is a service that lets you run code without provisioning or managing servers.</p> 
+<p>When using Lambda in a serverless architecture, the goal should be to design tightly focused functions that do one thing and do it well. When these functions are composed to accomplish larger goals in microservice architectures, the complexity shifts from the internal components to the external communication between components. It’s all too easy to accidentally back into an architecture that is rigid to change because components are too knowledgeable of each other via the communication paths between them.</p> 
+<p>Solution builders can address this architectural challenge by using messaging patterns, resulting in loosely coupled communication between highly cohesive components to manage complexity in serverless architectures. As introduced in the recent <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> post, a common approach when one component wishes to deliver the same message to multiple receivers is to use the fanout <a href="https://aws.amazon.com/pub-sub-messaging/">publish/subscribe messaging pattern</a>.</p> 
+<p>The fanout pattern for message communication can be implemented in code. However, depending on your requirements, alternative solutions exist to offload this undifferentiated responsibility from the application. <a href="https://aws.amazon.com/sns/">Amazon SNS</a> is a fully managed pub/sub messaging service that lets you fan out messages to large numbers of recipients.</p> 
+<p>In this post, I review a serverless architecture from PlayOn! Sports as a case study for migration of fanout functionality from application code to SNS.<span id="more-2554"></span></p> 
+<b>PlayOn! Sports serverless video processing platform</b> 
+<p><a href="http://www.playonsports.com/" target="_blank" rel="noopener noreferrer">PlayOn! Sports</a> is one of the nation’s leading high school sports media companies. They operate a comprehensive technology platform, enabling high-quality, low-cost productions of live sports events for the <a href="http://www.nfhsnetwork.com/" target="_blank" rel="noopener noreferrer">NFHS High School Sports Network</a>.</p> 
+<p>At the 2014 AWS re:Invent conference, Lambda was announced. The PlayOn! Sports technology team recognized the parallels between serverless demos featuring image processing using ImageMagick to video processing using ffmpeg.</p> 
+<p>At the time, PlayOn! Sports was broadcasting live video with adaptive bit rates, requiring a transcoding of the video stream to multiple quality levels for consumption on desktop, mobile, and connected devices. This is not unusual for an internet media company. However, with over 50,000 live broadcasts produced in 2014, the traditional media and entertainment technological approaches and pricing models would not work.</p> 
+<p>After some consultation with the Lambda team to validate support for custom binary execution, PlayOn! Sports moved forward with the development of a new serverless video processing platform according to the architecture diagram below.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram1-1024x615.png" /></a></p> 
+<p>In the architecture, a laptop in the field captures the video from a camera source and divides it into small fragments, according to the <a href="https://en.wikipedia.org/wiki/HTTP_Live_Streaming" target="_blank" rel="noopener noreferrer">HLS protocol</a>. The fragments are published to <a href="https://aws.amazon.com/s3">Amazon S3</a>, through an <a href="https://aws.amazon.com/cloudfront">Amazon CloudFront</a> distribution for accelerated upload. When the file has been written to S3, it triggers a Lambda function to initiate the video segment processing.</p> 
+<b>Video transcoding fanout implementation in Lambda</b> 
+<p>Given Lambda’s integration growth across AWS, it’s easy to forget that it did not include managed integration with SNS when it was announced in November 2014.</p> 
+<p>PlayOn! Sports was actively experimenting with approaches to video processing to address quality control, audience growth, and cost constraints. Lambda was a great tool for rapid innovation. A goal of the architecture design was the ability to add and remove video processing alternatives to the workflow, using the fanout pattern to identify optimal solutions. Below is example code from the initial implementation:</p> 
+<pre><code class="lang-python">import json
+import logging
+import boto3
+logger = logging.getLogger('boto3')
+logger.setLevel(logging.INFO)
+client = boto3.client('lambda')
+fanout_functions = ['media_info', 'transcode_audio']
+def lambda_handler(event, context):
+logger.info(json.dumps(event))
+logger.info('fanout_functions: %s', fanout_functions)
+for fanout_function in fanout_functions:
+logger.info('invoke: %s', fanout_function)
+response = client.invoke(
+FunctionName=fanout_function,
+InvocationType='Event',
+Payload=json.dumps(event)
+)
+logger.info('response: %s', response)
+return 'done'</code></pre> 
+<p>Each Lambda function is invoked asynchronously, injecting the same S3 event that triggered the original Lambda function. For example, the media_info Lambda function could be scaffolded similar to the following code snippet:</p> 
+<pre><code class="lang-python">import json
+import logging
+import boto3
+logger = logging.getLogger('boto3')
+logger.setLevel(logging.INFO)
+def lambda_handler(event, context):
+logger.info(json.dumps(event))
+# MediaInfo Processing
+# see: https://aws.amazon.com/blogs/compute/extracting-video-metadata-using-lambda-and-mediainfo/
+return 'done'</code></pre> 
+<b>Refactoring fanout implementation using SNS</b> 
+<p>The PlayOn! Sports development team was familiar with SNS, but had not used it previously to support system-to-system messaging patterns. After <a href="https://aws.amazon.com/about-aws/whats-new/2015/04/amazon-sns-now-integrates-with-aws-lambda/">the announcement of SNS triggering of Lambda functions</a>, the PlayOn! Sports team planned to migrate to the new feature to offload the overhead of managing the fanout Lambda function.</p> 
+<p>When invoking a Lambda function, SNS wraps the original event with SNSEvent. The Lambda function can be refactored by adding a function to parse the S3 event from SNSEvent, as seen in the following code:</p> 
+<pre><code class="lang-python">import json
+import logging
+import boto3
+logger = logging.getLogger('boto3')
+logger.setLevel(logging.INFO)
+def lambda_handler(event, context):
+s3_event = parse_event(event)
+logger.info(json.dumps(s3_event))
+# MediaInfo Processing
+# see: https://aws.amazon.com/blogs/compute/extracting-video-metadata-using-lambda-and-mediainfo/
+return 'done'
+def parse_event(event):
+record = event['Records'][0]
+if 'EventSource' in record and record['EventSource'] == 'aws:sns':
+return json.loads(record['Sns']['Message'])
+return event</code></pre> 
+<p>This Lambda function modification can be authored, tested, and deployed before enabling the SNS integration to verify that the existing Lambda fanout execution path continues to operate as before. The Lambda function invocation can now be transferred from the fanout Lambda function to SNS without disruption to S3 processing.</p> 
+<p>As the diagram below shows, the resulting architecture is similar to the original. The exception is that objects written to S3 now trigger a message to be published to an SNS topic. This sends the S3 event to multiple Lambda functions to be processed independently.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/messaging-fanout-for-serverless-with-sns-diagram2-1024x615.png" /></a></p> 
+<b>Sample architecture deployment using AWS CloudFormation</b> 
+<p><a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> gives developers and system administrators an easy way to create and manage a collection of related AWS resources. CloudFormation provisions and updates resources in an orderly and predictable fashion. To launch the CloudFormation stack for the sample fanout architecture, choose the following button:</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=serverless-sns-fanout&amp;templateURL=https://s3.amazonaws.com/aws-serverless-sns-fanout/template-inline.yml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/25/launch-stack-button-1.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>Follow these steps to complete the architecture deployment:</p> 
+<ol> 
+<li>If necessary, sign into the console for your account when prompted.</li> 
+<li>On the <strong>Select Template</strong> page, choose <strong>Next</strong>.</li> 
+<li>Under <strong>Parameters</strong>, for <strong>S3BucketName</strong>, enter a globally unique name.</li> 
+<li>For <strong>SnsTopicName</strong>, enter a region-unique name.</li> 
+<li>Choose <strong>Next</strong>, <strong>Next</strong>.</li> 
+<li>Select the checkbox for <strong>I acknowledge that AWS CloudFormation might create IAM resources</strong>, and choose <strong>Create</strong>.</li> 
+</ol> 
+<p>After the stack has completed creation, you can test both paths of execution by uploading files to the S3 bucket that you created. Uploading a file to the “/uploads/lambda/” directory in S3 triggers the Lambda fanout function. Uploading a file to the “/uploads/sns/” directory in S3 triggers the SNS fanout execution path. You can verify execution by monitoring the Lambda function outputs in CloudWatch Logs.</p> 
+<b>Conclusion</b> 
+<p>In this post, I reviewed the fanout messaging pattern and options for its inclusion in a serverless architectures using Lambda application code and SNS. Using the PlayOn! Sports serverless video processing pipeline use case, I demonstrated how easy it is to refactor an existing application to use the SNS fanout approach.</p> 
+<p>I also provided a sample architecture in CloudFormation that you can run in your own account. Try it out and expand the sample architecture by adding other Lambda functions to the SNS topic, to demonstrate the flexibility of the fanout messaging pattern!</p> 
+<p>You can get started with SNS using the <a href="https://us-west-2.console.aws.amazon.com/sns/v2/">AWS Management Console</a>, or the SDK of your choice. For more information about how to use SNS fanout messaging, see the following resources:</p> 
+<li>10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">How to Send Fanout Event Notifications</a></li> 
+<li>Amazon SNS Developer Guide: 
+<li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messaging to Amazon SQS Queues</a></li> 
+<li><a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToHttp.html">Sending Amazon SNS Messaging to HTTP/HTTPS Endpoints</a></li> 
+</ul> </li> 
+<li>AWS Compute Blog: &nbsp;<a href="https://aws.amazon.com/blogs/compute/fanout-s3-event-notifications-to-multiple-endpoints/">Fanout S3 Event Notifications to Multiple Endpoints</a></li> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-sns/" rel="tag">Amazon SNS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/sns/" rel="tag">SNS</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2554');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Enabling Identity Federation with AD FS 3.0 and Amazon AppStream 2.0</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Matt Guanti</span></span> | on 
+<time property="datePublished" datetime="2017-08-17T14:39:35+00:00">17 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming*"><span property="articleSection">Desktop &amp; App Streaming*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2619" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2619&amp;disqus_title=Enabling+Identity+Federation+with+AD+FS+3.0+and+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2619');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Want to provide users with single sign-on access to AppStream 2.0 using existing enterprise credentials? Active Directory Federation Services (AD FS) 3.0 can be used to provide single sign-on for <a href="https://aws.amazon.com/appstream2">Amazon AppStream 2.0</a> using SAML 2.0.</p> 
+<p>You can use your existing Active Directory or any SAML 2.0–compliant identity service to set up single sign-on access of AppStream 2.0 applications for your users. Identity federation using SAML 2.0 is currently available in all AppStream 2.0 regions.</p> 
+<p>This post explains how to configure federated identities for AppStream 2.0 using AD FS 3.0.</p> 
+<b>Walkthrough</b> 
+<p>After setting up SAML 2.0 federation for AppStream 2.0, users can browse to a specially crafted (AD FS RelayState) URL and be taken directly to their AppStream 2.0 applications.<span id="more-2619"></span></p> 
+<p>When users sign in with this URL, they are authenticated against Active Directory. After they are authenticated, the browser receives a SAML assertion as an authentication response from AD FS, which is then posted by the browser to the AWS sign-in SAML endpoint. Temporary security credentials are issued after the assertion and the embedded attributes are validated. The temporary credentials are then used to create the sign-in URL. The user is redirected to the AppStream 2.0 streaming session. The following <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers.html">diagram</a> shows the process.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/16/Diagram.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/16/Diagram.jpg" /></a></p> 
+<ol> 
+<li>The user browses to https://applications.exampleco.com. The sign-on page requests authentication for the user.</li> 
+<li>The federation service requests authentication from the organization’s identity store.</li> 
+<li>The identity store authenticates the user and returns the authentication response to the federation service.</li> 
+<li>On successful authentication, the federation service posts the SAML assertion to the user’s browser.</li> 
+<li>The user’s browser posts the SAML assertion to the AWS Sign-In SAML endpoint (https://signin.aws.amazon.com/saml). AWS Sign-In receives the SAML request, processes the request, authenticates the user, and forwards the authentication token to the AppStream 2.0 service.</li> 
+<li>Using the authentication token from AWS, AppStream 2.0 authorizes the user and presents applications to the browser.</li> 
+</ol> 
+<p>In this post, use domain.local as the name of the Active Directory domain. Here are the steps in this walkthrough:</p> 
+<ol> 
+<li>Configure AppStream 2.0 identity federation.</li> 
+<li>Configure the relying trust.</li> 
+<li>Create claim rules.</li> 
+<li>Enable RelayState and forms authentication.</li> 
+<li>Create the AppStream 2.0 RelayState URL and access the stack.</li> 
+<li>Test the configuration.</li> 
+</ol> 
+<b>Prerequisites</b> 
+<p>This walkthrough assumes that you have the following prerequisites:</p> 
+<li>An existing <a href="https://social.technet.microsoft.com/wiki/contents/articles/22622.building-your-first-domain-controller-on-2012-r2.aspx">Active Directory forest</a></li> 
+<li>An instance joined to a domain with the “Active Directory Federation Services” <a href="https://docs.microsoft.com/en-us/windows-server/identity/ad-fs/deployment/install-the-ad-fs-role-service">role installed</a> and post-deployment configuration completed</li> 
+<li>Familiarity with AppStream 2.0 resources</li> 
+<b>Configure AppStream 2.0 identity federation</b> 
+<p>First, <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/set-up-stacks-fleets.html">create an AppStream 2.0 stack</a>, as you reference the stack in upcoming steps. Name the stack ExampleStack. For this walkthrough, it doesn’t matter which underlying fleet you associate with the stack. You can create a fleet using one of the example Amazon-AppStream2-Sample-Image images available, or associate an existing fleet to the stack.</p> 
+<h3>Get the AD FS metadata file</h3> 
+<p>The first thing you need is the metadata file from your AD FS server. The metadata file is a signed document that is used later in this guide to establish the relying party trust. Don’t edit or reformat this file.</p> 
+<p>To download and save this file, navigate to the following location, replacing &lt;FQDN_ADFS_SERVER&gt; with your AD FS s fully qualified server name.</p> 
+<pre>https://&lt;FQDN_ADFS_SERVER&gt;/FederationMetadata/2007-06/FederationMetadata.xml</pre> 
+<p><code class="lang-aspnet"></code>Save the file to a local location that you can access from the AWS Management Console later.</p> 
+<h3>Create the SAML provider</h3> 
+<p>Next, create the SAML provider in IAM, using the console. You could also <a href="http://docs.aws.amazon.com/cli/latest/reference/iam/create-saml-provider.html">create it using the AWS CLI</a>.</p> 
+<p>In the IAM console, choose <strong>Identity providers</strong>, <strong>Create provider</strong>.</p> 
+<p>On the <strong>Configure Provider</strong> page, for <strong>Provider Type</strong>, choose <strong>SAML</strong>. For <strong>Provider Name</strong>, type ADFS01 or similar name. Choose <strong>Choose File</strong> to upload the metadata document previously downloaded. Choose <strong>Next Step</strong>.</p> 
+<p>Verify the provider information and choose <strong>Create</strong>.</p> 
+<p>You need the Amazon Resource Name (ARN) of the identity provider (IdP) to configure claims rules later in this walkthrough. To get this, select the IdP that you just created. On the summary page, copy the value for <strong>Provider ARN</strong>. The ARN is in the following format:</p> 
+<pre>arn:aws:iam::&lt;AccountID&gt;:saml-provider/&lt;Provider Name&gt;</pre> 
+<h3>Configure an IAM Policy</h3> 
+<p>Next, configure a policy with permissions to the AppStream 2.0 stack. This is the level of permissions that federated users have within AWS.</p> 
+<p>In the IAM console, choose <strong>Policies</strong>, <strong>Create Policy</strong>, <strong>Create Your Own Policy</strong>.</p> 
+<p>For <strong>Policy Name</strong>, enter a descriptive name. For <strong>Description</strong>, enter the level of permissions. For <strong>Policy Document</strong>, you customize the <strong>Region-Code</strong>, <strong>AccountID</strong> (without hyphens), and case-sensitive <strong>Stack-Name</strong> values.</p> 
+<p>The following screenshot shows how to create a policy that gives users permissions to only a single AppStream 2.0 stack, named ExampleStack. For more information, see the <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-grantperms">Step 2: Configure Permissions in AWS for Your Federated Users topic</a>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-2.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>For <strong>Region Codes</strong>, use one of the following values based on the region you are using AppStream 2.0 (the available regions for AppStream 2.0):</p> 
+<li><strong>us-east-1</strong></li> 
+<li><strong>us-west-2</strong></li> 
+<li><strong>eu-west-1</strong></li> 
+<li><strong>ap-northeast-1</strong></li> 
+<p>Choose <strong>Create Policy</strong> and you should see the following notification:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-3.png" /></a></p> 
+<p>&nbsp;</p> 
+<h3>Create an IAM role</h3> 
+<p>Here, you create a role that relates to an Active Directory group assigned to your AppStream 2.0 federated users. For this configuration, Active Directory groups and AWS roles are case-sensitive. Here you create an IAM Role named “ExampleStack” and an Active Directory group named in the format AWS-AccountNumber-RoleName, for example AWS-012345678910-ExampleStack.</p> 
+<p>In the IAM console, choose <strong>Roles</strong>, <strong>Create </strong>new<strong> role</strong>.</p> 
+<p>On the <strong>Select Role type</strong> page, choose <strong>Role for identity provider access</strong>. Choose <strong>Select</strong> next to <strong>Grant Web Single Sign-On (WebSSO) access to SAML providers</strong>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-4.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>On the <strong>Establish Trust</strong> page, make sure that the SAML provider that you just created (such as ADFS01) is selected. For <strong>Attribute</strong> and <strong>Value</strong>, keep the default values.</p> 
+<p>On the <strong>Verify Role Trust</strong> page, the <strong>Federated</strong> value matches the ARN noted previously for the principal IdP created earlier. The <strong>SAML: aud</strong> value equals https://signin.aws.amazon.com/saml, as shown below. This is prepopulated and does not require any change. Choose <strong>Next Step</strong>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-5.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-5.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>On the <strong>Attach policy</strong> page, attach the policy that you created earlier granting federated users access only to the AppStream 2.0 stack. In this walkthrough, the policy was named <strong>AppStream2_ExampleStack</strong>.</p> 
+<p>After selecting the correct policy, choose <strong>Next Step</strong>.</p> 
+<p>On the <strong>Set role name and review</strong> page, name the role <strong>ExampleStack</strong>. You can customize this naming convention, as I explain later when I create the claims rules.</p> 
+<p>You can describe the role as desired. Ensure that the trusted entities match the AD FS IdP ARN, and that the policy attached is the policy created earlier granting access only to this stack.</p> 
+<p>Choose <strong>Create Role</strong>.</p> 
+<blockquote> 
+<p><strong>Important:</strong> If you grant more than the stack permissions to federated users, you can give them access to other areas of the console as well. AWS strongly recommends that you attach policies to a role that grants access only to the resources to be shared with federated users.</p> 
+<p>For example, if you attach the <strong>AdministratorAccess</strong> policy instead of <strong>AppStream2_ExampleStack</strong>, any AppStream 2.0 federated user in the <strong>ExampleStack</strong> Active Directory group has <strong>AdministratorAccess</strong> in your AWS account. Even though AD&nbsp;FS routes users to the stack, users can still navigate to other areas of the console, using deep links that go directly to specific console locations.</p> 
+</blockquote> 
+<p>Next, create the Active Directory group in the format AWS-AccountNumber-RoleName using the “ExampleStack” role name that you just created. You reference this Active Directory group in the AD FS claim rules later using regex. For <strong>Group scope</strong>, choose <strong>Global</strong>. For <strong>Group type</strong>, choose <strong>Security</strong></p> 
+<p>Note: To follow this walkthrough exactly, name your Active Directory group in the format “AWS-AccountNumber-ExampleStack” replacing AccountNumber with your AWS AccountID (without hyphens). For example:</p> 
+<pre>AWS-012345678910-ExampleStack</pre> 
+<h3>Configure the relying party trust</h3> 
+<p>In this section, you configure AD FS 3.0 to communicate with the configurations made in AWS.</p> 
+<p>Open the AD FS console on your AD FS 3.0 server.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-6.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-6.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>Open the context (right-click) menu for AD FS and choose <strong>Add Relying Party Trust…</strong></p> 
+<p>On the <strong>Welcome</strong> page, choose <strong>Start</strong>. On the <strong>Select Data Source</strong> page, keep <strong>Import data about the relying party published online or on a local network</strong> checked. For <strong>Federation metadata address (host name or URL)</strong>, type the following link to the SAML metadata to describe AWS as a relying party and then choose <strong>Next</strong>.</p> 
+<pre>https://signin.aws.amazon.com/static/saml-metadata.xml</pre> 
+<p>On the <strong>Specify Display Name</strong> page, for <strong>Display name</strong>, type “AppStream 2.0 – ExampleStack” or similar value. For <strong>Notes</strong>, provide a description. Choose <strong>Next</strong>.</p> 
+<p>On the <strong>Configure Multi-factor Authentication Now?</strong> page, choose <strong>I do not want to configure multi-factor authentication settings for this relying party trust at this time</strong>. Choose <strong>Next</strong>.</p> 
+<p>Because you are controlling access to the stack using an Active Directory group, and IAM role with an attached policy, on the <strong>Choose Issuance Authorization Rules</strong> page, check <strong>Permit all users to access this relying party</strong>. Choose <strong>Next</strong>.</p> 
+<p>On the <strong>Ready to Add Trust</strong> page, there shouldn’t be any changes needed to be made. Choose <strong>Next</strong>.</p> 
+<p>On the <strong>Finish</strong> page, clear <strong>Open the </strong>edit<strong> Claim Rules dialog for this relying party trust when the wizard closes</strong>. You open this later.</p> 
+<p>Next, you add the https://signin.aws.amazon.com/saml URL is listed on the <strong>Identifiers</strong> tab within the properties of the trust. To do this, open the context (right-click) menu for the relying party trust that you just created and choose <strong>Properties</strong>.</p> 
+<p>On the <strong>Monitoring</strong> tab and clear <strong>Monitor relying party</strong>. Choose <strong>Apply</strong>. On the <strong>Identifiers</strong> tab, for <strong>Relying party identifier</strong>, add <strong>https://signin.aws.amazon.com/saml</strong> and choose <strong>OK</strong>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-7.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-7.png" /></a></p> 
+<p>&nbsp;</p> 
+<b>Create claim rules</b> 
+<p>In this section, you create four AD FS claim rules, which identify accounts, set LDAP attributes, get the Active Directory groups, and match them to the role created earlier.</p> 
+<p>In the AD FS console, expand <strong>Trust Relationships</strong>, choose <strong>Relying Party Trusts</strong>, and then select the relying party trust that you just created (in this case, the display name is AppStream 2.0 – ExampleStack). Open the context (right-click) menu for the relying party trust and choose <strong>Edit Claim Rules</strong>. Choose <strong>Add Rule</strong>.</p> 
+<h3>Rule 1: Name ID</h3> 
+<p>This claim rule tells AD FS the type of expected incoming claim and how to send the claim to AWS. AD FS receives the UPN and tags it as the Name ID when it’s forwarded to AWS. This rule interacts with the third rule, which fetches the user groups.</p> 
+<p style="padding-left: 30px"><strong>Claim rule template:</strong> Transform an Incoming Claim</p> 
+<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
+<p style="padding-left: 30px"><strong>Claim Rule Name:</strong>&nbsp; Name ID</p> 
+<p style="padding-left: 30px"><strong>Incoming Claim Type:</strong>&nbsp; UPN</p> 
+<p style="padding-left: 30px"><strong>Outgoing Claim Type:</strong>&nbsp; Name ID</p> 
+<p style="padding-left: 30px"><strong>Outgoing name ID format:</strong>&nbsp; Persistent Identifier</p> 
+<p style="padding-left: 30px"><strong>Pass through all claim values:</strong>&nbsp; selected</p> 
+<h3>Rule 2: RoleSessionName</h3> 
+<p>This rule sets a unique identifier for the user. In this case, use the E-Mail-Addresses values.</p> 
+<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send LDAP Attributes as Claims</p> 
+<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
+<p style="padding-left: 30px"><strong>Claim rule name:</strong>&nbsp; RoleSessionName</p> 
+<p style="padding-left: 30px"><strong>Attribute store:</strong> &nbsp;Active Directory</p> 
+<p style="padding-left: 30px"><strong>LDAP Attribute:</strong>&nbsp; E-Mail-Addresses</p> 
+<p style="padding-left: 30px"><strong>Outgoing Claim Type:</strong>&nbsp;&nbsp;https://aws.amazon.com/SAML/Attributes/RoleSessionName</p> 
+<h3>Rule 3: Get Active Directory groups</h3> 
+<p>This rule queries Active Directory and returns the groups to which the user is assigned, such as AWS-012345678910-ExampleStack .</p> 
+<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send Claims Using a Custom Rule</p> 
+<p style="padding-left: 30px"><strong>Configure Claim Rule values:</strong></p> 
+<p style="padding-left: 30px"><strong>Claim Rule Name:</strong>&nbsp; Get Active Directory Groups</p> 
+<p style="padding-left: 30px"><strong>Custom Rule:</strong></p> 
+<pre style="padding-left: 30px">c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;] =&gt; add(store = &quot;Active Directory&quot;, types = (&quot;http://temp/variable&quot;), query = &quot;;tokenGroups;{0}&quot;, param = c.Value);</pre> 
+<h3>Rule 4: Roles</h3> 
+<p>This rule converts the value of the Active Directory group starting with AWS-AccountNumber prefix to the roles known by AWS. For this rule, you need the AWS IdP ARN that you noted earlier. If your IdP in AWS was named ADFS01 and the AccountID was 012345678910, the ARN would look like the following:</p> 
+<pre>arn:aws:iam::012345678910:saml-provider/ADFS01
+</pre> 
+<p style="padding-left: 30px"><strong>Claim rule template:</strong> Send Claims Using a Custom Rule</p> 
+<p style="padding-left: 30px"><strong>Configure Claim Rule values:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</strong></p> 
+<p style="padding-left: 30px"><strong>Claim Rule Name:&nbsp;</strong> Roles</p> 
+<p style="padding-left: 30px"><strong>Custom Rule:</strong></p> 
+<pre style="padding-left: 30px">c:[Type == &quot;http://temp/variable&quot;, Value =~ &quot;(?i)^AWS-&quot;]
+&nbsp;=&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/Role&quot;, Value = RegExReplace(c.Value, &quot;AWS-012345678910-&quot;, &quot;arn:aws:iam::012345678910:saml-provider/ADFS01,arn:aws:iam::012345678910:role/&quot;));</pre> 
+<li>Change&nbsp;<span style="color: #ff0000">arn:aws:iam::012345678910:saml-provider/ADFS01</span> to the ARN of your AWS IdP</li> 
+<li>Change <span style="color: #ff0000">012345678910</span> to the ID (without hyphens) of the AWS account.</li> 
+<p>In this walkthrough, “AWS-” returns the Active Directory groups that start with the AWS- prefix, then removes AWS-012345678910- leaving ExampleStack left on the Active Directory Group name to match the ExampleStack IAM role. To customize the role naming convention, for example to name the IAM Role ADFS-ExampleStack, add “ADFS-” to the end of the role ARN at the end of the rule: arn:aws:iam::012345678910:role/ADFS-.</p> 
+<p>You should now have four claims rules created:</p> 
+<li><strong>NameID</strong></li> 
+<li><strong>RoleSessionName</strong></li> 
+<li><strong>Get Active Directory Groups</strong></li> 
+<li><strong>Role</strong></li> 
+<b></b> 
+<b>Enable RelayState and forms authentication</b> 
+<p>By default, AD FS 3.0 doesn’t have RelayState enabled. AppStream 2.0 uses RelayState to direct users to your AppStream 2.0 stack.</p> 
+<p>On your AD FS server, open the following with elevated (administrator) permissions:</p> 
+<pre>%systemroot%\adfs\Microsoft.IdentityServer.Servicehost.exe.config</pre> 
+<p>In the Microsoft.IdentityServer.Servicehost.exe.config file, find the section <strong>&lt;microsoft.identityServer.web&gt;</strong>. Within this section, add the following line:</p> 
+<pre>&lt;useRelayStateForIdpInitiatedSignOn enabled=&quot;true&quot; /&gt;</pre> 
+<p><code class="lang-aspnet"></code>The edit should look like the following:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-8.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-8.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>In the AD FS console, verify that forms authentication is enabled. Choose <strong>Authentication Policies</strong>. Under <strong>Primary Authentication</strong>, for <strong>Global Settings</strong>, choose <strong>Edit</strong>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Authentication-Policies-Overview.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Authentication-Policies-Overview.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>For <strong>Extranet</strong>, choose <strong>Forms Authentication</strong>. For <strong>Intranet</strong>, do the same and choose <strong>OK</strong>.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-10.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-10.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>On the AD FS server, from an elevated (administrator) command prompt, run the following commands sequentially to stop, then start the AD FS service to register the changes:</p> 
+<pre>net stop adfssrv 
+net start adfssrv
+</pre> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-11.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-11.png" /></a></p> 
+<p>&nbsp;</p> 
+<b>Create the AppStream 2.0 RelayState URL and access the stack</b> 
+<p>Now that RelayState is enabled, you can generate the URL.</p> 
+<p>I have created an Excel spreadsheet for RelayState URL generation, available as <a href="https://s3-us-west-2.amazonaws.com/as2-blog-artifacts/RelayGenerator.xlsx">RelayGenerator.xlsx</a>. This spreadsheet only requires the fully qualified domain name for your AD FS server, account ID (without hyphens), stack name (case-sensitive), and the AppStream 2.0 region. After all&nbsp;the inputs are entered, the spreadsheet generates a URL in the blue box, as shown in the screenshot below. Copy the entire contents of the blue box to retrieve the generated RelayState URL for AD FS.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-12.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-12.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>Alternatively, if you do not have Excel, there are third-party tools for RelayState URL generation. However, they do require some customization to work with AppStream 2.0. Example customization steps for one such tool are provided below.</p> 
+<p>CodePlex has an <a href="https://adfsrelaystate.codeplex.com/downloads/get/474227">AD FS RelayState generator</a>, which downloads an HTML file locally that you can use to create the RelayState URL. The generator says it’s for AD FS 2.0; however, it also works for AD FS 3.0. You can generate the RelayState URL manually but if the syntax or case sensitivity is incorrect even slightly, it won’t work. I recommend using the tool to ensure a valid URL.</p> 
+<p>When you open the URL generator, clear out the default text fields. You see a tool that looks like the following:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-13.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-13.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>To generate the values, you need three pieces of information:</p> 
+<li><strong>IDP URL String</strong></li> 
+<li><strong>Relying Party Identifier</strong></li> 
+<li><strong>Relay State / Target App</strong></li> 
+<h3>&nbsp;IDP URL String</h3> 
+<p>The IDP URL string is the URL you use to hit your AD FS sign-on page. For example:</p> 
+<pre>https://&lt;ADFSInstance&gt;/adfs/ls/idpinitiatedsignon.aspx</pre> 
+<p>In this configuration, use the following:</p> 
+<pre>https://adfs01.domain.local/adfs/ls/idpinitiatedsignon.aspx</pre> 
+<h3>Relying Party Identifier</h3> 
+<p>This value is always the following:</p> 
+<pre>https://signin.aws.amazon.com/saml</pre> 
+<h3>Relay State / Target App</h3> 
+<p>This is the RelayState link to your AppStream 2.0 stack. The format for this URL is as follows:</p> 
+<pre class="unlimited-height-code"><code class="lang-http">https://appstream2.&lt;region&gt;.aws.amazon.com/saml?stack=Case_Sensitive_Stack_Name&amp;accountId=account_id_without_hyphens</code></pre> 
+<p>Ultimately, the URL looks like the following example, which is for us-east-1, with a stack name of ExampleStack, and an account ID of 012345678910. The stack name is case-sensitive.</p> 
+<pre>https://appstream2.us-east-1.aws.amazon.com/saml?stack=ExampleStack&amp;accountId=012345678910</pre> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-relay-state">Step 5: Configure the Relay State of Your Federation</a>.</p> 
+<p>Input these values into the URL generator, and generate a RelayState URL.</p> 
+<p>Generated URL (case sensitive):’</p> 
+<pre class="unlimited-height-code"><code class="lang-http">https://adfs01.domain.local/adfs/ls/idpinitiatedsignon.aspx?RelayState=RPID%3Dhttps%253A%252F%252Fsignin.aws.amazon.com%252Fsaml%26RelayState%3Dhttps%253A%252F%252Fappstream2.us-east-1.aws.amazon.com%252Fsaml%253Fstack%253D%2520ExampleStack%2526accountId%253D012345678910</code></pre> 
+<p>The generated RelayState URL can now be saved and used by users to log in directly from anywhere that can reach the AD FS server, using their existing domain credentials. After they are authenticated, users are directed seamlessly to the AppStream 2.0 stack.</p> 
+<h3>Test the configuration</h3> 
+<p>Create a new AD user in Domain.local named Test User, with a username TUser and an email address. An email address is required based on the claim rules.</p> 
+<p>Next, add TUser to the AD group you created for the AWS-012345678910-ExampleStack stack.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-14.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-14.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>Next, navigate to the RelayState URL and log in with domain\TUser.</p> 
+<p>After you log in, you are directed to the streaming session for the ExampleStack stack. As an administrator, you can disassociate and associate different fleets of applications to this stack, without impacting federation, and deliver different applications to this group of federated users.</p> 
+<p>Because the policy attached to the role only allows access to this AppStream 2.0 stack, if a federated user were to try to access another section of the console, such as Amazon EC2, they would discover that they are not authorized to see (describe) any resources or perform any actions, as shown in the screenshot below. This is why it’s important to grant access only to the AppStream 2.0 stack.</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-15.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/14/Image-15.png" /></a></p> 
+<p>&nbsp;</p> 
+<b>Configurations for AD FS 4.0</b> 
+<p>If you are using AD FS 4.0, there are a few differences from the procedures discussed earlier.</p> 
+<p>Do not customize the following file as described in the Enable RelayState and forms authentication of the AD FS 3.0 guide:</p> 
+<pre>%systemroot%\adfs\Microsoft.IdentityServer.Servicehost.exe.config</pre> 
+<p>Enable the IdP-initiated sign-on page that is used when generating the RelayState URL. To do this, open an elevated PowerShell terminal and run the following command:</p> 
+<pre>Set-AdfsProperties -EnableIdPInitiatedSignonPage $true</pre> 
+<p>This enables the following URL referenced earlier:</p> 
+<pre>https://&lt;ADFSInstance&gt;/adfs/ls/idpinitiatedsignon.aspx</pre> 
+<p>Next, enable Relay States. To do this, run the following command from an elevated PowerShell terminal:</p> 
+<pre>Set-AdfsProperties -EnableRelayStateForIdpInitiatedSignOn $true</pre> 
+<p>To register these changes with AD FS, restart the AD FS service from an elevated PowerShell terminal (or command prompt):</p> 
+<pre>net stop adfssrv
+net start adfssrv</pre> 
+<p>After these changes are made, AD FS 4.0 should now work for AppStream 2.0 identity federation.</p> 
+<b>Troubleshooting</b> 
+<p>If you are still encountering errors with your setup, below are common error messages you may see, and configuration areas that I recommend that you check.</p> 
+<h3>Invalid policy</h3> 
+<pre>Unable to authorize the session. (Error Code: INVALID_AUTH_POLICY);Status Code:401</pre> 
+<p>This error message can occur when the IAM policy does not permit access to the AppStream 2.0 stack. However, it can also occur when the stack name is not entered into the policy or RelayState URL using case-sensitive characters. For example, if your stack name is “ExampleStack” in AppStream 2.0 and the policy has “examplestack” or if the Relay State URL has “examplestack” or any capitalization pattern other than the exact stack name, you see this error message.</p> 
+<h3>Invalid relay state</h3> 
+<pre>Error: Bad Request.(Error Code: INVALID_RELAY_STATE);Status Code:400</pre> 
+If you are receiving this error message, there is likely to be another issue in the Relay State URL. It could be related to case sensitivity (other than the stack name). For example, https://relay-state-region-endoint?stack=stackname&amp;accountId=aws-account-id-without-hyphens. 
+<p>This URL must contain the region-specific Relay State endpoint exactly as listed in the <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/external-identity-providers-setting-up-saml.html#external-identity-providers-relay-state">Step 5: Configure the Relay State of Your Federation topic</a>.</p> 
+<h3>Cross account access</h3> 
+<pre><code class="lang-aspnet">Unable to authorize the session. Cross account access is not allowed. (Error Code: CROSS_ACCOUNT_ACCESS_NOT_ALLOWED);Status Code:401</code></pre> 
+<p>If you see this error message, check to make sure that the AccountId number is correct in the Relay State URL.</p> 
+<b>Summary</b> 
+<p>In this post, you walked through enabling AD FS 3.0 for AppStream 2.0 identity federation. You should now be able to configure AD FS 3.0 or 4.0 for AppStream 2.0 identity federation. If you have questions or suggestions, please comment below.</p> 
+<img style="border: 0px;width: 32px;height: 32px;margin-right: 5px !important" src="https://aws-support-gm.s3.amazonaws.com/prod/tiny-url-shrinker/TinyURLShortener-icon-64x64.png" /> 
+<textarea id="url-shrinker-txtarea"></textarea> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/iam/" rel="tag">IAM</a>, <a href="https://aws.amazon.com/blogs/compute/tag/identity-federation/" rel="tag">identity federation</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2619');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1133x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Deploying an NGINX Reverse Proxy Sidecar Container on Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -214,7 +704,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2525');
 <p>Amazon ECS is a highly scalable, high performance container management service that supports Docker containers. It allows you to run applications easily on a managed cluster of Amazon EC2 instances. Amazon ECS helps you get your application components running on instances according to a specified configuration. It also helps scale out these components across an entire fleet of instances.</p> 
 <p>Sidecar containers are a common software pattern that has been embraced by engineering organizations. It’s a way to keep server side architecture easier to understand by building with smaller, modular containers that each serve a simple purpose. Just like an application can be powered by multiple microservices, each microservice can also be powered by multiple containers that work together. A sidecar container is simply a way to move part of the core responsibility of a service out into a containerized module that is deployed alongside a core application container.<span id="more-2525"></span></p> 
 <p>The following diagram shows how an NGINX reverse proxy sidecar container operates alongside an application server container:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy.png"><img class="aligncenter wp-image-2526 size-large" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1024x570.png" alt="" width="640" height="356" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/nginx_reverse_proxy-1024x570.png" /></a></p> 
 <p>In this architecture, Amazon ECS has deployed two copies of an application stack that is made up of an NGINX reverse proxy side container and an application container. Web traffic from the public goes to an Application Load Balancer, which then distributes the traffic to one of the NGINX reverse proxy sidecars. The NGINX reverse proxy then forwards the request to the application server and returns its response to the client via the load balancer.</p> 
 <b>Reverse proxy for security</b> 
 <p>Security is one reason for using a reverse proxy in front of an application container. Any web server that serves resources to the public can expect to receive lots of unwanted traffic every day. Some of this traffic is relatively benign scans by researchers and tools, such as Shodan or nmap:</p> 
@@ -309,7 +799,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2525');
 <b>Conclusion</b> 
 <p>Running a sidecar container such as NGINX can bring significant benefits by making it easier to provide protection for application containers. Sidecar containers also improve performance by freeing your application container from various CPU intensive tasks. Amazon ECS makes it easy to run sidecar containers, and automate their deployment across your cluster.</p> 
 <p>To see the full code for this NGINX sidecar reference, or to try it out yourself, you can check out the open source <a href="https://github.com/awslabs/ecs-nginx-reverse-proxy/tree/master/reverse-proxy">NGINX reverse proxy reference architecture on GitHub</a>.</p> 
-<p>– Nathan<br /> <a href="https://twitter.com/nathankpeck" target="_blank"><img class="alignnone wp-image-2597 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/03/twitter_16.png" alt="" width="16" height="16" /></a>&nbsp;<a href="https://twitter.com/nathankpeck" target="_blank" rel="noopener noreferrer">@nathankpeck</a></p> 
+<p>– Nathan<br /> <a href="https://twitter.com/nathankpeck" target="_blank"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/03/twitter_16.png">@nathankpeck</a></p> 
 <footer> 
 TAGS: 
 <span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/nginx/" rel="tag">nginx</a></span> 
@@ -341,8 +831,8 @@ AWS.Blog.commenting('#aws-comment-trigger-2489');
 <table> 
 <tbody> 
 <tr> 
-<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/huynhz.jpeg" alt="" width="120" height="160" /></td> 
-<td style="padding: 0px 30px 0px 0px"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/magnusb.jpeg" alt="" width="119" height="160" /></td> 
+<td style="padding: 0px 30px 0px 0px"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/huynhz.jpeg" /></td> 
+<td style="padding: 0px 30px 0px 0px"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/magnusb.jpeg" /></td> 
 </tr> 
 <tr> 
 <td style="padding: 0px 30px 0px 0px"><b>Huy Huynh</b><br /> Sr. Solutions Architect</td> 
@@ -355,12 +845,12 @@ AWS.Blog.commenting('#aws-comment-trigger-2489');
 <p><span id="more-2489"></span></p> 
 <b>Application Architecture</b> 
 <p>For this example, I use the <a href="https://github.com/spring-projects/spring-petclinic">Spring Pet Clinic</a>, a monolithic Java application for managing a veterinary practice. It is a simple REST&nbsp;API, which allows the client to manage and view Owners, Pets, Vets, and Visits.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png"><img class="aligncenter wp-image-2498 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png" alt="" width="975" height="394" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_1.png" /></a></p> 
 <p>It is a simple three-tier architecture:</p> 
 <li><strong>Client</strong><br /> You simulate this by using curl commands.</li> 
 <li><strong>Web/app server</strong><br /> This is the Java and Spring-based application that you run using the embedded Tomcat. As part of this post, you run this within Docker containers.</li> 
 <li><strong>Database server</strong><br /> This is the relational database for your application that stores information about owners, pets, vets, and visits. For this post, use MySQL RDS.</li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2.png"><img class="aligncenter size-medium wp-image-2499" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2-288x300.png" alt="" width="288" height="300" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/PetClinicApp_2-288x300.png" /></a></p> 
 <p>I decided to not put the database inside a container as containers were designed for applications and are transient in nature. The choice was made even easier because you have a fully managed database service available with <a href="https://aws.amazon.com/rds">Amazon RDS</a>.</p> 
 <p>RDS manages the work involved in setting up a relational database, from provisioning the infrastructure capacity that you request to installing the database software. After your database is up and running, RDS automates common administrative tasks, such as performing backups and patching the software that powers your database. With optional <a href="https://aws.amazon.com/rds/faqs/#36">Multi-AZ deployments</a>, Amazon RDS also manages synchronous data replication across Availability Zones with automatic failover.</p> 
 <b>Walkthrough</b> 
@@ -382,7 +872,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2489');
 <p>You can find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/1_ECS_Java_Spring_PetClinic">1_ECS_Java_Spring_PetClinic</a>.</p> 
 <h3>Container deployment overview</h3> 
 <p>The following diagram is an overview of what the setup looks like for Amazon ECS and related services:</p> 
-<p><img class="aligncenter wp-image-2497 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/ecs-spring-monolithic-containers-1.png" alt="" width="262" height="300" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/ecs-spring-monolithic-containers-1.png" /></p> 
 <p><strong>This setup consists of the following resources:</strong></p> 
 <li>The client application that makes a request to the load balancer.</li> 
 <li>The load balancer that distributes requests across all available ports and instances registered in the application’s target group using round-robin.</li> 
@@ -444,7 +934,7 @@ ENTRYPOINT [ &quot;sh&quot;, &quot;-c&quot;, &quot;java $JAVA_OPTS -Djava.securi
 <li><b>Development velocity</b><br /> In a monolith, adding a new feature can potentially impact every other feature that the monolith contains. On the other hand, a proper microservice architecture has new code for a new feature going into a new service. You can be confident that any code you write won’t impact the existing code at all, unless you explicitly write a connection between two microservices.</li> 
 <p>Find the monolith example at <a href="https://github.com/awslabs/amazon-ecs-java-microservices/tree/master/2_ECS_Java_Spring_PetClinic_Microservices">2_ECS_Java_Spring_PetClinic_Microservices</a>.<br /> You break apart the Spring Pet Clinic application by creating a microservice for each REST&nbsp;API operation, as well as creating one for the system services.</p> 
 <h3>Java code changes</h3> 
-<p>Comparing the project structure between the monolith and the microservices version, you can see that each service is now its own separate build.<br /> <strong>First, the monolith version:</strong><br /> <img class="aligncenter size-full wp-image-2500" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_3.png" alt="" width="379" height="377" /><br /> You can clearly see how each API operation is its own subpackage under the <i>org.springframework.samples.petclinic</i> package, all part of the same monolithic application.<br /> <strong>This changes as you break it apart in the microservices version:</strong><br /> <img class="aligncenter size-full wp-image-2501" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_4.png" alt="" width="392" height="477" /><br /> Now, each API operation is its own separate build, which you can build independently and deploy. You have also duplicated some code across the different microservices, such as the classes under the model subpackage. This is intentional as you don’t want to introduce artificial dependencies among the microservices and allow these to evolve differently for each microservice.</p> 
+<p>Comparing the project structure between the monolith and the microservices version, you can see that each service is now its own separate build.<br /> <strong>First, the monolith version:</strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/11/PetClinicApp_4.png" /><br /> Now, each API operation is its own separate build, which you can build independently and deploy. You have also duplicated some code across the different microservices, such as the classes under the model subpackage. This is intentional as you don’t want to introduce artificial dependencies among the microservices and allow these to evolve differently for each microservice.</p> 
 <p>Also, make the dependencies among the API operations more loosely coupled. In the monolithic version, the components are tightly coupled and use object-based invocation.</p> 
 <p>Here is an example of this from the OwnerController operation, where the class is directly calling PetRepository to get information about pets. PetRepository is the Repository class (Spring data access layer) to the Pet table in the RDS instance for the Pet API:</p> 
 <pre><code class="lang-java">@RestController
@@ -490,7 +980,7 @@ return pet.getVisits();
 }</code></pre> 
 <p>You now have an additional method that calls the API. You are also handing in the service endpoint that should be called, so that you can easily inject dynamic endpoints based on the current deployment.</p> 
 <h3>Container deployment overview</h3> 
-<p>Here is an overview of what the setup looks like for Amazon ECS and the related services:<br /> <img class="aligncenter size-large wp-image-2496" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/ecs-spring-microservice-containers.png" alt="" width="640" height="731" /><br /> <b>This setup consists of the following resources:</b></p> 
+<p>Here is an overview of what the setup looks like for Amazon ECS and the related services:<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/07/10/ecs-spring-microservice-containers.png" /><br /> <b>This setup consists of the following resources:</b></p> 
 <li>The client application that makes a request to the load balancer.</li> 
 <li>The Application Load Balancer that inspects the client request. Based on routing rules, it directs the request to an instance and port from the target group that matches the rule.</li> 
 <li>The Application Load Balancer that has a target group for each microservice. The target groups are used by the corresponding services to register available container instances. Each target group has a path, so when you call the path for a particular microservice, it is mapped to the correct target group. This allows you to use one Application Load Balancer to serve all the different microservices, accessed by the path. For example, https:///owner/* would be mapped and directed to the Owner microservice.</li> 
@@ -829,9 +1319,9 @@ AWS.Blog.commenting('#aws-comment-trigger-2448');
 <table> 
 <tbody> 
 <tr> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg"><img class="aligncenter wp-image-2449 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg" alt="" width="120" height="160" /></a></td> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg"><img class="aligncenter wp-image-2466 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg" alt="" width="119" height="160" /></a></td> 
-<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg"><img class="aligncenter wp-image-2467 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg" alt="" width="119" height="160" /></a></td> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/jicowan.jpeg" /></a></td> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/anshrma.jpeg" /></a></td> 
+<td style="padding: 0px 30px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/dalbhanj.jpeg" /></a></td> 
 </tr> 
 <tr> 
 <td style="padding: 0px 30px 0px 0px"><b>Jeremy Cowan</b><br /> Solutions Architect</td> 
@@ -850,7 +1340,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2448');
 <table> 
 <tbody> 
 <tr> 
-<td><img class="wp-image-2450" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_1-245x300.png" alt="" width="200" height="245" /></td> 
+<td><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_1-245x300.png" /></td> 
 <td><i>A typical blue/green deployment involves shifting traffic between 2 distinct environments.</i></td> 
 </tr> 
 </tbody> 
@@ -873,10 +1363,10 @@ AWS.Blog.commenting('#aws-comment-trigger-2448');
 <h4>Scenario</h4> 
 <p>Two services are defined, each with their own target group registered to the same Application Load Balancer but listening on different ports. Deployment is completed by swapping the listener rules between the two target groups.</p> 
 <p>The second service is deployed with a new target group listening on a different port but registered to the same Application Load Balancer.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2.png"><img class="aligncenter wp-image-2451" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2-300x214.png" alt="" width="400" height="285" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_2-300x214.png" /></a></p> 
 <p>By using 2 listeners, requests to blue services are directed to the target group with the port 80 listener, while requests to the green services are directed to target group with the port 8080 listener.</p> 
 <p>After automated or manual testing, the deployment can be completed by swapping the listener rules on the Application Load Balancer and sending traffic to the green service.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3.png"><img class="aligncenter wp-image-2452" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3-300x221.png" alt="" width="401" height="295" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/30/0617_bluegreenecs_3-300x221.png" /></a></p> 
 <b>Caveats</b> 
 <p>There are a few caveats to be mindful of when using this approach. This method:</p> 
 <li><strong>Assumes that your application code is completely stateless</strong>. Store state outside of the container.</li> 
@@ -918,7 +1408,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2404');
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg"><img class="alignnone size-full wp-image-2406" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg" alt="" width="120" height="160" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/glez.jpg" /></a></p> 
 <p><strong>Constantin Gonzalez is a Principal Solutions Architect at AWS</strong></p> 
 <p>In my free time, I run a small blog that uses Amazon S3 to host static content and Amazon CloudFront to distribute it world-wide. I use a home-grown, static website generator to create and upload my blog content onto S3.</p> 
 <p>My blog uses two S3 buckets: one for staging and testing, and one for production. As a website owner, I want to update the production bucket with all changes from the staging bucket in a reliable and efficient way, without having to create and populate a new bucket from scratch. Therefore, to synchronize files between these two buckets, I use <a href="https://aws.amazon.com/lambda" target="_blank" rel="noopener noreferrer">AWS Lambda</a> and <a href="https://aws.amazon.com/step-functions" target="_blank" rel="noopener noreferrer">AWS Step Functions</a>.</p> 
@@ -946,12 +1436,12 @@ AWS.Blog.commenting('#aws-comment-trigger-2404');
 </ol> 
 <p>In the beginning, you read in the source and destination buckets as parameters and perform basic parameter validation. Then, you operate two separate, independent loops, one for copying missing objects and one for deleting obsolete objects. Each loop is a sequence of Step Functions states that read in chunks of S3 object lists and use the continuation token to decide in a choice state whether to continue the loop or not.</p> 
 <p>This solution is based on the following architecture that uses Step Functions, Lambda, and two S3 buckets:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1.png"><img class="aligncenter size-medium wp-image-2417" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1-300x250.png" alt="" width="300" height="250" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_Arch-1-300x250.png" /></a></p> 
 <p>As you can see, this setup involves no servers, just two main building blocks:</p> 
 <li>Step Functions manages the overall flow of synchronizing the objects from the source bucket with the destination bucket.</li> 
 <li>A set of Lambda functions carry out the individual steps necessary to perform the work, such as validating input, getting lists of objects from source and destination buckets, copying or deleting objects in batches, and so on.</li> 
 <p>To understand the synchronization flow in more detail, look at the Step Functions state machine diagram for this example.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1.png"><img class="aligncenter size-medium wp-image-2415" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1-267x300.png" alt="" width="267" height="300" /></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/21/Step_Functions_S3_Bucket_State-Machine-1-267x300.png" /></a></p> 
 <b id="toc_4">Walkthrough</b> 
 <p>Here’s a detailed discussion of how this works.</p> 
 <p>To follow along, use the code in the <a href="https://github.com/awslabs/sync-buckets-state-machine" target="_blank" rel="noopener noreferrer">sync-buckets-state-machine</a> GitHub repo. The code comes with a ready-to-run deployment script in Python that takes care of all the IAM roles, policies, Lambda functions, and of course the Step Functions state machine deployment using <a href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>, as well as instructions on how to use it.</p> 
@@ -1033,7 +1523,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2430');
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg"><img class="alignnone size-full wp-image-2442" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg" alt="" width="119" height="160" /></a><br /> Juan Villa – Partner Solutions Architect</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg" /></a><br /> Juan Villa – Partner Solutions Architect</p> 
 <p>&nbsp;</p> 
 <p>When most people hear “Java” they think of Java the programming language. Java is a lot more than a programming language, it also implies a larger ecosystem including the Java Virtual Machine (JVM). Java, the programming language, is just one of the many languages that can be compiled to run on the JVM. Some of the most popular JVM languages, other than Java, are Clojure, Groovy, Scala, Kotlin, JRuby, and Jython (see <a href="https://en.wikipedia.org/wiki/List_of_JVM_languages">this link</a> for a list of more JVM languages).</p> 
 <p>Did you know that you can compile and subsequently run all these languages on AWS Lambda?</p> 
@@ -1177,7 +1667,7 @@ AWS.Blog.commenting('#aws-comment-trigger-2369');
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
-<h5>&nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png"><img class="alignnone size-full wp-image-2371" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png" alt="" width="203" height="160" /></a><br /> Stephen Liedig, Solutions Architect</h5> 
+<h5>&nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png" /></a><br /> Stephen Liedig, Solutions Architect</h5> 
 <p>&nbsp;</p> 
 <p>One of the many challenges professional software architects and developers face is how to make cloud-native applications scalable, fault-tolerant, and highly available.</p> 
 <p>Fundamental to your project success is understanding the importance of making systems highly cohesive and loosely coupled. That means considering the multi-dimensional facets of system coupling to support the distributed nature of the applications that you are building for the cloud.</p> 
@@ -1190,11 +1680,11 @@ AWS.Blog.commenting('#aws-comment-trigger-2369');
 <p>Following on the recent topic, <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a>, in this post, I look at some of the ways you can introduce SQS and SNS into your architectures to decouple your components, and show how you can implement them using C#.<span id="more-2369"></span></p> 
 <h3>Walkthrough</h3> 
 <p>To illustrate some of these concepts, consider a web application that processes customer orders. As good architects and developers, you have followed best practices and made your application scalable and highly available. Your solution included implementing load balancing, dynamic scaling across multiple Availability Zones, and persisting orders in a Multi-AZ Amazon RDS database instance, as in the following diagram.</p> 
-<p><img class="aligncenter wp-image-2373 size-large" title="Order_Processing_Application" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/WebApplicationDiagram1-1024x552.png" alt="" width="640" height="345" /><br /> In this example, the application is responsible for handling and persisting the order data, as well as dealing with increases in traffic for popular items.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/WebApplicationDiagram1-1024x552.png" /><br /> In this example, the application is responsible for handling and persisting the order data, as well as dealing with increases in traffic for popular items.</p> 
 <p>One potential point of vulnerability in the order processing workflow is in saving the order in the database. The business expects that every order has been persisted into the database. However, any potential deadlock, race condition, or network issue could cause the persistence of the order to fail. Then, the order is lost with no recourse to restore the order.</p> 
 <p>With good logging capability, you may be able to identify when an error occurred and which customer order failed. This wouldn’t allow you to “restore” the transaction, and by that stage, your customer is no longer your customer.</p> 
 <p>As illustrated in the following diagram, introducing an SQS queue helps improve your ordering application. Using the queue isolates the processing logic into its own component and runs it in a separate process from the web application. This, in turn, allows the system to be more resilient to spikes in traffic, while allowing work to be performed only as fast as necessary in order to manage costs.</p> 
-<p><img class="aligncenter wp-image-2379 size-large" title="Order_Processing_SQS" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/CustomOrderQueue-1024x632.png" alt="" width="640" height="395" /><br /> In addition, you now have a mechanism for persisting orders as messages (with the queue acting as a temporary database), and have moved the scope of your transaction with your database further down the stack. In the event of an application exception or transaction failure, this ensures that the order processing can be retired or redirected to the Amazon SQS Dead Letter Queue (DLQ), for re-processing at a later stage. (See the recent post, <a href="https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/">Using Amazon SQS Dead-Letter Queues to Control Message Failure,</a> for more information on dead-letter queues.)</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/CustomOrderQueue-1024x632.png">Using Amazon SQS Dead-Letter Queues to Control Message Failure,</a> for more information on dead-letter queues.)</p> 
 <h3>Scaling the order processing nodes</h3> 
 <p>This change allows you now to scale the web application frontend independently from the processing nodes. The frontend application can continue to scale based on metrics such as CPU usage, or the number of requests hitting the load balancer. Processing nodes can scale based on the number of orders in the queue. Here is an example of scale-in and scale-out alarms that you would associate with the scaling policy.</p> 
 <p><strong class="lang-bash">Scale-out Alarm</strong></p> 
@@ -1281,7 +1771,7 @@ MessageDeduplicationId = Guid.NewGuid().ToString(&quot;N&quot;)
 <p>Because of the distributed nature of SQS queues, it does not automatically delete the message. Therefore, you must explicitly delete the message from the queue after processing it, using the message <strong>ReceiptHandle</strong> property (see the following code example).</p> 
 <p>However, if at any stage you have an exception, avoid handling it as you normally would. The intention is to make sure that the message ends back on the queue, so that you can gracefully deal with intermittent failures. Instead, log the exception to capture diagnostic information, and swallow it.</p> 
 <p>By not explicitly deleting the message from the queue, you can take advantage of the <strong>VisibilityTimeout</strong> behavior described earlier. Gracefully handle the message processing failure and make the unprocessed message available to other nodes to process.</p> 
-<p><img class="aligncenter wp-image-2378 size-large" title="SQS_queue_settings" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/ConfigureCustomerOrders-1024x732.png" alt="" width="640" height="458" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/ConfigureCustomerOrders-1024x732.png" /></p> 
 <p>In the event that subsequent retries fail, SQS automatically moves the message to the configured DLQ after the configured number of receives has been reached. You can further investigate why the order process failed. Most importantly, the order has not been lost, and your customer is still your customer.</p> 
 <pre><code class="lang-csharp">private static void ProcessMessage(Message message)
 {
@@ -1315,7 +1805,7 @@ Console.WriteLine(&quot;Could not process message due to error. Exception: {0}&q
 <p>One of the benefits of introducing a <a href="https://aws.amazon.com/message-queue/">message queue</a> is that you can accommodate new business requirements without dramatically affecting your application.</p> 
 <p>If, for example, the business decided that all orders placed over $5000 are to be handled as a priority, you could introduce a new “priority order” queue. The way the orders are processed does not change. The only significant change to the processing application is to ensure that messages from the “priority order” queue are processed before the “standard order” queue.</p> 
 <p>The following diagram shows how this logic could be isolated in an “order dispatcher,” whose only purpose is to route order messages to the appropriate queue based on whether the order exceeds $5000. Nothing on the web application or the processing nodes changes other than the target queue to which the order is sent. The rates at which orders are processed can be achieved by modifying the poll rates and scalability settings that I have already discussed.</p> 
-<p><img class="aligncenter wp-image-2377 size-large" title="Order_Dispatcher" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher-1024x534.png" alt="" width="640" height="334" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher-1024x534.png" /></p> 
 <h3>Extending the design pattern with Amazon SNS</h3> 
 <p>Amazon SNS supports reliable <a href="https://aws.amazon.com/pub-sub-messaging/">publish-subscribe (pub-sub) scenarios</a> and push notifications to known endpoints across a wide variety of protocols. It eliminates the need to periodically check or poll for new information and updates. SNS supports:</p> 
 <li>Reliable storage of messages for immediate or delayed processing</li> 
@@ -1324,7 +1814,7 @@ Console.WriteLine(&quot;Could not process message due to error. Exception: {0}&q
 <li>Amazon SQS, HTTP, HTTPS, email, SMS, mobile push, AWS Lambda</li> 
 <p>With these capabilities, you can provide parallel asynchronous processing of orders in the system and extend it to support any number of different business use cases without affecting the production environment. This is commonly referred to as a “fanout” scenario.</p> 
 <p>Rather than your web application pushing orders to a queue for processing, send a notification via SNS. The SNS messages are sent to a topic and then replicated and pushed to multiple SQS queues and Lambda functions for processing.</p> 
-<p><img class="aligncenter wp-image-2376 size-large" title="Order_Dispatcher_Fanout" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher2-1024x718.png" alt="" width="640" height="449" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher2-1024x718.png" /></p> 
 <p>As the diagram above shows, you have the development team consuming “live” data as they work on the next version of the processing application, or potentially using the messages to troubleshoot issues in production.</p> 
 <p>Marketing is consuming all order information, via a Lambda function that has subscribed to the SNS topic, inserting the records into an Amazon Redshift warehouse for analysis.</p> 
 <p>All of this, of course, is happening without affecting your order processing application.</p> 
@@ -1343,371 +1833,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2369');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Secure API Access with Amazon Cognito Federated Identities, Amazon Cognito User Pools, and Amazon API Gateway</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ed Lima</span></span> | on 
-<time property="datePublished" datetime="2017-06-19T06:31:15+00:00">19 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-api-gateway/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/mobile-services/amazon-cognito/" title="View all posts in Amazon Cognito*"><span property="articleSection">Amazon Cognito*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/secure-api-access-with-amazon-cognito-federated-identities-amazon-cognito-user-pools-and-amazon-api-gateway/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image002-1.png"><img class="alignnone size-full wp-image-2274" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image002-1.png" alt="" width="90" height="120" /></a></p> 
-<p>Ed Lima, Solutions Architect</p> 
-<p>&nbsp;</p> 
-<p>Our identities are what define us as human beings. Philosophical discussions aside, it also applies to our day-to-day lives. For instance, I need my work badge to get access to my office building or my passport to travel overseas. My identity in this case is attached to my work badge or passport. As part of the system that checks my access, these documents or objects help define whether I have access to get into the office building or travel internationally.</p> 
-<p>This exact same concept can also be applied to cloud applications and APIs. To provide secure access to your application users, you define who can access the application resources and what kind of access can be granted. <span id="more-2229"></span>Access is based on identity controls that can confirm authentication (AuthN) and authorization (AuthZ), which are different concepts. According to <a href="https://en.wikipedia.org/wiki/Authentication">Wikipedia</a>:</p> 
-<p>&nbsp;</p> 
-<blockquote> 
-<p>“<em>The process of authorization is distinct from that of authentication. Whereas authentication is the process of verifying that “you are who you say you are,” authorization is the process of verifying that “you are permitted to do what you are trying to do.” This does not mean authorization presupposes authentication; an anonymous agent could be authorized to a limited action set.</em>”</p> 
-</blockquote> 
-<p><a href="https://aws.amazon.com/cognito">Amazon Cognito</a> allows building, securing, and scaling a solution to handle user management and authentication, and to sync across platforms and devices. In this post, I discuss the different ways that you can use Amazon Cognito to authenticate API calls to <a href="https://aws.amazon.com/apigateway">Amazon API Gateway</a> and secure access to your own API resources.</p> 
-<p>&nbsp;</p> 
-<b>Amazon Cognito Concepts</b> 
-<p>&nbsp;</p> 
-<p>It’s important to understand that Amazon Cognito provides three different services:</p> 
-<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-identity.html">Amazon Cognito Federated Identities </a></li> 
-<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html">Amazon Cognito User Pools</a></li> 
-<li><a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-sync.html">Amazon Cognito Sync</a></li> 
-<p>Today, I discuss the use of the first two. One service doesn’t need the other to work; however, they can be configured to work together.<br /> &nbsp;</p> 
-<h3>Amazon Cognito Federated Identities</h3> 
-<p>&nbsp;<br /> To use Amazon Cognito Federated Identities in your application, create an identity pool. An identity pool is a store of user data specific to your account. It can be configured to require an identity provider (IdP) for user authentication, after you enter details such as app IDs or keys related to that specific provider.</p> 
-<p>After the user is validated, the provider sends an identity token to Amazon Cognito Federated Identities. In turn, Amazon Cognito Federated Identities contacts the <a href="http://docs.aws.amazon.com/STS/latest/APIReference/Welcome.html">AWS Security Token Service</a> (AWS STS) to retrieve temporary AWS credentials based on a configured, authenticated IAM role linked to the identity pool. The role has appropriate IAM policies attached to it and uses these policies to provide access to other AWS services.</p> 
-<p>Amazon Cognito Federated Identities currently supports the IdPs listed in the following graphic.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/18/CognitoDiagram.png"><img class="aligncenter wp-image-2309 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/18/CognitoDiagram.png" alt="" width="1275" height="714" /></a><br /> 
-<!--more--><br /> &nbsp;</p> 
-<p>In a nutshell, Amazon Cognito Federated Identities can be compared to a token vending machine that uses STS as a backend. The simplified user authentication flow for a given provider is:</p> 
-<ol> 
-<li>App sends user credentials to provider, usually user name and password.</li> 
-<li>After the user is authenticated, the provider sends a valid token back to the application.</li> 
-<li>The application sends the token to the identity pool associated with it.</li> 
-<li>Amazon Cognito Federated Identities validates the token with the IdP.</li> 
-<li>If the token is valid, Amazon Cognito Federated Identities contacts STS to retrieve temporary access credentials (access key, secret key, and session token) based on the authenticated IAM role associated with the identity pool.</li> 
-<li>App contacts the specific AWS service with the temporary credentials.</li> 
-</ol> 
-<p>For more information about the different authentication flows, see the <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html">Authentication Flow</a> topic and the <a href="https://aws.amazon.com/blogs/mobile/understanding-amazon-cognito-authentication-part-4-enhanced-flow/">Understanding Amazon Cognito Authentication Part 4: Enhanced Flow</a> blog post.</p> 
-<p>If you don’t want to use an IdP, Amazon Cognito Federated Identities can also support unauthenticated identities by providing a unique identifier and AWS credentials for users who do not authenticate with an IdP. If your application allows customers to connect as a guest user without logging in, you can enable access for unauthenticated identities. In that case, STS sends temporary credentials based on a specific unauthenticated IAM role with appropriate policies. In these cases, AWS strongly recommends that you stick with the principle of the least privilege, only allowing access to perform a certain task and nothing else.<br /> &nbsp;</p> 
-<h3>Amazon Cognito User Pools</h3> 
-<p>&nbsp;<br /> Amazon Cognito User Pools, on other hand is a full-fledged IdP that you can use to maintain a user directory and add sign-up and sign-in support to your mobile or web application. It uses JSON Web Tokens (JWTs) to authenticate and validate users. JWT is an open standard that defines a compact and self-contained way for securely transmitting information between parties as a JSON object. This information can be verified and trusted because it is digitally signed.</p> 
-<p>Amazon Cognito User Pools and identity pools can be used in conjunction to provide access to your application. An Amazon Cognito User Pools user authenticated with a user name and password can send a JWT to an associated identity pool. In turn, the identity pool sends temporary AWS credentials back to the application to access other AWS services. There’s no difference with the authentication flow mentioned above for other IdPs.</p> 
-<p>To use a metaphor, Amazon Cognito User Pools provided you with a passport (JWT) that you can use at the airport counter to retrieve a boarding pass (access credentials) from an identity pool. With your valid boarding pass, you are then allowed to go to the airport gate and board your flight to the AWS Cloud, which is a fitting analogy for this post. The boarding pass is only valid for a specific time. In application terms, the token (passport) authenticates the user and the issued temporary credentials (boarding pass) authorize the access to connect (board).</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image005.png"><img class="aligncenter wp-image-2276 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image005-300x175.png" alt="" width="300" height="175" /></a></p> 
-<p>&nbsp;</p> 
-<b>A Practical Example – Integrating Amazon Cognito with API Gateway</b> 
-<p>&nbsp;</p> 
-<p>To demonstrate the different ways that Amazon Cognito User Pools and Amazon Cognito Federated Identities can be used to authorize access to your API Gateway API, use a simple AngularV4 single page web application:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image007.png"><img class="aligncenter wp-image-2277 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image007.png" alt="" width="940" height="449" /></a></p> 
-<p>&nbsp;</p> 
-<p>Here’s the basic concept. You have a sample application that authenticates its users with three different IdPs. You also have an API Gateway API with three different resources (paths), one for each type of user. Each provider can only access one API-specific resource/path and cannot access any other resource allocated to other providers.</p> 
-<p>After authentication, the user retrieves specific user attributes such as first name, last name, and email details from their provider and sends a request to the API resource (POST) with the data. After access is granted, an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function is invoked to add the details of the specific user to an <a href="https://aws.amazon.com/dynamodb">Amazon DynamoDB</a> table.</p> 
-<p>You are using a single identity pool and a single API Gateway API to demonstrate that you can secure API access using multiple providers and multiple AuthN/AuthZ options in different ways, but sharing the same resources.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image009.png"><img class="aligncenter wp-image-2278 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image009.png" alt="" width="939" height="342" /></a></p> 
-<p>&nbsp;</p> 
-<p>Both “/google” and “/cip” resources GET/POST methods are configured and secured with IAM authorization. The GET/POST methods in “/cup”, on the other hand, are secured with a user pool authorizer.</p> 
-<p>You can find the application code and a SAM template with instructions to deploy all the backend services in the <strong><a href="https://github.com/awslabs/aws-cognito-apigw-angular-auth">aws-cognito-apigw-angular-auth</a></strong> GitHub repository.</p> 
-<p>There’s yet another way to authenticate API calls with Amazon Cognito: using a Lambda custom authorizer. I’m not covering it in this post; however, the <a href="https://aws.amazon.com/blogs/mobile/integrating-amazon-cognito-user-pools-with-api-gateway/">Integrating Amazon Cognito User Pools with API Gateway</a> post showcases this specific use case.</p> 
-<p>For the first provider, use a public IdP, such as Google. After authenticating with Google credentials, the application collects the user details and then issue a POST call to your API.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image011.png"><img class="aligncenter wp-image-2279 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image011.png" alt="" width="939" height="489" /></a></p> 
-<p>&nbsp;</p> 
-<p>The DynamoDB table is updated with the latest user details and you can retrieve the data about the user making the API call. Notice the ID in blue in the user information card.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image013.png"><img class="aligncenter wp-image-2280 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image013.png" alt="" width="941" height="405" /></a></p> 
-<p>&nbsp;</p> 
-<p>After Amazon Cognito validates a user, it creates a unique identity ID for that user and links it with the specific IdP.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image015.png"><img class="aligncenter size-full wp-image-2281" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image015.png" alt="" width="572" height="347" /></a></p> 
-<p>&nbsp;</p> 
-<p>API Gateway is able to identify the identity ID based on the IAM credentials sent to the API method using the variable <em>$context.identity.cognitoIdentityId</em> in the integration request. A body mapping template adds the ID data automatically to the payload sent to the Lambda function, as follows:</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-json">#set($inputRoot = $input.path('$'))
-{
-&quot;operation&quot;: &quot;create&quot;,
-&quot;payload&quot;: {
-&quot;Item&quot; : {
-&quot;userId&quot; : &quot;$context.identity.cognitoIdentityId&quot;,
-&quot;name&quot; : &quot;$inputRoot.name&quot;,
-&quot;surname&quot; : &quot;$inputRoot.surname&quot;,
-&quot;email&quot; : &quot;$inputRoot.email&quot;,
-&quot;provider&quot;: &quot;Google&quot;
-}
-}
-}
-</code></pre> 
-<p>&nbsp;</p> 
-<p>Lambda processes the data and sends it in a proper format to DynamoDB, which uses the identity ID as a hash key. Due to the random and unique nature of the ID, it’s perfect to be used for querying the table.</p> 
-<p>To guarantee that the Google users can only access their specific allocated API resources, attach the following authenticated role to the identity pool. The users assume this IAM role when validated and it explicitly allows only GET (read) and POST (write) access to the API resource “/google”:</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;execute-api:Invoke&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/GET/google&quot;,
-&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/POST/google&quot;
-]
-}
-]
-}
-</code></pre> 
-<p>&nbsp;</p> 
-<p>It’s time to sign in with the second user. This user is authenticated using Amazon Cognito User Pools as IdP. A JWT is used to retrieve temporary AWS credentials from the associated identity pool, same as is used by the Google provider.</p> 
-<p>Using the Test Access card, you can issue API calls to each one of the three different resources to test the credentials. For instance, if the user tries to make an API call to “/cip” using the IAM credentials provided by Amazon Cognito, the access is granted (Status 200). However, if you try to access the “/google” resource, you get access denied (Status 403). You can confirm using the browser developer tools.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image017.png"><img class="aligncenter size-full wp-image-2282" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image017.png" alt="" width="941" height="552" /></a></p> 
-<p>&nbsp;</p> 
-<p>Even if you have the same identity pool in use by different providers (Google and Amazon Cognito User Pools), you can associate another IAM role to a group with Amazon Cognito User Pools. Because the user “jdoe” is part of that group, it inherits the IAM role association.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image019.png"><img class="aligncenter size-full wp-image-2283" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image019.png" alt="" width="454" height="331" /></a></p> 
-<p>&nbsp;</p> 
-<p>The IAM role explicitly allows only GET (read) and POST (write) access to the API resource “/cip”, nothing else.</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;execute-api:Invoke&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/GET/cip&quot;,
-&quot;arn:aws:execute-api:us-east-1:123412341234:abcde12345/*/POST/cip&quot;
-]
-}
-]
-}
-</code></pre> 
-<p>&nbsp;</p> 
-<p>The role details are passed in the JWT itself. For that reason, the identity pool allows the role to be assumed. The default authenticated role for the identity pool needs to be DENIED or else your user would also have access to the “/google” resource.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image021.png"><img class="aligncenter size-full wp-image-2284" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image021.png" alt="" width="796" height="512" /></a></p> 
-<p>&nbsp;</p> 
-<p>For the third and final user, skip Amazon Cognito Federated Identities altogether and authenticate the user from the Amazon Cognito User Pool directly to API Gateway using a Cognito user pool authorizer. You can find more information on my previous blog post, <a href="https://aws.amazon.com/blogs/compute/authorizing-access-through-a-proxy-resource-to-amazon-api-gateway-and-aws-lambda-using-amazon-cognito-user-pools/">Authorizing Access Through a Proxy Resource to Amazon API Gateway and AWS Lambda Using Amazon Cognito User Pools</a>.</p> 
-<p>The user can only access the API resource assigned to the user pool and it’s denied for the other API paths:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image023-1.png"><img class="aligncenter size-full wp-image-2285" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image023-1.png" alt="" width="940" height="624" /></a></p> 
-<p>&nbsp;</p> 
-<p>The ID Token (JWT) is sent directly to API Gateway and there’s no IAM role involved in the user validation. The ID in the user information card looks different compared to the previous users. As no cognito identity ID is generated in this scenario, you need another type of unique ID for the user.</p> 
-<p>Test the JWT generated in this particular user session in the API Gateway console, and retrieve user attributes and claims:</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image025.png"><img class="aligncenter size-full wp-image-2286" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image025.png" alt="" width="926" height="423" /></a></p> 
-<p>&nbsp;</p> 
-<p>The “sub” attribute is a unique identifier generated by Amazon Cognito User Pools and can be used to track each user from the user pool. You use this attribute as a hash key for the user pool users in the DynamoDB table. Use the variable <em>$context.authorizer.claims.sub</em> in the integration request, and the following body mapping template adds the ID data automatically to the payload sent to the Lambda function:</p> 
-<p>&nbsp;</p> 
-<pre><code class="lang-json">#set($inputRoot = $input.path('$'))
-{
-&quot;operation&quot;: &quot;create&quot;,
-&quot;payload&quot;: {
-&quot;Item&quot; : {
-&quot;userId&quot; : &quot;$context.authorizer.claims.sub&quot;,
-&quot;name&quot; : &quot;$context.authorizer.claims.given_name&quot;,
-&quot;surname&quot; : &quot;$context.authorizer.claims.family_name&quot;,
-&quot;email&quot; : &quot;$context.authorizer.claims.email&quot;,
-&quot;provider&quot; : &quot;Cognito User Pools&quot;
-}
-}
-}
-</code></pre> 
-<p>&nbsp;</p> 
-<p>Check the DynamoDB console and confirm that all users were successfully added to the table with the API calls. As each user can only add or retrieve data from their specific API resource and only using their own UserID, the data is unavailable to other users.</p> 
-<p>&nbsp;</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image027.png"><img class="aligncenter size-full wp-image-2287" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/image027.png" alt="" width="684" height="346" /></a></p> 
-<p>&nbsp;</p> 
-<b>Summary</b> 
-<p>&nbsp;</p> 
-<p>Amazon Cognito provide a rich set of features to authenticate and authorize users. You can take advantage of the built-in flexibility and different options to secure access to your API Gateway API integrating with multiple IdPs.</p> 
-<p>There are distinct and specific use cases to authenticate, secure, and provide access to your API leveraging the integration between Amazon Cognito and API Gateway, depending on the work load and implementation of your application. I covered a couple of different scenarios in this post:</p> 
-<li><strong>Your users are defined and authenticated by an external or public IdP.</strong></li> 
-<p>You used Google for your sample application but it could be Facebook, Twitter, Amazon, OpenID Connect, your own developer IdP, or even an enterprise-level SAML provider, such as Active Directory. Use any IdP that can seamlessly integrate with Amazon Cognito Federated Identities linked with AWS Identity and Access Management roles.</p> 
-<li><strong>Your users are defined in your own IdP powered by Amazon Cognito User Pools, leveraging aditional secure access with IAM permissions.</strong></li> 
-<p>You want to have additional access granularity and security by integrating the authentication with IAM role-based access controls and Amazon Cognito User Pools groups.</p> 
-<li><strong>Your users are defined in your own IdP powered by Amazon Cognito User Pools, leveraging secure JWTs for authentication.</strong></li> 
-<p>You want to authenticate your API calls directly and seamlessly using these tokens and you are not interested in using IAM integration to authorize access with IAM roles.</p> 
-<p>With Amazon Cognito User Pools, there’s no need to worry about the undifferentiated heavy lifting of maintaining your own IdP servers, allowing you to focus on application logic instead. It also gives you more control around your users, groups, applications, and attributes with no dependency on an external public provider.</p> 
-<p>It’s a great balance between control and ease of use as it integrates seamlessly with identity pools for specific scenarios that require the additional use of IAM roles for granular security but can also work directly with JWTs. In addition to all these advantages, you can also integrate Lambda triggers for different sign-in, sign-up, confirmation, validation, and verification workflows to customize and adapt the user identification process even further.</p> 
-<p>The integration between Amazon Cognito and API Gateway allows great flexibility such that you can implement these different authentication scenarios separately or even use all of them in conjunction (as demonstrated with the sample web application). You can provide access to the different API users and resources based on a specific IdP or multiple providers of your choice.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/apigateway/" rel="tag">apigateway</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cognito/" rel="tag">cognito</a>, <a href="https://aws.amazon.com/blogs/compute/tag/dynamodb/" rel="tag">DynamoDB</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a></span> 
-</footer> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Using Amazon SQS Dead-Letter Queues to Control Message Failure</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
-<time property="datePublished" datetime="2017-06-07T13:18:10+00:00">07 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2216" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2216&amp;disqus_title=Using+Amazon+SQS+Dead-Letter+Queues+to+Control+Message+Failure&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-amazon-sqs-dead-letter-queues-to-control-message-failure/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2216');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot.jpg"><img class="alignnone wp-image-2218 size-thumbnail" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/07/headshot-150x150.jpg" alt="" width="150" height="150" /></a><strong><br /> Michael G. Khmelnitsky, Senior Programmer Writer</strong></h5> 
-<p>&nbsp;</p> 
-<p>Sometimes, messages can’t be processed because of a variety of possible issues, such as erroneous conditions within the producer or consumer application. For example, if a user places an order within a certain number of minutes of creating an account, the producer might pass a message with an empty string instead of a customer identifier. Occasionally, producers and consumers might fail to interpret aspects of the protocol that they use to communicate, causing message corruption or loss. Also, the consumer’s hardware errors might corrupt message payload. For these reasons, messages that can’t be processed in a timely manner are delivered to a <em>dead-letter message queue</em>.<span id="more-2216"></span></p> 
-<p>The recent post <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a> gives an overview of messaging in the microservice architecture of modern applications. This post explains how and when you should use dead-letter queues to gain better control over message handling in your applications. It also offers some resources for configuring a dead-letter <a href="https://aws.amazon.com/message-queue/">message queue in Amazon Simple Queue Service (SQS)</a>.</p> 
-<h3>What are the benefits of dead-letter queues?</h3> 
-<p>The main task of a dead-letter queue is handling message failure. A dead-letter queue lets you set aside and isolate messages that can’t be processed correctly to determine why their processing didn’t succeed. Setting up a dead-letter queue allows you to do the following:</p> 
-<li>Configure an alarm for any messages delivered to a dead-letter queue.</li> 
-<li>Examine logs for exceptions that might have caused messages to be delivered to a dead-letter queue.</li> 
-<li>Analyze the contents of messages delivered to a dead-letter queue to diagnose software or the producer’s or consumer’s hardware issues.</li> 
-<li>Determine whether you have given your consumer sufficient time to process messages.</li> 
-<h3>How do high-throughput, unordered queues handle message failure?</h3> 
-<p>High-throughput, unordered queues (sometimes called <em>standard</em> or <em>storage queues</em>) keep processing messages until the expiration of the retention period. This helps ensure continuous processing of messages, which minimizes the chances of your queue being blocked by messages that can’t be processed. It also ensures fast recovery for your queue.</p> 
-<p>In a system that processes thousands of messages, having a large number of messages that the consumer repeatedly fails to acknowledge and delete might increase costs and place extra load on the hardware. Instead of trying to process failing messages until they expire, it is better to move them to a dead-letter queue after a few processing attempts.</p> 
-<p><strong>Note:</strong> This queue type often allows a high number of in-flight messages. If the majority of your messages can’t be consumed and aren’t sent to a dead-letter queue, your rate of processing valid messages can slow down. Thus, to maintain the efficiency of your queue, you must ensure that your application handles message processing correctly.</p> 
-<h3>How do FIFO queues handle message failure?</h3> 
-<p>FIFO (first-in-first-out) queues (sometimes called <em>service bus queues</em>) help ensure exactly-once processing by consuming messages in sequence from a <em>message group</em>. Thus, although the consumer can continue to retrieve ordered messages from another message group, the first message group remains unavailable until the message blocking the queue is processed successfully.</p> 
-<p><strong>Note:</strong> This queue type often allows a lower number of in-flight messages. Thus, to help ensure that your FIFO queue doesn’t get blocked by a message, you must ensure that your application handles message processing correctly.</p> 
-<h3>When should I use a dead-letter queue?</h3> 
-<li><strong>Do</strong> use dead-letter queues with high-throughput, unordered queues. You should always take advantage of dead-letter queues when your applications don’t depend on ordering. Dead-letter queues can help you troubleshoot incorrect message transmission operations. <strong>Note:</strong> Even when you use dead-letter queues, you should continue to monitor your queues and retry sending messages that fail for transient reasons.</li> 
-<li><strong>Do</strong> use dead-letter queues to decrease the number of messages and to reduce the possibility of exposing your system to <em>poison-pill messages</em> (messages that can be received but can’t be processed).</li> 
-<li><strong>Don’t</strong> use a dead-letter queue with high-throughput, unordered queues when you want to be able to keep retrying the transmission of a message indefinitely. For example, don’t use a dead-letter queue if your program must wait for a dependent process to become active or available.</li> 
-<li><strong>Don’t</strong> use a dead-letter queue with a FIFO queue if you don’t want to break the exact order of messages or operations. For example, don’t use a dead-letter queue with instructions in an Edit Decision List (EDL) for a video editing suite, where changing the order of edits changes the context of subsequent edits.</li> 
-<h3>How do I get started with dead-letter queues in Amazon SQS?</h3> 
-<p>Amazon SQS is a fully managed service that offers reliable, highly scalable hosted queues for exchanging messages between applications or microservices. Amazon SQS moves data between distributed application components and helps you decouple these components. It supports both <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html">standard queues</a> and <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html">FIFO queues</a>. To configure a queue as a dead-letter queue, you can use the <a href="http://console.aws.amazon.com/sqs/home">AWS Management Console</a> or the Amazon SQS <code class="lang-setqueueattributes">SetQueueAttributes</code> API action.</p> 
-<p>To get started with dead-letter queues in Amazon SQS, see the following topics in the <em>Amazon SQS Developer Guide</em>:</p> 
-<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/Welcome.html">What is Amazon SQS?</a></li> 
-<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html">Using Amazon SQS Dead-Letter Queues</a></li> 
-<li><a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/MonitorSQSwithCloudWatch.html">Monitoring Amazon SQS Using CloudWatch</a></li> 
-<p>To start working with dead-letter queues programmatically, see the following resources:</p> 
-<li>Java: <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue.html#configure-dead-letter-queue-java">Configure a Dead-Letter Queue with the Amazon SQS API</a></li> 
-<li>Java: <a href="https://aws.amazon.com/blogs/developer/using-amazon-sqs-dead-letter-queues-2/">Using Amazon SQS Dead-Letter Queues</a></li> 
-<li>C#: <a href="https://aws.amazon.com/blogs/developer/using-amazon-sqs-dead-letter-queues/">Using Amazon SQS Dead-Letter Queues</a></li> 
-<li>Lambda: <a href="https://aws.amazon.com/blogs/compute/robust-serverless-application-design-with-aws-lambda-dlq/">Robust Serverless Application Design with AWS Lambda Dead-Letter Queues</a></li> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-queue-service/" rel="tag">Amazon Simple Queue Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sqs/" rel="tag">Amazon SQS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloud-messaging/" rel="tag">cloud messaging</a>, <a href="https://aws.amazon.com/blogs/compute/tag/decoupling/" rel="tag">decoupling</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambda/" rel="tag">lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-queues/" rel="tag">message queues</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a>, <a href="https://aws.amazon.com/blogs/compute/tag/sqs/" rel="tag">sqs</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2216');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Powering your Amazon ECS Cluster with Amazon EC2 Spot Instances</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> and 
-<span property="author" typeof="Person"><span property="name">Sebastian Dreisch</span></span> | on 
-<time property="datePublished" datetime="2017-06-06T16:21:58+00:00">06 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ec2-spot/" title="View all posts in Amazon EC2 Spot"><span property="articleSection">Amazon EC2 Spot</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/powering-your-amazon-ecs-cluster-with-amazon-ec2-spot-instances/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2071" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2071&amp;disqus_title=Powering+your+Amazon+ECS+Cluster+with+Amazon+EC2+Spot+Instances&amp;disqus_url=https://aws.amazon.com/blogs/compute/powering-your-amazon-ecs-cluster-with-amazon-ec2-spot-instances/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2071');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>This post was graciously contributed by:</p> 
-<table> 
-<tbody> 
-<tr> 
-<td style="padding: 0px 15px 0px 0px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/ChadS.jpeg"><img class="size-full wp-image-2197" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/ChadS.jpeg" alt="Chad Schmutzer, Solutions Architect" width="120" height="160" /></a></td> 
-<td style="padding: 0px 0px 0px 15px"><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/ShawnOConner.jpeg"><img class="wp-image-2198 size-full" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/ShawnOConner.jpeg" alt="Shawn O'Conner, Enterprise Solutions Architect" width="119" height="160" /></a></td> 
-</tr> 
-<tr> 
-<td style="padding: 0px 15px 0px 0px"><b>Chad Schmutzer</b><br /> Solutions Architect</td> 
-<td style="padding: 0px 0px 0px 15px"><b>Shawn O’Connor</b><br /> Solutions Architect</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>Today <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-ecs-adds-console-support-for-spot-fleet-creation/">we are excited to announce</a> that Amazon EC2 Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>) now supports the ability to launch your ECS cluster on <a href="https://aws.amazon.com/ec2/spot">Amazon EC2 Spot Instances</a> directly from the ECS console.</p> 
-<p>Spot Instances allow you to bid on spare Amazon EC2 compute capacity. Spot Instances typically cost 50-90% less than On-Demand Instances. Powering your ECS cluster with Spot Instances lets you reduce the cost of running your existing containerized workloads, or increase your compute capacity by two to ten times while keeping the same budget. Or you could do a combination of both!</p> 
-<p><span id="more-2071"></span></p> 
-<p>Using Spot Instances, you specify the price you are willing to pay per instance-hour. Your Spot Instance runs whenever your bid exceeds the current Spot&nbsp;price. If your instance is reclaimed due to an increase in the Spot price, you are not charged for the partial hour that your instance has run.</p> 
-<p>The ECS console uses <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet.html">Spot Fleet</a> to deploy your Spot Instances. Spot Fleet attempts to deploy the target capacity you request (expressed in terms of instances or a vCPU count) for your containerized application by launching Spot Instances that result in the best prices for you. If your Spot Instances are reclaimed due to a change in Spot prices or available capacity, Spot Fleet also attempts to maintain its target capacity.</p> 
-<p>Containers are a natural fit for the diverse pool of resources that Spot Fleet thrives on. Spot Fleet enable you to provision capacity across multiple Spot Instance pools (combinations of instance types and Availability Zones), which helps improve your application’s availability and reduce operating costs of the fleet over time. Combining the extensible and flexible container placement system provided by ECS with Spot Fleet allows you to efficiently deploy containerized workloads and easily manage clusters at any scale for a fraction of the cost.</p> 
-<p>Previously, deploying your ECS cluster on Spot Instances was a manual process. In this post, we show you how to achieve high availability, scalability, and cost savings for your container workloads by using the new Spot Fleet integration in the ECS console. We also show you how to build your own ECS cluster on Spot Instances using AWS CloudFormation.</p> 
-<b>Creating an ECS cluster running on Spot Instances</b> 
-<p>You can create an ECS cluster using the AWS Management Console.</p> 
-<ol> 
-<li>Open the Amazon ECS console at <a href="https://console.aws.amazon.com/ecs/">https://console.aws.amazon.com/ecs/</a>.</li> 
-<li>In the navigation pane, choose&nbsp;<strong>Clusters</strong>.</li> 
-<li>On the&nbsp;<strong>Clusters</strong>&nbsp;page, choose&nbsp;<strong>Create Cluster</strong>.</li> 
-<li>For&nbsp;<strong>Cluster name</strong>, enter a name.</li> 
-<li>In <strong>Instance configuration</strong>, for <strong>Provisioning model</strong>, choose <strong>Spot</strong>.</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-1.png"><img class="aligncenter wp-image-2186" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-1.png" alt="ECS Create Cluster - Spot Fleet" width="700" height="345" /></a></p> 
-<b>Choosing an allocation strategy</b> 
-<p>The two available Spot Fleet allocation strategies are&nbsp;Diversified and Lowest price.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-2.png"><img class="aligncenter size-full wp-image-2187" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-2.png" alt="ECS Spot Allocation Strategies" width="572" height="122" /></a></p> 
-<p>The allocation strategy you choose for your Spot Fleet determines how it fulfills your Spot Fleet request from the possible Spot Instance pools. When you use the diversified strategy, the Spot Instances are distributed across all pools. When you use the lowest price strategy, the Spot Instances come from the pool with the lowest price specified in your request.</p> 
-<p>Remember that each instance type (the instance size within each instance family, e.g., c4.4xlarge), in each Availability Zone, in every region, is a separate pool of capacity, and therefore a separate Spot market. By diversifying across as many different instance types and Availability Zones as possible, you can improve the availability of your fleet. You also make your fleet less sensitive to increases in the Spot price in any one pool over time.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-3.png"><img class="aligncenter size-full wp-image-2188" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-3.png" alt="Spot Fleet Market" width="366" height="448" /></a></p> 
-<p>You can select up to six EC2 instance types to use for your Spot Fleet. In this example, we’ve selected m3, m4, c3, c4, r3, and r4 instance types of size xlarge.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-4.png"><img class="aligncenter wp-image-2189" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/06.06-Spot-4.png" alt="Spot Instance Selection" width="400" height="302" /></a></p> 
-<p>You need to enter a bid for your instances. Typically, bidding at or near the On-Demand Instance price is a good starting point. Your bid is the maximum price that you are willing to pay for instance types in that Spot pool. While the Spot&nbsp;price is at or below your bid, you pay the Spot&nbsp;price. Bidding lower ensures that you have lower costs, while bidding higher reduces the probability of interruption.</p> 
-<p>Configure the number of instances to have in your cluster. Spot Fleet attempts to launch the number of Spot Instances that are required to meet the target capacity specified in your request. The Spot Fleet also attempts to maintain its target capacity if your Spot Instances are reclaimed due to a change in Spot prices or available capacity.</p> 
-<p>The latest <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html">ECS–optimized AMI</a> is used for the instances when they are launched.</p> 
-<p>Configure your storage and network settings. To enable diversification and high availability, be sure to select subnets in multiple Availability Zones. You can’t select multiple subnets in the same Availability Zone in a single Spot Fleet.</p> 
-<p>The ECS container agent makes calls to the ECS API actions on your behalf. Container instances that run the agent require the ecsInstanceRole IAM policy and role for the service to know that the agent belongs to you. If you don’t have the ecsInstanceRole already, you can create one using the ECS console.</p> 
-<p>If you create a managed compute environment that uses Spot Fleet, you must create a role that grants the Spot Fleet permission to bid on, launch, and terminate instances on your behalf. You can also create this role using the ECS console.</p> 
-<p>That’s it! In the ECS console, choose <strong>Create</strong> to spin up your new ECS cluster running on Spot Instances.</p> 
-<b>Using AWS CloudFormation to deploy your ECS cluster on Spot Instances</b> 
-<p>We have also published a reference architecture AWS CloudFormation template that demonstrates how to easily launch a CloudFormation stack and deploy your ECS cluster on Spot Instances.</p> 
-<p>The CloudFormation template includes the Spot Instance termination notice script mentioned earlier, as well as some additional logging and other example features to get you started quickly. You can find the CloudFormation template in the <a href="https://github.com/awslabs/ec2-spot-labs/tree/master/ecs-ec2-spot-fleet">Amazon EC2 Spot Instances GitHub repo</a>.</p> 
-<p>Give it a try and customize it as needed for your environment!</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/0606-Spot-5.jpg"><img class="size-large wp-image-2194 aligncenter" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/0606-Spot-5-1024x709.jpg" alt="Spot Fleet Architecture" width="640" height="443" /></a></p> 
-<b>Handling termination</b> 
-<p>With Spot Instances, you never pay more than the price you specified. If the Spot price exceeds your bid price for a given instance, it is terminated automatically for you.</p> 
-<p>The best way to protect against Spot Instance interruption is to architect your containerized application to be fault-tolerant. In addition, you can take advantage of a feature called Spot Instance termination notices, which provides a two-minute warning before EC2 must terminate your Spot Instance.</p> 
-<p>This warning is made available to the applications on your Spot Instance using an item in the instance metadata. When you deploy your ECS cluster on Spot Instances using the console, AWS installs a script that checks every 5 seconds for the Spot Instance termination notice. If the notice is detected, the script immediately updates the container instance state to <strong>DRAINING</strong>.</p> 
-<p>A simplified version of the Spot Instance termination notice script is as follows:</p> 
-<pre><code class="lang-bash">#!/bin/bash
-while sleep 5; do
-if [ -z $(curl -Isf http://169.254.169.254/latest/meta-data/spot/termination-time) ]; then
-/bin/false
-else
-ECS_CLUSTER=$(curl -s http://localhost:51678/v1/metadata | jq .Cluster | tr -d \&quot;)
-CONTAINER_INSTANCE=$(curl -s http://localhost:51678/v1/metadata \
-| jq .ContainerInstanceArn | tr -d \&quot;)
-aws ecs update-container-instances-state --cluster $ECS_CLUSTER \
---container-instances $CONTAINER_INSTANCE --status DRAINING
-fi
-done</code></pre> 
-<p>When you set a container instance to <strong>DRAINING</strong>, ECS prevents new tasks from being scheduled for placement on the container instance. If the resources are available, replacement service tasks are started on other container instances in the cluster. Container instance draining enables you to remove a container instance from a cluster without impacting tasks in your cluster. Service tasks on the container instance that are in the <strong>PENDING</strong> state are stopped immediately.</p> 
-<p>Service tasks on the container instance that are in the <strong>RUNNING</strong> state are stopped and replaced according to the service’s deployment configuration parameters, minimumHealthyPercent and maximumPercent.</p> 
-<b>ECS on Spot Instances in action<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/mapboxv1.jpg"><img class="alignright wp-image-2190 size-medium" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/05/mapboxv1-300x150.jpg" alt="" width="300" height="150" /></a></b> 
-<p>Want to see how customers are already powering their ECS clusters on Spot Instances? Our friends at <a href="https://www.mapbox.com/">Mapbox</a> are doing just that.</p> 
-<p>Mapbox&nbsp;is a platform for designing and publishing custom maps. The company uses ECS to power their entire batch processing architecture to collect and process over 100 million miles of sensor data per day that they use for powering their maps. They also optimize their batch processing architecture on ECS using Spot Instances.</p> 
-<p>The Mapbox platform powers over 5,000 apps and reaches more than 200 million users each month. Its backend runs on ECS, allowing it to serve more than 1.3 billion requests per day. To learn more about their recent migration to ECS, read their recent blog post,&nbsp;<a href="https://www.mapbox.com/blog/switch-to-ecs/">We Switched to Amazon ECS, and You Won’t Believe What Happened Next</a>. Then, in their follow-up blog post, <a href="https://www.mapbox.com/blog/caches-to-cash/">Caches to Cash</a>, learn how they are running their entire platform on Spot Instances, allowing them to save upwards of 50–90% on their EC2 costs.</p> 
-<b>Conclusion</b> 
-<p>We hope that you are as excited as we are about running your containerized applications at scale and cost effectively using Spot Instances. For more information, see the following pages:</p> 
-<li><a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_GetStarted.html">Getting Started with Amazon ECS</a></li> 
-<li><a href="https://aws.amazon.com/ec2/spot/getting-started/">Getting Started with Amazon EC2 Spot Instances</a></li> 
-<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/GettingStarted.html">Getting Started with AWS CloudFormation</a></li> 
-<p>If you have comments or suggestions, please comment below.</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/docker/" rel="tag">Docker</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ec2/" rel="tag">EC2</a>, <a href="https://aws.amazon.com/blogs/compute/tag/ecs/" rel="tag">ECS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/spot/" rel="tag">spot</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2071');
 });
 </script> 
 </article> 
