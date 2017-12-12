@@ -191,6 +191,108 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/Annotated-Flow-FINAL1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Automatically Revert and Receive Notifications About Changes to Your Amazon VPC Security Groups</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Rob Barnes</span></span> | on 
+<time property="datePublished" datetime="2017-10-11T06:50:58+00:00">11 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-vpc-networking-content-delivery/" title="View all posts in Amazon VPC*"><span property="articleSection">Amazon VPC*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-automatically-revert-and-receive-notifications-about-changes-to-your-amazon-vpc-security-groups/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5393" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=5393&amp;disqus_title=How+to+Automatically+Revert+and+Receive+Notifications+About+Changes+to+Your+Amazon+VPC+Security+Groups&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-automatically-revert-and-receive-notifications-about-changes-to-your-amazon-vpc-security-groups/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5393');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In a previous <a href="https://aws.amazon.com/blogs/security/how-to-monitor-aws-account-configuration-changes-and-api-calls-to-amazon-ec2-security-groups/" target="_blank" rel="noopener noreferrer">AWS Security Blog post</a>, Jeff Levine showed how you can monitor changes to your <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> security groups. The methods he describes in that post are examples of <em>detective controls</em>, which can help you determine when changes are made to security controls on your AWS resources.</p> 
+<p>In this post, I take that approach a step further by introducing an example of a <em>responsive control</em>, which you can use to automatically respond to a detected security event by applying a chosen security mitigation. I demonstrate a solution that continuously monitors changes made to an <a href="https://aws.amazon.com/vpc/" target="_blank" rel="noopener noreferrer">Amazon VPC</a> <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_SecurityGroups.html" target="_blank" rel="noopener noreferrer">security group</a>, and if a new ingress rule (the same as an inbound rule) is added to that security group, the solution removes the rule and then sends you a notification after the changes have been automatically reverted.</p> 
+<h3>The scenario</h3> 
+<p>Let’s say you want to reduce your infrastructure complexity by <a href="https://aws.amazon.com/blogs/mt/replacing-a-bastion-host-with-amazon-ec2-systems-manager/" target="_blank" rel="noopener noreferrer">replacing your Secure Shell (SSH) bastion hosts</a> with <a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer">Amazon EC2 Systems Manager</a> (SSM). SSM allows you to run commands on your hosts remotely, removing the need to manage bastion hosts&nbsp;or rely on SSH to execute commands. To support this objective, you must prevent your staff members from opening SSH ports to your web server’s Amazon VPC security group. If one of your staff members does modify the VPC security group to allow SSH access, you want the change to be automatically reverted and then receive a notification that the change to the security group was automatically reverted. If you are not yet familiar with security groups, see <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_SecurityGroups.html" target="_blank" rel="noopener noreferrer">Security Groups for Your VPC</a> before reading the rest of this post.<span id="more-5393"></span></p> 
+<h3>Solution overview</h3> 
+<p>This solution begins with a <em>directive</em> <em>control</em> to mandate that no web server should be accessible using SSH. The directive control is enforced using a <em>preventive</em> <em>control,</em> which is implemented using a security group rule that prevents ingress from port 22 (typically used for SSH). The detective control is a “listener” that identifies any changes made to your security group. Finally, the responsive control reverts changes made to the security group and then sends a notification of this security mitigation.</p> 
+<p>The detective control, in this case, is an <a href="https://aws.amazon.com/cloudwatch/" target="_blank" rel="noopener noreferrer">Amazon CloudWatch</a> event that detects changes to your security group and triggers the responsive control, which in this case is an <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> function. I use <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> to simplify the deployment.</p> 
+<p>The following diagram shows the architecture of this solution.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/09/Annotated-Flow-FINAL.png" /></p> 
+<p>Here is how the process works:</p> 
+<ol> 
+<li>Someone on your staff adds a new ingress rule to your security group.</li> 
+<li>A CloudWatch event that continually monitors changes to your security groups detects the new ingress rule and invokes a designated Lambda function (with Lambda, you can run code without provisioning or managing servers).</li> 
+<li>The Lambda function evaluates the event to determine whether you are monitoring this security group and reverts the new security group ingress rule.</li> 
+<li>Finally, the Lambda function sends you an email to let you know what the change was, who made it, and that the change was reverted.</li> 
+</ol> 
+<h3>Deploy the solution by using CloudFormation</h3> 
+<p>In this section, you will click the <strong>Launch Stack</strong> button shown below to launch the CloudFormation stack and deploy the solution.</p> 
+<h4>Prerequisites</h4> 
+<li>You must have <a href="https://aws.amazon.com/cloudtrail/" target="_blank" rel="noopener noreferrer">AWS CloudTrail</a> already enabled in the AWS Region where you will be deploying the solution. CloudTrail lets you log, continuously monitor, and retain events related to API calls across your AWS infrastructure. See <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-getting-started.html" target="_blank" rel="noopener noreferrer">Getting Started with CloudTrail</a> for more information.</li> 
+<li>You must have a default VPC in the region in which you will be deploying the solution. AWS accounts have one default VPC per AWS Region. If you’ve deleted your VPC, see <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/default-vpc.html#create-default-vpc" target="_blank" rel="noopener noreferrer">Creating a Default VPC</a> to recreate it.</li> 
+<h4>Resources that this solution creates</h4> 
+<p>When you launch the CloudFormation stack, it creates the following resources:</p> 
+<li>A sample VPC security group in your default VPC, which is used as the target for reverting ingress rule changes.</li> 
+<li>A CloudWatch event rule that monitors changes to your AWS infrastructure.</li> 
+<li>A Lambda function that reverts changes to the security group and sends you email notifications.</li> 
+<li>A permission that allows CloudWatch to invoke your Lambda function.</li> 
+<li>An <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) role with limited privileges that the Lambda function assumes when it is executed.</li> 
+<li>An <a href="http://aws.amazon.com/sns/" target="_blank" rel="noopener noreferrer">Amazon SNS</a> topic to which the Lambda function publishes notifications.</li> 
+<h4>Launch the CloudFormation stack</h4> 
+<p>The link in this section uses the <span style="font-family: courier">us-east-1</span> Region (the US East [N. Virginia] Region). Change the region if you want to use this solution in a different region. See <a href="http://docs.aws.amazon.com/awsconsolehelpdocs/latest/gsg/getting-started.html#select-region" target="_blank" rel="noopener noreferrer">Selecting a Region</a> for more information about changing the region.</p> 
+<p>To deploy the solution, click the following <strong>Launch Stack</strong> button to launch the stack.&nbsp;After you click the button, you must sign in to the AWS Management Console if you have not already done so.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=security-group-change-auto-response&amp;templateURL=https://s3.amazonaws.com/awsiammedia/public/sample/revertsecuritygroupchanges/security-group-change-auto-response.yaml" target="_blank" rel="noopener noreferrer"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/09/Launch-Stack.png" /></a></p> 
+<p>Then:</p> 
+<ol> 
+<li>Choose <strong>Next</strong> to proceed to the <strong>Specify Details</strong> page.</li> 
+<li>On the <strong>Specify Details</strong> page, type your email address in the <strong>Send notifications to</strong>&nbsp;box. This is the email address to which change notifications will be sent. (After the stack is launched, you will receive a confirmation email that you must accept before you can receive notifications.)</li> 
+<li>Choose <strong>Next</strong> until you get to the <strong>Review</strong> page, and then choose the <strong>I acknowledge that AWS CloudFormation might create IAM resources</strong> check box. This confirms that you are aware that the CloudFormation template includes an IAM resource.</li> 
+<li>Choose <strong>Create</strong>. CloudFormation displays the stack status, <strong>CREATE_COMPLETE</strong>, when the stack has launched completely, which should take less than two minutes.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/createcomplete_RB101017-a.png" /></li> 
+</ol> 
+<h3>Testing the solution</h3> 
+<ol> 
+<li>Check your email for the SNS confirmation email. You must confirm this subscription to receive future notification emails. If you don’t confirm the subscription, your security group ingress rules still will be automatically reverted, but you will not receive notification emails.</li> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a> and choose <strong>Security Groups</strong> in the navigation pane.</li> 
+<li>Choose the security group created by CloudFormation. Its name is <strong>Web Server Security Group</strong>.</li> 
+<li>Choose the <strong>Inbound</strong> tab in the bottom pane of the page. Note that only one rule allows HTTPS ingress on port 443 from <span style="font-family: courier">0.0.0.0/0</span> (from anywhere).<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/edit-inboundtab_RB101017.png" /></li> 
+</ol> 
+<ol start="5"> 
+<li>Choose <strong>Edit</strong> to display the <strong>Edit inbound rules</strong> dialog box (again, an inbound rule and an ingress rule are the same thing).</li> 
+<li>Choose <strong>Add Rule</strong>.</li> 
+<li>Choose <strong>SSH</strong> from the <strong>Type</strong> drop-down list.</li> 
+<li>Choose <strong>My IP</strong> from the <strong>Source</strong> drop-down list. Your IP address is populated for you. By adding this rule, you are simulating one of your staff members violating your organization’s policy (in this blog post’s hypothetical example) against allowing SSH access to your EC2 servers. You are testing the solution created when you launched the CloudFormation stack in the previous section. The solution should remove this newly created SSH rule automatically.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/editinboundrules_RB101017-c.png" /></li> 
+<li>Choose <strong>Save</strong>.</li> 
+</ol> 
+<p>Adding this rule creates an EC2 <span style="font-family: courier">AuthorizeSecurityGroupIngress</span> service event, which triggers the Lambda function created in the CloudFormation stack. After a few moments, choose the refresh button (&nbsp;<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/09/refresh.png" />&nbsp;) to see that the new SSH ingress rule that you just created has been removed by the solution you deployed earlier with the CloudFormation stack. If the rule is still there, wait a few more moments and choose the refresh button again.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/refreshbutton_RB101017.png" /></p> 
+<p>You should also receive an email to notify you that the ingress rule was added and subsequently reverted.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/Notification-Email-a.png" /></p> 
+<h3>Cleaning up</h3> 
+<p>If you want to remove the resources created by this CloudFormation stack, you can delete the CloudFormation stack:</p> 
+<ol> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/cloudformation/home" target="_blank" rel="noopener noreferrer">CloudFormation console</a>.</li> 
+<li>Choose the stack that you created earlier.</li> 
+<li>Choose the <strong>Actions</strong> drop-down list.</li> 
+<li>Choose <strong>Delete Stack</strong>, and then choose <strong>Yes, Delete</strong>.</li> 
+<li>CloudFormation will display a status of <strong>DELETE_IN_PROGRESS</strong> while it deletes the resources created with the stack. After a few moments, the stack should no longer appear in the list of completed stacks.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/10/deleteinprogress_RB101017-a.png" /></li> 
+</ol> 
+<h3>Other applications of this solution</h3> 
+<p>I have shown one way to use multiple AWS services to help continuously ensure that your security controls haven’t deviated from your security baseline. However, you also could use the <a href="https://github.com/awslabs/aws-security-benchmark" target="_blank" rel="noopener noreferrer">CIS Amazon Web Services Foundations Benchmarks</a>, for example, to establish a governance baseline across your AWS accounts and then use the principles in this blog post to automatically mitigate changes to that baseline.</p> 
+<p>To scale this solution, you can create a framework that uses <a href="https://aws.amazon.com/answers/account-management/aws-tagging-strategies/" target="_blank" rel="noopener noreferrer">resource tags</a> to identify particular resources for monitoring. You also can use a consolidated monitoring approach by using cross-account event delivery. See <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/CloudWatchEvents-CrossAccountEventDelivery.html" target="_blank" rel="noopener noreferrer">Sending and Receiving Events Between AWS Accounts</a> for more information. You also can extend the principle of automatic mitigation to detect and revert changes to other resources such as IAM policies and <a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon S3</a> bucket policies.</p> 
+<h3>Summary</h3> 
+<p>In this blog post, I demonstrated how you can automatically revert changes to a VPC security group and have a notification sent about the changes. You can use this solution in your own AWS accounts to enforce your security requirements continuously.</p> 
+<p>If you have comments about this blog post or other ideas for ways to use this solution, submit a comment in the “Comments” section below. If you have implementation questions, start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=30" target="_blank" rel="noopener noreferrer">EC2 forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Rob</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/security/tag/amazon-vpc-vpc-security-groups-amazon-ec2-amazon-ec2-systems-manager-secure-shell-ssh-bastion-hosts-aws-cloudformation-aws-lambda-amazon-cloudwatch-detective-controls/" rel="tag">Amazon VPC | VPC security groups | Amazon EC2 | Amazon EC2 Systems Manager | Secure Shell | SSH | bastion hosts | AWS CloudFormation | AWS Lambda | Amazon CloudWatch | detective controls</a>, <a href="https://aws.amazon.com/blogs/security/tag/responsive-controls/" rel="tag">responsive controls</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5393');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/Marketo_1200x350_NYC_1200x25011.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Join Us for AWS IAM Day on Monday, October 16, in New York City</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -711,76 +813,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-4754');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/160-Login-080217-a1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Reset Your AWS Root Account’s Lost MFA Device Faster by Using the AWS Management Console</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ujjwal Pugalia</span></span> | on 
-<time property="datePublished" datetime="2017-09-21T11:39:33+00:00">21 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/reset-your-aws-root-accounts-lost-mfa-device-faster-by-using-the-aws-management-console/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-4346" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=4346&amp;disqus_title=Reset+Your+AWS+Root+Account%E2%80%99s+Lost+MFA+Device+Faster+by+Using+the+AWS+Management+Console&amp;disqus_url=https://aws.amazon.com/blogs/security/reset-your-aws-root-accounts-lost-mfa-device-faster-by-using-the-aws-management-console/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4346');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>To help secure your AWS resources, AWS recommends that you follow the <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html" target="_blank" rel="noopener noreferrer">best practice</a> of enabling <a href="https://aws.amazon.com/iam/details/mfa/" target="_blank" rel="noopener noreferrer">multi-factor authentication (MFA)</a> for the <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_root-user.html" target="_blank" rel="noopener noreferrer">root user</a> of your account. With MFA turned on, the root user of your account is required to submit one form of authentication, which is the account password, and another form of authentication, such as a one-time password (OTP) from an MFA device. If you have MFA enabled on your root account and you lose or misplace your root MFA device, you can now reset it by using the AWS Management Console.</p> 
-<p>Now, your root user can use the <a href="https://console.aws.amazon.com/console/home" target="_blank" rel="noopener noreferrer">AWS sign-in page</a> to verify your root account’s email address and phone number. Then, the root user can deactivate the lost MFA device and set up a new MFA device in its place. Note that this information verification feature is available only for AWS root users with a phone number associated with their root account. If your root user does not have a valid phone number associated with your root account, the root user must call <a href="https://aws.amazon.com/forms/aws-mfa-support" target="_blank" rel="noopener noreferrer">AWS Support</a> to reset the lost MFA device.</p> 
-<p>In this blog post, I demonstrate how to reset a lost MFA device faster by using the AWS Management Console to verify your root user’s email address and phone number. I then demonstrate how to set up a virtual MFA device that you can use in place of the lost MFA device.</p> 
-<p><strong>Note:</strong> If you are using an AWS account created after September 14, 2017, you might see differences in the following console pages: <strong>Sign in with authentication device</strong> and <strong>Troubleshoot your authentication device</strong>. However, the same features are provided. In either case, if you cannot verify your account email address and phone number using alternative factors of authentication, contact <a href="https://aws.amazon.com/forms/aws-mfa-support" target="_blank" rel="noopener noreferrer">AWS Support</a> to deactivate your MFA setting.</p> 
-<p><span id="more-4346"></span></p> 
-<h3>Reset a lost MFA device</h3> 
-<p>In this section, I demonstrate how to reset a lost MFA device. To reset your MFA device, you must know and have access to the email address and phone number associated with your root account.</p> 
-<p>Follow these steps to reset your lost MFA device:</p> 
-<ol> 
-<li>Navigate to the <a href="https://console.aws.amazon.com/console/home" target="_blank" rel="noopener noreferrer">AWS sign-in page</a>, and enter your root account’s email address.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/12/New-Sign-In-Enter-Email-a.png" /></li> 
-<li>On the <strong>Root user sign in</strong> page, enter the password of your root account.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/12/Root-user-sign-in-page-a.png" /></li> 
-<li>On the <strong>Amazon Web Services Sign In With Authentication Device</strong> page, choose <strong>Having problems with your authentication device? Click here</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/3-MFA-Challenge-Page-a.png" /></li> 
-<li>On the <strong>Troubleshoot Your Authentication Device</strong> page, choose <strong>Sign In using alternative factors</strong> under <strong>Sign In Using Alternative Factors of Authentication</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/4-Sign-In-using-Alternative-Factors-a.png" /></li> 
-<li>On <strong>Step 1: Email address verification</strong>, validate that the email address is correct and choose <strong>Send verification email</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/5-Root-Email-Verification-a.png" /></li> 
-<li>AWS sends an email with the subject line, <strong>AWS Email Verification</strong>, to the address associated with the root account. After the email is sent to your address, you will see <strong>Email sent </strong>under<strong> Step 1</strong>, as shown in the following screenshot<strong>. </strong>If you do not see the verification email in the root user’s inbox, check the spam folder or choose <strong>Resend the email </strong>under<strong> Step 1</strong>. After you locate the email, you can close the current browser tab. Follow the directions in the email to proceed with the verification process.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/08/02/120-Great-success-080217.png" /></li> 
-<li>In the email from AWS with the subject line, <strong>AWS Email Verification</strong>, choose <strong>Verify your email address</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/08/02/130-Email-Received-080217-b.png" /></li> 
-<li>When you click the verification link, your email is verified and you are taken to Step 2 of the verification process. In <strong>Step 2: Phone number verification</strong>, choose <strong>Call me now</strong> to start the phone number verification process.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/08/02/140-Verify-phone-080217-b.png" /></li> 
-<li>Answer the phone call from AWS and use your phone’s keypad to submit the six-digit verification code that appears on your computer screen.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/08/02/141-Calling-080217-a.png" /></li> 
-<li>After you have verified your root account’s email address and phone number, proceed to <strong>Step 3: Sign In</strong>. In Step 3, choose <strong>Sign in to the console</strong> to sign in to the AWS Management Console.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/08/02/160-Login-080217-a.png" /></li> 
-</ol> 
-<p style="padding-left: 30px">You automatically are redirected to the <strong>Your Security Credentials</strong> page. If your MFA device is lost, deactivate the MFA device by choosing <strong>Deactivate</strong> (see the following screenshot). If you find your MFA device later, you can reactivate it on the same <strong>Your Security Credentials</strong> page. (A reactivated device is treated like a new device, so choose <strong>Activate MFA</strong> to reactivate a device.)<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/Security-Credentials-Deactivate-Existing-MFA-b.png" /></p> 
-<ol start="10"> 
-<li>You have successfully deactivated your lost MFA device. You will no longer see any details associated with the lost MFA device in the console. You now will see an <strong>Activate MFA</strong> option (see the following screenshot) that you can use to activate a new MFA device.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/Activate-new-MFA-Device.png" /></li> 
-</ol> 
-<p>We recommend that you enable a new MFA device on your root account as soon as possible to ensure that your root account is protected by MFA. If you find your lost MFA device, you can reactivate it (see Step 9 earlier in this post).</p> 
-<p>In place of your lost MFA device, you can use a <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa_enable_virtual.html" target="_blank" rel="noopener noreferrer">virtual MFA device</a> to ensure that your root account remains protected by MFA. In the next section, I show how to set up a virtual MFA device and associate it with your root account.</p> 
-<h3>Associate a virtual MFA device with your root account</h3> 
-<p>After you deactivate your lost MFA device, you can associate a virtual MFA device with your root account to help secure your AWS resources. You need to download a virtual MFA app such as <a href="http://support.google.com/accounts/bin/answer.py?hl=en&amp;answer=1066447" target="_blank" rel="noopener noreferrer">Google Authenticator</a> or&nbsp;<a href="https://play.google.com/store/apps/details?id=com.authy.authy&amp;amp;hl=en" target="_blank" rel="noopener noreferrer">Authy 2-Factor Authentication</a> to use virtual MFA with your AWS account.</p> 
-<p>To associate a virtual MFA device with your root account:</p> 
-<ol> 
-<li>Choose <strong>Activate MFA</strong> on the <strong>Your Security Credentials</strong> page.<strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/Activate-new-MFA-Device.png" /><br /> </strong></li> 
-<li>Choose a virtual MFA device and then choose<strong><strong> Next Step.</strong></strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/12/MFA-options.png" /></li> 
-<li>If you do not have an AWS MFA-compatible application, install one of the available applications. Choose <strong>Next Step</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/AWS-MFA-compatible-application-notification.png" /></li> 
-<li>Open the virtual MFA app on your phone and choose the option to create a new account.</li> 
-<li>Use the app to scan the QR code on your computer screen. Alternatively, you can choose <strong>Show secret key for manual configuration</strong>, and then type the secret key in the MFA app.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/Authentication-QR-code.png" /></li> 
-<li>In the <strong>Authentication code 1</strong> box, type the OTP that appears in the virtual MFA app. Wait for up to 30 seconds for the app to generate a second OTP. Type the second OTP in the <strong>Authentication code 2</strong> box and then choose <strong>Activate virtual MFA</strong>.</li> 
-</ol> 
-<p>You have now successfully enabled virtual MFA and associated it with your root account, and your root account is now protected by using MFA. You will use the virtual MFA app to generate an authentication code for subsequent sign-ins.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/09/11/Virtual-MFA-setup-complete.png" /></p> 
-<h3>Summary</h3> 
-<p>In this blog post, I demonstrated how you can reset your AWS root account’s lost MFA device by using the AWS Management Console. I also showed how you can associate a virtual MFA device with your root account.</p> 
-<p>If you have comments about resetting an MFA device for root users, submit them in the “Comments” section below. If you have implementation questions, start a thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=76" target="_blank" rel="noopener noreferrer">IAM forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
-<p>– Ujjwal</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/security/tag/access-management/" rel="tag">Access management</a>, <a href="https://aws.amazon.com/blogs/security/tag/aws-accounts/" rel="tag">AWS Accounts</a>, <a href="https://aws.amazon.com/blogs/security/tag/aws-iam/" rel="tag">AWS IAM</a>, <a href="https://aws.amazon.com/blogs/security/tag/aws-root-account/" rel="tag">AWS root account</a>, <a href="https://aws.amazon.com/blogs/security/tag/iam-users/" rel="tag">IAM users</a>, <a href="https://aws.amazon.com/blogs/security/tag/mfa/" rel="tag">MFA</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4346');
 });
 </script> 
 </article> 

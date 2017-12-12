@@ -191,6 +191,169 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Parallel Processing in Python with&nbsp;AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Oz Akan</span></span> | on 
+<time property="datePublished" datetime="2017-09-11T07:29:32+00:00">11 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2746" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2746&amp;disqus_title=Parallel+Processing+in+Python+with%C2%A0AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/parallel-processing-in-python-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2746');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>If you develop an AWS Lambda function with Node.js, you can call multiple web services without waiting for a response due to its asynchronous nature. &nbsp;All requests are initiated almost in parallel, so you can get results much faster than a series of sequential calls to each web service. Considering the maximum execution duration for Lambda, it is beneficial for I/O bound tasks to run in parallel.</p> 
+<p>If you develop a Lambda function with Python, parallelism doesn’t come by default. Lambda supports Python 2.7 and Python 3.6, both of which have multiprocessing and threading modules. The multiprocessing module supports multiple cores so it is a better choice, especially for CPU intensive workloads. With the threading module, all threads are going to run on a single core though performance difference is negligible for network-bound tasks.</p> 
+<p>In this post, I demonstrate how the Python multiprocessing module can be used within a Lambda function to run multiple I/O bound tasks in parallel.</p> 
+<b>Example use case</b> 
+<p>In this example, you call Amazon EC2 and Amazon EBS API operations to find the total EBS volume size for all your EC2 instances in a region.</p> 
+<p>This is a two-step process:</p> 
+<li>The Lambda function calls EC2 to list all EC2 instances</li> 
+<li>The function calls EBS for each instance to find attached EBS volumes</li> 
+<h3>Sequential Execution</h3> 
+<p>If you make these calls sequentially, during the second step, your code has to loop over all the instances and wait for each response before moving to the next request.</p> 
+<p>The class named VolumesSequential has the following methods:</p> 
+<li>__init__ creates an EC2 resource.</li> 
+<li>total_size returns all EC2 instances and passes these to the instance_volumes method.</li> 
+<li>instance_volumes finds the total size of EBS volumes for the instance.</li> 
+<li>total_size adds all sizes from all instances to find total size for the EBS volumes.</li> 
+<h4>Source Code for Sequential Execution</h4> 
+<pre><code class="lang-python">import time
+import boto3
+class VolumesSequential(object):
+&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;Finds total volume size for all EC2 instances&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;def __init__(self):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.ec2 = boto3.resource('ec2')
+&nbsp;&nbsp;&nbsp;def instance_volumes(self, instance):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Finds total size of the EBS volumes attached
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;to an EC2 instance
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total = 0
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for volume in instance.volumes.all():
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total += volume.size
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instance_total
+&nbsp;&nbsp;&nbsp;def total_size(self):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lists all EC2 instances in the default region
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and sums result of instance_volumes
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;print &quot;Running sequentially&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances = self.ec2.instances.all()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total = 0
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for instance in instances:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total += self.instance_volumes(instance)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instances_total
+def lambda_handler(event, context):
+&nbsp;&nbsp;&nbsp;&nbsp;volumes = VolumesSequential()
+&nbsp;&nbsp;&nbsp;&nbsp;_start = time.time()
+&nbsp;&nbsp;&nbsp;&nbsp;total = volumes.total_size()
+&nbsp;&nbsp;&nbsp;print &quot;Total volume size:&nbsp;%s&nbsp;GB&quot; % total
+&nbsp;&nbsp;&nbsp;print &quot;Sequential execution time:&nbsp;%s&nbsp;seconds&quot; % (time.time() - _start)</code></pre> 
+<h3>Parallel Execution</h3> 
+<p>The multiprocessing module that comes with Python 2.7 lets you run multiple processes in parallel. Due to the Lambda execution environment not having /dev/shm (shared memory for processes) support, you can’t use multiprocessing.Queue or multiprocessing.Pool.</p> 
+<p>If you try to use multiprocessing.Queue, you get an error similar to the following:</p> 
+<pre><code class="lang-bash">[Errno 38] Function not implemented: OSError
+…
+&nbsp;&nbsp;&nbsp;sl = self._semlock = _multiprocessing.SemLock(kind, value, maxvalue)
+OSError: [Errno 38] Function not implemented
+</code></pre> 
+<p>On the other hand, you can use multiprocessing.Pipe instead of multiprocessing.Queue to accomplish what you need without getting any errors during the execution of the Lambda function.</p> 
+<p>The class named VolumeParallel has the following methods:</p> 
+<li>__init__ creates an EC2 resource</li> 
+<li>instance_volumes finds the total size of EBS volumes attached to an instance</li> 
+<li>total_size finds all instances and runs instance_volumes for each to find the total size of all EBS volumes attached to all EC2 instances.</li> 
+<h4>Source Code for Parallel Execution</h4> 
+<pre><code class="lang-python">import time
+from multiprocessing import Process, Pipe
+import boto3
+class VolumesParallel(object):
+&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;Finds total volume size for all EC2 instances&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;def __init__(self):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.ec2 = boto3.resource('ec2')
+&nbsp;&nbsp;&nbsp;def instance_volumes(self, instance, conn):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Finds total size of the EBS volumes attached
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;to an EC2 instance
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total = 0
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for volume in instance.volumes.all():
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_total += volume.size
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;conn.send([instance_total])
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;conn.close()
+&nbsp;&nbsp;&nbsp;def total_size(self):
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lists all EC2 instances in the default region
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and sums result of instance_volumes
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;&quot;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;print &quot;Running in parallel&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# get all EC2 instances
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances = self.ec2.instances.all()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a list to keep all processes
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;processes = []
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a list to keep connections
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_connections = []
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a process per instance
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for instance in instances: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create a pipe for communication
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_conn, child_conn = Pipe()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parent_connections.append(parent_conn)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# create the process, pass instance and connection
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process = Process(target=self.instance_volumes, args=(instance, child_conn,))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;processes.append(process)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# start all processes
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for process in processes:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process.start()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# make sure that all processes have finished
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for process in processes:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;process.join()
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total = 0
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for parent_connection in parent_connections:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instances_total += parent_connection.recv()[0]
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return instances_total
+def lambda_handler(event, context):
+&nbsp;&nbsp;&nbsp;&nbsp;volumes = VolumesParallel()
+&nbsp;&nbsp;&nbsp;&nbsp;_start = time.time()
+&nbsp;&nbsp;&nbsp;&nbsp;total = volumes.total_size()
+&nbsp;&nbsp;&nbsp;print &quot;Total volume size:&nbsp;%s&nbsp;GB&quot; % total
+&nbsp;&nbsp;&nbsp;print &quot;Sequential execution time:&nbsp;%s&nbsp;seconds&quot; % (time.time() - _start)
+</code></pre> 
+<b>Performance</b> 
+<p>There are a few differences between two Lambda functions when it comes to the execution environment. The parallel function requires more memory than the sequential one. You may run the parallel Lambda function with a relatively large memory setting to see how much memory it uses. The amount of memory required by the Lambda function depends on what the function does and how many processes it runs in parallel. To restrict maximum memory usage, you may want to limit the number of parallel executions.</p> 
+<p>In this case, when you give 1024 MB for both Lambda functions, the parallel function runs about two times faster than the sequential function. I have a handful of EC2 instances and EBS volumes in my account so the test ran way under the maximum execution limit for Lambda. Remember that parallel execution doesn’t guarantee that the runtime for the Lambda function will be under the maximum allowed duration but does speed up the overall execution time.</p> 
+<h4>Sequential Run Time Output</h4> 
+<pre><code class="lang-bash">START RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e Version: $LATEST
+Running sequentially
+Total volume size: 589 GB
+Sequential execution time: 3.80066084862 seconds
+END RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e
+REPORT RequestId: 4c370b12-f9d3-11e6-b46b-b5d41afd648e Duration: 4091.59 ms Billed Duration: 4100 ms &nbsp;Memory Size: 1024 MB Max Memory Used: 46 MB</code></pre> 
+<h4>Parallel Run Time Output</h4> 
+<pre><code class="lang-bash">START RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d Version: $LATEST
+Running in parallel
+Total volume size: 589 GB
+Sequential execution time: 1.89170885086 seconds
+END RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d
+REPORT RequestId: 4f1328ed-f9d3-11e6-8cd1-c7381c5c078d Duration: 2069.33 ms Billed Duration: 2100 ms &nbsp;Memory Size: 1024 MB Max Memory Used: 181 MB&nbsp;
+</code></pre> 
+<h3>Summary</h3> 
+<p>In this post, I demonstrated how to run multiple I/O bound tasks in parallel by developing a Lambda function with the Python multiprocessing module. With the help of this module, you freed the CPU from waiting for I/O and fired up several tasks to fit more I/O bound operations into a given time frame. This might be the trick to reduce the overall runtime of a Lambda function especially when you have to run so many and don’t want to split the work into smaller chunks.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2746');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Disabling Intel Hyper-Threading Technology on Amazon EC2 Windows Instances</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1647,192 +1810,6 @@ dependencies {
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2430');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
-<time property="datePublished" datetime="2017-06-20T12:56:00+00:00">20 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2369" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2369&amp;disqus_title=Building+Loosely+Coupled%2C+Scalable%2C+C%23+Applications+with+Amazon+SQS+and+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2369');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5>&nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/Stephen_Liedig.png" /></a><br /> Stephen Liedig, Solutions Architect</h5> 
-<p>&nbsp;</p> 
-<p>One of the many challenges professional software architects and developers face is how to make cloud-native applications scalable, fault-tolerant, and highly available.</p> 
-<p>Fundamental to your project success is understanding the importance of making systems highly cohesive and loosely coupled. That means considering the multi-dimensional facets of system coupling to support the distributed nature of the applications that you are building for the cloud.</p> 
-<p>By that, I mean addressing not only the application-level coupling (managing incoming and outgoing dependencies), but also considering the impacts of of platform, spatial, and temporal coupling of your systems. Platform coupling relates to the interoperability (or lack thereof) of heterogeneous systems components. Spatial coupling deals with managing components at a network topology level or protocol level. Temporal, or runtime coupling, refers to the ability of a component within your system to do any kind of meaningful work while it is performing a synchronous, blocking operation.</p> 
-<p>The AWS messaging services, <a href="https://aws.amazon.com/sqs/">Amazon SQS</a> and <a href="https://aws.amazon.com/sns/">Amazon SNS</a>, help you deal with these forms of coupling by providing mechanisms for:</p> 
-<li>Reliable, durable, and fault-tolerant delivery of messages between application components</li> 
-<li>Logical decomposition of systems and increased autonomy of components</li> 
-<li>Creating unidirectional, non-blocking operations, temporarily decoupling system components at runtime</li> 
-<li>Decreasing the dependencies that components have on each other through standard communication and network channels</li> 
-<p>Following on the recent topic, <a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a>, in this post, I look at some of the ways you can introduce SQS and SNS into your architectures to decouple your components, and show how you can implement them using C#.<span id="more-2369"></span></p> 
-<h3>Walkthrough</h3> 
-<p>To illustrate some of these concepts, consider a web application that processes customer orders. As good architects and developers, you have followed best practices and made your application scalable and highly available. Your solution included implementing load balancing, dynamic scaling across multiple Availability Zones, and persisting orders in a Multi-AZ Amazon RDS database instance, as in the following diagram.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/WebApplicationDiagram1-1024x552.png" /><br /> In this example, the application is responsible for handling and persisting the order data, as well as dealing with increases in traffic for popular items.</p> 
-<p>One potential point of vulnerability in the order processing workflow is in saving the order in the database. The business expects that every order has been persisted into the database. However, any potential deadlock, race condition, or network issue could cause the persistence of the order to fail. Then, the order is lost with no recourse to restore the order.</p> 
-<p>With good logging capability, you may be able to identify when an error occurred and which customer order failed. This wouldn’t allow you to “restore” the transaction, and by that stage, your customer is no longer your customer.</p> 
-<p>As illustrated in the following diagram, introducing an SQS queue helps improve your ordering application. Using the queue isolates the processing logic into its own component and runs it in a separate process from the web application. This, in turn, allows the system to be more resilient to spikes in traffic, while allowing work to be performed only as fast as necessary in order to manage costs.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/CustomOrderQueue-1024x632.png">Using Amazon SQS Dead-Letter Queues to Control Message Failure,</a> for more information on dead-letter queues.)</p> 
-<h3>Scaling the order processing nodes</h3> 
-<p>This change allows you now to scale the web application frontend independently from the processing nodes. The frontend application can continue to scale based on metrics such as CPU usage, or the number of requests hitting the load balancer. Processing nodes can scale based on the number of orders in the queue. Here is an example of scale-in and scale-out alarms that you would associate with the scaling policy.</p> 
-<p><strong class="lang-bash">Scale-out Alarm</strong></p> 
-<pre><code class="lang-powershell">aws cloudwatch put-metric-alarm --alarm-name AddCapacityToCustomerOrderQueue --metric-name ApproximateNumberOfMessagesVisible --namespace &quot;AWS/SQS&quot; 
---statistic Average --period 300 --threshold 3 --comparison-operator GreaterThanOrEqualToThreshold --dimensions Name=QueueName,Value=customer-orders
---evaluation-periods 2 --alarm-actions &lt;arn of the scale-out autoscaling policy&gt;
-</code></pre> 
-<p><strong>Scale-in Alarm</strong></p> 
-<pre><code class="lang-powershell">aws cloudwatch put-metric-alarm --alarm-name RemoveCapacityFromCustomerOrderQueue --metric-name ApproximateNumberOfMessagesVisible --namespace &quot;AWS/SQS&quot; 
---statistic Average --period 300 --threshold 1 --comparison-operator LessThanOrEqualToThreshold --dimensions Name=QueueName,Value=customer-orders
---evaluation-periods 2 --alarm-actions &lt;arn of the scale-in autoscaling policy&gt;
-</code></pre> 
-<p>In the above example, use the A<em>pproximateNumberOfMessagesVisible</em> metric to discover the queue length and drive the scaling policy of the Auto Scaling group. Another useful metric is <em>ApproximateAgeOfOldestMessage</em>, when applications have time-sensitive messages and developers need to ensure that messages are processed within a specific time period.</p> 
-<h3>Scaling the order processing implementation</h3> 
-<p>On top of scaling at an infrastructure level using Auto Scaling, make sure to take advantage of the processing power of your <a href="https://aws.amazon.com/ec2">Amazon EC2</a> instances by using as many of the available threads as possible. There are several ways to implement this. In this post, we build a Windows service that uses the <strong>BackgroundWorker</strong> class to process the messages from the queue.</p> 
-<p>Here’s a closer look at the implementation. In the first section of the consuming application, use a loop to continually poll the queue for new messages, and construct a <strong>ReceiveMessageRequest</strong> variable.</p> 
-<pre><code class="lang-csharp">public static void PollQueue()
-{
-while (_running)
-{
-Task&lt;ReceiveMessageResponse&gt; receiveMessageResponse;
-// Pull messages off the queue
-using (var sqs = new AmazonSQSClient())
-{
-const int maxMessages = 10;  // 1-10
-//Receiving a message
-var receiveMessageRequest = new ReceiveMessageRequest
-{
-// Get URL from Configuration
-QueueUrl = _queueUrl, 
-// The maximum number of messages to return. 
-// Fewer messages might be returned. 
-MaxNumberOfMessages = maxMessages, 
-// A list of attributes that need to be returned with message.
-AttributeNames = new List&lt;string&gt; { &quot;All&quot; },
-// Enable long polling. 
-// Time to wait for message to arrive on queue.
-WaitTimeSeconds = 5 
-};
-receiveMessageResponse = sqs.ReceiveMessageAsync(receiveMessageRequest);
-}
-</code></pre> 
-<p>The<strong> WaitTimeSeconds</strong> property of the <strong>ReceiveMessageRequest</strong> specifies the duration (in seconds) that the call waits for a message to arrive in the queue before returning a response to the calling application. There are a few benefits to using long polling:</p> 
-<li>It reduces the number of empty responses by allowing SQS to wait until a message is available in the queue before sending a response.</li> 
-<li>It eliminates false empty responses by querying all (rather than a limited number) of the servers.</li> 
-<li>It returns messages as soon any message becomes available.</li> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-long-polling.html">Amazon SQS Long Polling</a>.</p> 
-<p>After you have returned messages from the queue, you can start to process them by looping through each message in the response and invoking a new <strong>BackgroundWorker</strong> thread.</p> 
-<pre><code class="lang-csharp">// Process messages
-if (receiveMessageResponse.Result.Messages != null)
-{
-foreach (var message in receiveMessageResponse.Result.Messages)
-{
-Console.WriteLine(&quot;Received SQS message, starting worker thread&quot;);
-// Create background worker to process message
-BackgroundWorker worker = new BackgroundWorker();
-worker.DoWork += (obj, e) =&gt; ProcessMessage(message);
-worker.RunWorkerAsync();
-}
-}
-else
-{
-Console.WriteLine(&quot;No messages on queue&quot;);
-}
-</code></pre> 
-<p>The event handler, <strong>ProcessMessage</strong>, is where you implement business logic for processing orders. It is important to have a good understanding of how long a typical transaction takes so you can set a message <strong>VisibilityTimeout</strong> that is long enough to complete your operation. If order processing takes longer than the specified timeout period, the message becomes visible on the queue. Other nodes may pick it and process the same order twice, leading to unintended consequences.</p> 
-<h3>Handling Duplicate Messages</h3> 
-<p>In order to manage duplicate messages, seek to make your processing application idempotent. In mathematics, idempotent describes a function that produces the same result if it is applied to itself:</p> 
-<p style="text-align: center">f(x) = f(f(x))</p> 
-<p>No matter how many times you process the same message, the end result is the same (definition from Enterprise Integration Patterns: Designing, Building, and Deploying Messaging Solutions, Hohpe and Wolf, 2004).</p> 
-<p>There are several strategies you could apply to achieve this:</p> 
-<li>Create messages that have inherent idempotent characteristics. That is, they are non-transactional in nature and are unique at a specified point in time. Rather than saying “place new order for Customer A,” which adds a duplicate order to the customer, use “place order &lt;orderid&gt; on &lt;timestamp&gt; for Customer A,” which creates a single order no matter how often it is persisted.</li> 
-<li>Deliver your messages via an <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html">Amazon SQS FIFO queue</a>, which provides the benefits of message sequencing, but also mechanisms for content-based deduplication. You can deduplicate using the <strong>MessageDeduplicationId</strong> property on the <strong>SendMessage</strong> request or by enabling content-based deduplication on the queue, which generates a hash for <strong>MessageDeduplicationId</strong>, based on the content of the message, not the attributes.</li> 
-<pre><code class="lang-csharp">var sendMessageRequest = new SendMessageRequest
-{
-QueueUrl = _queueUrl,
-MessageBody = JsonConvert.SerializeObject(order),
-MessageGroupId = Guid.NewGuid().ToString(&quot;N&quot;),
-MessageDeduplicationId = Guid.NewGuid().ToString(&quot;N&quot;)
-};
-</code></pre> 
-<li>If using SQS FIFO queues is not an option, keep a message log of all messages attributes processed for a specified period of time, as an alternative to message deduplication on the receiving end. Verifying the existence of the message in the log before processing the message adds additional computational overhead to your processing. This can be minimized through low latency persistence solutions such as Amazon DynamoDB. Bear in mind that this solution is dependent on the successful, distributed transaction of the message and the message log.</li> 
-<h3>Handling exceptions</h3> 
-<p>Because of the distributed nature of SQS queues, it does not automatically delete the message. Therefore, you must explicitly delete the message from the queue after processing it, using the message <strong>ReceiptHandle</strong> property (see the following code example).</p> 
-<p>However, if at any stage you have an exception, avoid handling it as you normally would. The intention is to make sure that the message ends back on the queue, so that you can gracefully deal with intermittent failures. Instead, log the exception to capture diagnostic information, and swallow it.</p> 
-<p>By not explicitly deleting the message from the queue, you can take advantage of the <strong>VisibilityTimeout</strong> behavior described earlier. Gracefully handle the message processing failure and make the unprocessed message available to other nodes to process.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/ConfigureCustomerOrders-1024x732.png" /></p> 
-<p>In the event that subsequent retries fail, SQS automatically moves the message to the configured DLQ after the configured number of receives has been reached. You can further investigate why the order process failed. Most importantly, the order has not been lost, and your customer is still your customer.</p> 
-<pre><code class="lang-csharp">private static void ProcessMessage(Message message)
-{
-using (var sqs = new AmazonSQSClient())
-{
-try
-{
-Console.WriteLine(&quot;Processing message id: {0}&quot;, message.MessageId);
-// Implement messaging processing here
-// Ensure no downstream resource contention (parallel processing)
-// &lt;your order processing logic in here…&gt;
-Console.WriteLine(&quot;{0} Thread {1}: {2}&quot;, DateTime.Now.ToString(&quot;s&quot;), Thread.CurrentThread.ManagedThreadId, message.MessageId);
-// Delete the message off the queue. 
-// Receipt handle is the identifier you must provide 
-// when deleting the message.
-var deleteRequest = new DeleteMessageRequest(_queueName, message.ReceiptHandle);
-sqs.DeleteMessageAsync(deleteRequest);
-Console.WriteLine(&quot;Processed message id: {0}&quot;, message.MessageId);
-}
-catch (Exception ex)
-{
-// Do nothing.
-// Swallow exception, message will return to the queue when 
-// visibility timeout has been exceeded.
-Console.WriteLine(&quot;Could not process message due to error. Exception: {0}&quot;, ex.Message);
-}
-}
-}
-</code></pre> 
-<h3>Using SQS to adapt to changing business requirements</h3> 
-<p>One of the benefits of introducing a <a href="https://aws.amazon.com/message-queue/">message queue</a> is that you can accommodate new business requirements without dramatically affecting your application.</p> 
-<p>If, for example, the business decided that all orders placed over $5000 are to be handled as a priority, you could introduce a new “priority order” queue. The way the orders are processed does not change. The only significant change to the processing application is to ensure that messages from the “priority order” queue are processed before the “standard order” queue.</p> 
-<p>The following diagram shows how this logic could be isolated in an “order dispatcher,” whose only purpose is to route order messages to the appropriate queue based on whether the order exceeds $5000. Nothing on the web application or the processing nodes changes other than the target queue to which the order is sent. The rates at which orders are processed can be achieved by modifying the poll rates and scalability settings that I have already discussed.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher-1024x534.png" /></p> 
-<h3>Extending the design pattern with Amazon SNS</h3> 
-<p>Amazon SNS supports reliable <a href="https://aws.amazon.com/pub-sub-messaging/">publish-subscribe (pub-sub) scenarios</a> and push notifications to known endpoints across a wide variety of protocols. It eliminates the need to periodically check or poll for new information and updates. SNS supports:</p> 
-<li>Reliable storage of messages for immediate or delayed processing</li> 
-<li>Publish / subscribe – direct, broadcast, targeted “push” messaging</li> 
-<li>Multiple subscriber protocols</li> 
-<li>Amazon SQS, HTTP, HTTPS, email, SMS, mobile push, AWS Lambda</li> 
-<p>With these capabilities, you can provide parallel asynchronous processing of orders in the system and extend it to support any number of different business use cases without affecting the production environment. This is commonly referred to as a “fanout” scenario.</p> 
-<p>Rather than your web application pushing orders to a queue for processing, send a notification via SNS. The SNS messages are sent to a topic and then replicated and pushed to multiple SQS queues and Lambda functions for processing.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/19/OrderDispatcher2-1024x718.png" /></p> 
-<p>As the diagram above shows, you have the development team consuming “live” data as they work on the next version of the processing application, or potentially using the messages to troubleshoot issues in production.</p> 
-<p>Marketing is consuming all order information, via a Lambda function that has subscribed to the SNS topic, inserting the records into an Amazon Redshift warehouse for analysis.</p> 
-<p>All of this, of course, is happening without affecting your order processing application.</p> 
-<h3>Summary</h3> 
-<p>While I haven’t dived deep into the specifics of each service, I have discussed how these services can be applied at an architectural level to build loosely coupled systems that facilitate multiple business use cases. I’ve also shown you how to use infrastructure and application-level scaling techniques, so you can get the most out of your EC2 instances.</p> 
-<p>One of the many benefits of using these managed services is how quickly and easily you can implement powerful messaging capabilities in your systems, and lower the capital and operational costs of managing your own messaging middleware.</p> 
-<p>Using Amazon SQS and Amazon SNS together can provide you with a powerful mechanism for decoupling application components. This should be part of design considerations as you architect for the cloud.</p> 
-<p>For more information, see the <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/Welcome.html">Amazon SQS Developer Guide</a> and <a href="http://docs.aws.amazon.com/sns/latest/dg/welcome.html">Amazon SNS Developer Guide</a>. You’ll find tutorials on all the concepts covered in this post, and more. To can get started using the AWS console or SDK of your choice visit:</p> 
-<li><a href="https://aws.amazon.com/sqs/getting-started/">Getting Started with Amazon SQS</a></li> 
-<li><a href="https://aws.amazon.com/sns/getting-started/">Getting Started with Amazon SNS</a></li> 
-<p>Happy messaging!</p> 
-<footer> 
-TAGS: 
-<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-notification-service/" rel="tag">Amazon Simple Notification Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-simple-queue-service/" rel="tag">Amazon Simple Queue Service</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sns/" rel="tag">Amazon SNS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/amazon-sqs/" rel="tag">Amazon SQS</a>, <a href="https://aws.amazon.com/blogs/compute/tag/cloud-messaging/" rel="tag">cloud messaging</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-queues/" rel="tag">message queues</a>, <a href="https://aws.amazon.com/blogs/compute/tag/message-topics/" rel="tag">message topics</a>, <a href="https://aws.amazon.com/blogs/compute/tag/microservices/" rel="tag">microservices</a>, <a href="https://aws.amazon.com/blogs/compute/tag/notifications/" rel="tag">notifications</a>, <a href="https://aws.amazon.com/blogs/compute/tag/pubsub/" rel="tag">pub/sub</a>, <a href="https://aws.amazon.com/blogs/compute/tag/serverless/" rel="tag">serverless</a></span> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2369');
 });
 </script> 
 </article> 
