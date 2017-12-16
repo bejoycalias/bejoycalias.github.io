@@ -283,20 +283,20 @@ by
 <p>To get these libraries, create an EC2 instance and choose the Amazon Linux AMI.</p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Choose_an_AMI.png" /></p> 
 <p>Next, use ssh to connect to the server. After you connect to the new instance, search for the libraries to find their locations.</p> 
-<pre><code class="lang-markup">sudo find / -name libgconf-2.so.4
+<code class="lang-markup">sudo find / -name libgconf-2.so.4
 sudo find / -name libORBit-2.so.0
-</code></pre> 
+</code> 
 <p>Now that you have the locations of the libraries, copy these files from the EC2 instance and place them in the java resources folder under lib/.</p> 
 <h4>Packaging the Tests</h4> 
 <p>To deploy the test suite to Lambda, we used a simple Gradle tool called <a href="https://github.com/johnrengelman/shadow">ShadowJar</a>, which is similar to the <a href="https://maven.apache.org/plugins/maven-shade-plugin/">Maven Shade Plugin</a>. It packages the libraries and dependencies inside the jar that is built. Usually test dependencies and sources aren’t included in a jar, but for this instance we want to include them. To include the test dependencies, add this section to the build.gradle file.</p> 
-<pre><code class="lang-markup">shadowJar {
+<code class="lang-markup">shadowJar {
 from sourceSets.test.output
 configurations = [project.configurations.testRuntime]
 }
-</code></pre> 
+</code> 
 <h4>Deploying the Test Suite</h4> 
 <p>Now that our tests are packaged with the dependencies in a jar, we need to get them into a running Lambda function. We use &nbsp;simple SAM &nbsp;templates to upload the packaged jar into S3, and then deploy it to Lambda with our settings.</p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
 &quot;Transform&quot;: &quot;AWS::Serverless-2016-10-31&quot;,
 &quot;Resources&quot;: {
@@ -312,22 +312,22 @@ configurations = [project.configurations.testRuntime]
 }
 }
 }
-}</code></pre> 
+}</code> 
 <p>We use the maximum timeout available to ensure our tests have plenty of time to run. We also use the maximum memory size because this ensures our Lambda function can support Chrome and other resources required to run a UI test.</p> 
 <p>Specifying the handler is important because this class executes the desired test. The test handler should be able to receive a test class and method. With this information it will then execute the test and respond with the results.</p> 
-<pre><code class="lang-json">public LambdaTestResult handleRequest(TestRequest testRequest, Context context) {
+<code class="lang-json">public LambdaTestResult handleRequest(TestRequest testRequest, Context context) {
 LoggerContainer.LOGGER = new Logger(context.getLogger());
 BlockJUnit4ClassRunner runner = getRunnerForSingleTest(testRequest);
 Result result = new JUnitCore().run(runner);
 return new LambdaTestResult(result);
 }
-</code></pre> 
+</code> 
 <h4>Creating a Lambda-Compatible ChromeDriver</h4> 
 <p>We provide developers with an easily accessible ChromeDriver for local test writing and debugging. When we are running tests on AWS, we have configured ChromeDriver to run them in Lambda.</p> 
 <p>To configure ChromeDriver, we first need to tell ChromeDriver where to find the Chrome binary. Because we know that ChromeDriver is going to be unzipped into the root task directory, we should point the ChromeDriver configuration at that location.</p> 
 <p>The settings for getting ChromeDriver running are mostly related to Chrome, which must have its working directories pointed at the tmp/ folder.</p> 
 <p>Start with the default DesiredCapabilities for ChromeDriver, and then add the following settings to enable your ChromeDriver to start in Lambda.</p> 
-<pre><code class="lang-json">public ChromeDriver createLambdaChromeDriver() {
+<code class="lang-json">public ChromeDriver createLambdaChromeDriver() {
 ChromeOptions options = new ChromeOptions();
 // Set the location of the chrome binary from the resources folder
 options.setBinary(&quot;/var/task/chrome&quot;);
@@ -345,7 +345,7 @@ DesiredCapabilities desiredCapabilities = DesiredCapabilities.chrome();
 desiredCapabilities.setCapability(ChromeOptions.CAPABILITY, options);
 return new ChromeDriver(desiredCapabilities);
 }
-</code></pre> 
+</code> 
 <h4>Executing Tests in Parallel</h4> 
 <p>You can approach parallel test execution in Lambda in many different ways. Your approach depends on the structure and design of your test suite. For our solution, we implemented a custom test runner that uses reflection and JUnit libraries to create a list of test cases we want run. When we have the list, we create a TestRequest object to pass into the Lambda function that we have deployed. In this TestRequest, we place the class name, test method, and the test run identifier. When the Lambda function receives this TestRequest, our LambdaTestHandler generates and runs the JUnit test. After the test is complete, the test result is sent to the test runner. The test runner compiles a result after all of the tests are complete. By executing the same Lambda function multiple times with different test requests, we can effectively run the entire test suite in parallel.</p> 
 <p>To get screenshots and other test data, we pipe those files during test execution to an S3 bucket under the test run identifier prefix. When the tests are complete, we link the files to each test execution in the report generated from the test run. This lets us easily investigate test executions.</p> 
@@ -353,13 +353,13 @@ return new ChromeDriver(desiredCapabilities);
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Parallell_testing2.png" /></p> 
 <h4>Pro Tip: Dynamically Loading Binaries</h4> 
 <p><a href="http://docs.aws.amazon.com/lambda/latest/dg/limits.html">AWS Lambda has a limit of 250 MB of uncompressed space</a> for packaged Lambda functions. Because we have libraries and other dependencies to our test suite, we hit this limit when we tried to upload a function that contained Chrome and ChromeDriver (~140 MB). This test suite was not originally intended to be used with Lambda. Otherwise, we would have scrutinized some of the included libraries. To get around this limit, we used the Lambda functions temporary directory, which allows up to 500 MB of space at runtime. Downloading these binaries at runtime moves some of that space requirement into the temporary directory. This allows more room for libraries and dependencies. You can do this by grabbing Chrome and ChromeDriver from an S3 bucket and marking them as executable using built-in Java libraries. If you take this route, be sure to point to the new location for these executables in order to create a ChromeDriver.</p> 
-<pre><code class="lang-json">private static void downloadS3ObjectToExecutableFile(String key) throws IOException {
+<code class="lang-json">private static void downloadS3ObjectToExecutableFile(String key) throws IOException {
 File file = new File(&quot;/tmp/&quot; + key);
 GetObjectRequest request = new GetObjectRequest(&quot;s3-bucket-name&quot;, key);
 FileUtils.copyInputStreamToFile(s3client.getObject(request).getObjectContent(), file);
 file.setExecutable(true);
 }
-</code></pre> 
+</code> 
 <h4>Lambda-Selenium Project Source</h4> 
 <p>We have compiled an open source example that you can grab from the Blackboard Github repository. Grab the code and try it out!</p> 
 <p><a href="https://blackboard.github.io/lambda-selenium/">https://blackboard.github.io/lambda-selenium/</a></p> 
@@ -407,14 +407,14 @@ by
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/environment.png" /></p> 
 <p>6. Under <strong>Build commands</strong>, click <strong>Switch to editor</strong> to enter the build specification.</p> 
 <p>Copy the following text.</p> 
-<pre><code class="lang-yaml">version: 0.2
+<code class="lang-yaml">version: 0.2
 phases:
 build:
 commands:
 - mvn install
 cache:
 paths:
-- '/root/.m2/**/*'</code></pre> 
+- '/root/.m2/**/*'</code> 
 <p><strong>Note:</strong> The cache section in the build specification instructs AWS CodeBuild about the paths to be cached. Like the&nbsp;artifacts section, the cache paths are relative to&nbsp;$CODEBUILD_SRC_DIR and specify the directories to be cached. In this example, Maven stores the downloaded dependencies to the /root/.m2/ folder, but other tools use different folders. For example, pip uses the /root/.cache/pip folder, and Gradle uses the /root/.gradle/caches folder. You might need to configure the cache paths based on your language platform.</p> 
 <p>7. <strong>In Artifacts:&nbsp;</strong>Where to put the artifacts from this build project:</p> 
 <li>For <strong>Type</strong>, choose <strong>No artifacts</strong>.</li> 
@@ -428,7 +428,7 @@ paths:
 <p>If you already have an AWS CodeBuild service role, choose&nbsp;<strong>Choose an existing service role from your account</strong>.</p> 
 <p>10. Choose&nbsp;<strong>Continue</strong>.</p> 
 <p>11. On the&nbsp;<strong>Review</strong>&nbsp;page, to run a build, choose&nbsp;<strong>Save and build</strong>.</p> 
-<pre><code class="lang-yaml"></code></pre> 
+<code class="lang-yaml"></code> 
 <b>Review build and cache behavior:</b> 
 <p>Let us review our first build for the project.</p> 
 <p>In the first run, where no cache exists, overall build time would look something like&nbsp;below (notice the time for <strong>DOWNLOAD_SOURCE</strong>, <strong>BUILD</strong> and <strong>POST_BUILD</strong>):</p> 
@@ -540,12 +540,12 @@ by
 <li>Information on <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html#id_users_create_console">creating an IAM user</a> with AWS Management Console access.</li> 
 <li>Instructions on how to <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html">access CodeCommit using Git</a>.</li> 
 <li>If you’d like to use the same ‘hello world’ application as used in this article, here is the source code:</li> 
-<pre><code class="lang-java">package com.amazon.helloworld;
+<code class="lang-java">package com.amazon.helloworld;
 public class Main {
 public static void main(String[] args) {
 System.out.println(&quot;Hello, world&quot;);
 }
-}</code></pre> 
+}</code> 
 <p>The scenario below uses the us-east-2 region.</p> 
 <h3>Creating the branches</h3> 
 <p>Before we jump in and create a pull request, we’ll need at least two branches. In this example, we’ll follow a branching strategy similar to the one <a href="https://datasift.github.io/gitflow/IntroducingGitFlow.html">described in GitFlow</a>. We’ll create a new branch for our feature from the main development branch (the default branch). We’ll develop the feature in the feature branch. Once we’ve written and tested the code for the new feature in that branch, we’ll create a pull request that contains the differences between the feature branch and the main development branch. Our team lead (the second IAM user) will review the changes in the pull request. Once the changes have been reviewed, the feature branch will be merged into the development branch.</p> 
@@ -555,30 +555,30 @@ System.out.println(&quot;Hello, world&quot;);
 <p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture2.png" /></p> 
 <p style="text-align: center">Figure 2: Create a feature branch</p> 
 <p>If you haven’t cloned your repo yet, go to the <strong>Code</strong> link in the CodeCommit console and click the <strong>Connect</strong> button. Follow the instructions to clone your repo (<a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-connect.html">detailed instructions are here</a>). Open a terminal or command line and paste the git clone command supplied in the Connect instructions for your repository. The example below shows cloning a repository named codecommit-demo:</p> 
-<pre><code class="lang-bash">git clone https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo</code></pre> 
+<code class="lang-bash">git clone https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo</code> 
 <p>If you’ve previously cloned the repo you’ll need to update your local repo with the branches you created. Open a terminal or command line and make sure you’re in the root directory of your repo, then run the following command:</p> 
-<pre><code class="lang-bash">git remote update origin</code></pre> 
+<code class="lang-bash">git remote update origin</code> 
 <p>You’ll see your new branches pulled down to your local repository.</p> 
-<pre><code class="lang-bash">$ git remote update origin
+<code class="lang-bash">$ git remote update origin
 Fetching origin
 From https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
 * [new branch]      develop    -&gt; origin/develop
-* [new branch]      feature1   -&gt; origin/feature1</code></pre> 
+* [new branch]      feature1   -&gt; origin/feature1</code> 
 <p>You can also see your new branches by typing:</p> 
-<pre><code class="lang-bash">git branch --all
+<code class="lang-bash">git branch --all
 $ git branch --all
 * master
 remotes/origin/develop
 remotes/origin/feature1
-remotes/origin/master</code></pre> 
+remotes/origin/master</code> 
 <p>Now we’ll make a change to the ‘feature1’ branch. Open a terminal or command line and check out the feature1 branch by running the following command:</p> 
-<pre><code class="lang-bash">git checkout feature1
+<code class="lang-bash">git checkout feature1
 $ git checkout feature1
 Branch feature1 set up to track remote branch feature1 from origin.
-Switched to a new branch 'feature1'</code></pre> 
+Switched to a new branch 'feature1'</code> 
 <h3>Make code changes</h3> 
 <p>Edit a file in the repo using your favorite editor and save the changes. Commit your changes to the local repository, and push your changes to CodeCommit. For example:</p> 
-<pre><code class="lang-bash">git commit -am 'added new feature'
+<code class="lang-bash">git commit -am 'added new feature'
 git push origin feature1
 $ git commit -am 'added new feature'
 [feature1 8f6cb28] added new feature
@@ -590,7 +590,7 @@ Compressing objects: 100% (4/4), done.
 Writing objects: 100% (9/9), 617 bytes | 617.00 KiB/s, done.
 Total 9 (delta 2), reused 0 (delta 0)
 To https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
-2774a53..8f6cb28  feature1 -&gt; feature1</code></pre> 
+2774a53..8f6cb28  feature1 -&gt; feature1</code> 
 <h3>Creating the pull request</h3> 
 <p>Now we have a ‘feature1’ branch that differs from the ‘develop’ branch. At this point we want to merge our changes into the ‘develop’ branch. We’ll create a pull request to notify our team members to review our changes and check whether they are ready for a merge.</p> 
 <p>In the AWS CodeCommit console, click <strong>Pull requests</strong>. Click <strong>Create pull request</strong>. On the next page select ‘develop’ as the destination branch and ‘feature1’ as the source branch. Click <strong>Compare</strong>. CodeCommit will check for merge conflicts and highlight whether the branches can be automatically merged using the fast-forward option, or whether a manual merge is necessary. A pull request can be created in both situations.</p> 
@@ -634,12 +634,12 @@ To https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
 <h3>Resolving the ‘Resolve conflicts’ status</h3> 
 <p>The ‘Resolve conflicts’ status indicates there is a merge conflict between the ‘develop’ branch and the ‘feature1’ branch. This will require manual intervention to restore the pull request back to the ‘Mergable’ state. We will resolve this conflict next.</p> 
 <p>Open a terminal or command line and check out the develop branch by running the following command:</p> 
-<pre><code class="lang-bash">git checkout develop
+<code class="lang-bash">git checkout develop
 $ git checkout develop
 Switched to branch 'develop'
-Your branch is up-to-date with 'origin/develop'.</code></pre> 
+Your branch is up-to-date with 'origin/develop'.</code> 
 <p>To incorporate the changes the team lead made to the ‘develop’ branch, merge the remote ‘develop’ branch with your local copy:</p> 
-<pre><code class="lang-bash">git pull
+<code class="lang-bash">git pull
 $ git pull
 remote: Counting objects: 9, done.
 Unpacking objects: 100% (9/9), done.
@@ -648,20 +648,20 @@ af13c82..7b36f52  develop    -&gt; origin/develop
 Updating af13c82..7b36f52
 Fast-forward
 src/main/java/com/amazon/helloworld/Main.java | 2 +-
-1 file changed, 1 insertion(+), 1 deletion(-)</code></pre> 
+1 file changed, 1 insertion(+), 1 deletion(-)</code> 
 <p>Then checkout the ‘feature1’ branch:</p> 
-<pre><code class="lang-bash">git checkout feature1
+<code class="lang-bash">git checkout feature1
 $ git checkout feature1
 Switched to branch 'feature1'
-Your branch is up-to-date with 'origin/feature1'.</code></pre> 
+Your branch is up-to-date with 'origin/feature1'.</code> 
 <p>Now merge the changes from the ‘develop’ branch into your ‘feature1’ branch:</p> 
-<pre><code class="lang-bash">git merge develop
+<code class="lang-bash">git merge develop
 $ git merge develop
 Auto-merging src/main/java/com/amazon/helloworld/Main.java
 CONFLICT (content): Merge conflict in src/main/java/com/amazon/helloworld/Main.java
-Automatic merge failed; fix conflicts and then commit the result.</code></pre> 
+Automatic merge failed; fix conflicts and then commit the result.</code> 
 <p>Yes, this fails. The file Main.java has been changed in both branches, resulting in a merge conflict that can’t be resolved automatically. However, Main.java will now contain markers that indicate where the conflicting code is, and you can use these to resolve the issues manually. Edit Main.java using your favorite IDE, and you’ll see it looks something like this:</p> 
-<pre><code class="lang-java">package com.amazon.helloworld;
+<code class="lang-java">package com.amazon.helloworld;
 import java.util.*;
 /**
 * This class prints a hello world message
@@ -675,9 +675,9 @@ System.out.println(&quot;Hello, earthling. Today's date is: &quot; + todaysdate)
 System.out.println(&quot;Hello, earth&quot;);
 &gt;&gt;&gt;&gt;&gt;&gt;&gt; develop
 }
-}</code></pre> 
+}</code> 
 <p>The code between HEAD and ‘===’ is the code the developer added in the ‘feature1’ branch (HEAD represents ‘feature1’ because this is the current checked out branch). The code between ‘===’ and ‘&gt;&gt;&gt; develop’ is the code added to the ‘develop’ branch by the team lead. We’ll resolve the conflict by manually merging both changes, resulting in an updated Main.java:</p> 
-<pre><code class="lang-java">package com.amazon.helloworld;
+<code class="lang-java">package com.amazon.helloworld;
 import java.util.*;
 /**
 * This class prints a hello world message
@@ -687,18 +687,18 @@ public static void main(String[] args) {
 Date todaysdate = Calendar.getInstance().getTime();
 System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysdate);
 }
-}</code></pre> 
+}</code> 
 <p>After saving the change you can add and commit it to your local repo:</p> 
-<pre><code class="lang-bash">git add src/
-git commit -m 'fixed merge conflict by merging changes'</code></pre> 
+<code class="lang-bash">git add src/
+git commit -m 'fixed merge conflict by merging changes'</code> 
 <h3>Fixing issues raised by the reviewer</h3> 
 <p>Now you are ready to address the comments made by the team lead. If you are no longer pointing to the ‘feature1’ branch, check out the ‘feature1’ branch by running the following command:</p> 
-<pre><code class="lang-bash">git checkout feature1
+<code class="lang-bash">git checkout feature1
 $ git checkout feature1
 Branch feature1 set up to track remote branch feature1 from origin.
-Switched to a new branch 'feature1'</code></pre> 
+Switched to a new branch 'feature1'</code> 
 <p>Edit the source code in your favorite IDE and make the changes to address the comments. In this example, the developer has updated the source code as follows:</p> 
-<pre><code class="lang-java">package com.amazon.helloworld;
+<code class="lang-java">package com.amazon.helloworld;
 import java.util.*;
 /**
 *  This class prints a hello world message
@@ -712,10 +712,10 @@ public static void main(String[] args) {
 Date todaysDate = Calendar.getInstance().getTime();
 System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysDate);
 }
-}</code></pre> 
+}</code> 
 <p>After saving the changes, commit and push to the CodeCommit ‘feature1’ branch as you did previously:</p> 
-<pre><code class="lang-bash">git commit -am 'updated based on review comments'
-git push origin feature1</code></pre> 
+<code class="lang-bash">git commit -am 'updated based on review comments'
+git push origin feature1</code> 
 <h3>Responding to the reviewer</h3> 
 <p>Now that you’ve fixed the code issues you will want to respond to the review comments. In the AWS CodeCommit console, check that your latest commit appears in the pull request Commits tab. You now have a pull request consisting of more than one commit. The pull request in Figure 12 has four commits, which originated from the following activities:</p> 
 <li>8th Nov: the original commit used to initiate this pull request</li> 
@@ -773,32 +773,32 @@ by
 <h3>Path 1: Create a Stack and Succeed Deployment</h3> 
 <p>The Deploy state machine is shown here. It is triggered by the Lambda function using the following input parameters stored in an S3 bucket.</p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/10/12/create_stack_statemachine-1.png" /></p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;environmentName&quot;: &quot;prod&quot;,
 &quot;stackName&quot;: &quot;sample-lambda-app&quot;,
 &quot;templatePath&quot;: &quot;infra/Lambda-template.yaml&quot;,
 &quot;revisionS3Bucket&quot;: &quot;codepipeline-us-east-1-418586629775&quot;,
 &quot;revisionS3Key&quot;: &quot;StepFunctionsDrivenD/CodeCommit/sjcmExZ&quot;
-}</code></pre> 
+}</code> 
 <p>Note that some values used here are for the use case example only. Account-specific parameters like <em>revisionS3Bucket</em>&nbsp;and&nbsp;<em>revisionS3Key</em>&nbsp;will be different when you deploy this use case in your account.</p> 
 <p>These input parameters are used by various states in the state machine and passed to the corresponding Lambda functions to perform different tasks. For example,&nbsp;<em>stackName</em>&nbsp;is used to create a stack, check the status of stack creation, and create a change set. The&nbsp;<em>environmentName</em>&nbsp;represents the environment (for example, dev, test, prod) to which the code is being deployed. It is used to prefix the name of stacks and change sets.</p> 
 <p>With the exception of built-in states such as&nbsp;<em>wait</em>&nbsp;and&nbsp;<em>choice</em>, each state in the state machine invokes a specific Lambda function.&nbsp;&nbsp;The results received from the Lambda invocations are appended to the state machine’s original input. When the state machine finishes its execution, several parameters will have been added to its original input.</p> 
 <p>The first stage in the state machine is “Check Stack Existence”. It checks whether a stack with the input name specified in the&nbsp;<em>stackName</em>&nbsp;input parameter already exists. The output of the state adds a Boolean value called&nbsp;<em>doesStackExist</em>&nbsp;to the original state machine input as follows:</p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;doesStackExist&quot;: true,
 &quot;environmentName&quot;: &quot;prod&quot;,
 &quot;stackName&quot;: &quot;sample-lambda-app&quot;,
 &quot;templatePath&quot;: &quot;infra/lambda-template.yaml&quot;,
 &quot;revisionS3Bucket&quot;: &quot;codepipeline-us-east-1-418586629775&quot;,
 &quot;revisionS3Key&quot;: &quot;StepFunctionsDrivenD/CodeCommit/sjcmExZ&quot;,
-}</code></pre> 
+}</code> 
 <p>The following stage, “Does Stack Exist?”, is represented by Step Functions built-in&nbsp;<em>choice</em>&nbsp;state. It checks the value of&nbsp;<em>doesStackExist</em>&nbsp;to determine whether a new stack needs to be created (<em>doesStackExist=true</em>) or a change set needs to be created and inspected (<em>doesStackExist=false</em>).</p> 
 <p>If the stack does not exist, the states illustrated in green in the preceding figure are executed. This execution path creates the stack, waits until the stack is created, checks the status of the stack’s creation, and marks the deployment successful after the stack has been created. Except for “Stack Created?” and “Wait Stack Creation,” each of these stages invokes a Lambda function. “Stack Created?” and “Wait Stack Creation” are implemented by using the built-in&nbsp;<em>choice</em>&nbsp;state (to decide which path to follow) and the&nbsp;<em>wait</em> state&nbsp;(to wait a few seconds before proceeding), respectively. Each stage adds the results of their Lambda function executions to the initial input of the state machine, allowing future stages to process them.</p> 
 <h3>Path 2: Safely Update a Stack and Mark Deployment as Successful</h3> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/10/12/create_changeset_statemachine.png" /></p> 
 <p>If the stack indicated by the&nbsp;<em>stackName</em>&nbsp;parameter already exists, a different path is executed. (See the green states in the figure.) This path will create a change set and use&nbsp;<em>wait</em>&nbsp;and&nbsp;<em>choice</em>&nbsp;states to wait until the change set is created. Afterwards, a stage in the execution path will&nbsp;inspect&nbsp; the resources affected before the change set is executed.</p> 
 <p>The inspection procedure represented by the “Inspect Change Set Changes” stage consists of parsing the resources affected by the change set and checking whether any of the existing resources are being deleted or replaced. The following is an excerpt of the algorithm, where&nbsp;<em>changeSetChanges.Changes</em>&nbsp;is the object representing the change set changes:</p> 
-<pre><code class="lang-js">...
+<code class="lang-js">...
 var RESOURCES_BEING_DELETED_OR_REPLACED = &quot;RESOURCES-BEING-DELETED-OR-REPLACED&quot;;
 var CAN_SAFELY_UPDATE_EXISTING_STACK = &quot;CAN-SAFELY-UPDATE-EXISTING-STACK&quot;;
 for (var i = 0; i &lt; changeSetChanges.Changes.length; i++) {
@@ -814,10 +814,10 @@ return RESOURCES_BEING_DELETED_OR_REPLACED;
 }
 }
 }
-return CAN_SAFELY_UPDATE_EXISTING_STACK;</code></pre> 
+return CAN_SAFELY_UPDATE_EXISTING_STACK;</code> 
 <p>The algorithm returns different values to indicate whether the change set can be safely executed (<em>CAN_SAFELY_UPDATE_EXISTING_STACK</em>&nbsp;or&nbsp;<em>RESOURCES_BEING_DELETED_OR_REPLACED</em>). This value is used later by the state machine to decide whether to execute the change set and update the stack or interrupt the deployment.</p> 
 <p>The output of the “Inspect Change Set” stage is shown here.</p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;environmentName&quot;: &quot;prod&quot;,
 &quot;stackName&quot;: &quot;sample-lambda-app&quot;,
 &quot;templatePath&quot;: &quot;infra/lambda-template.yaml&quot;,
@@ -827,13 +827,13 @@ return CAN_SAFELY_UPDATE_EXISTING_STACK;</code></pre>
 &quot;changeSetName&quot;: &quot;prod-sample-lambda-app-change-set-545&quot;,
 &quot;changeSetCreationStatus&quot;: &quot;complete&quot;,
 &quot;changeSetAction&quot;: &quot;CAN-SAFELY-UPDATE-EXISTING-STACK&quot;
-}</code></pre> 
+}</code> 
 <p>At this point, these parameters have been added to the state machine’s original input:</p> 
 <li><em>changeSetName</em>,&nbsp;which is added by the “Create Change Set” state.</li> 
 <li><em>changeSetCreationStatus</em>,&nbsp;which is added by the “Get Change Set Creation Status” state.</li> 
 <li><em>changeSetAction</em>,&nbsp;which is added by the “Inspect Change Set Changes” state.</li> 
 <p>The “Safe to Update Infra?” step is a&nbsp;choice&nbsp;state (its JSON spec follows) that simply checks the value of the&nbsp;changeSetAction&nbsp;parameter. If the value is equal to&nbsp;“<em>CAN-SAFELY-UPDATE-EXISTING-STACK</em>“, meaning that no resources will be deleted or replaced, the step will execute the change set by proceeding to the “Execute Change Set” state. The deployment is successful (the state machine completes its execution successfully).</p> 
-<pre><code class="lang-json">&quot;Safe to Update Infra?&quot;: {
+<code class="lang-json">&quot;Safe to Update Infra?&quot;: {
 &quot;Type&quot;: &quot;Choice&quot;,
 &quot;Choices&quot;: [
 {
@@ -843,25 +843,25 @@ return CAN_SAFELY_UPDATE_EXISTING_STACK;</code></pre>
 }
 ],
 &quot;Default&quot;: &quot;Deployment Failed&quot;
-}</code></pre> 
+}</code> 
 <h3>Path 3: Reject Stack Update and Fail Deployment</h3> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/10/12/deployment_failed_statemachine-1.png" /></p> 
 <p>If the <em>changeSetAction</em> parameter is different from “<em>CAN-SAFELY-UPDATE-EXISTING-STACK</em>“, the state machine will interrupt the deployment by deleting the change set and proceeding to the “Deployment Fail” step, which is a built-in <em>Fail</em> state. (Its JSON spec follows.) This state causes the state machine to stop in a failed state and serves to indicate to the Lambda function that the pipeline deployment should be interrupted in a fail state as well.</p> 
-<pre><code class="lang-json"> &quot;Deployment Failed&quot;: {
+<code class="lang-json"> &quot;Deployment Failed&quot;: {
 &quot;Type&quot;: &quot;Fail&quot;,
 &quot;Cause&quot;: &quot;Deployment Failed&quot;,
 &quot;Error&quot;: &quot;Deployment Failed&quot;
-}</code></pre> 
+}</code> 
 <p>In all three scenarios, there’s a state machine’s visual representation available in the AWS Step Functions console that makes it very easy for developers to identify what tasks have been executed or why a deployment has failed. Developers can also inspect the inputs and outputs of each state and look at the state machine Lambda function’s logs for details. Meanwhile, the corresponding CodePipeline action remains very simple and intuitive for developers who only need to know whether the deployment was successful or failed.</p> 
 <b>The State Machine Trigger Lambda Function</b> 
 <p>The <em>Trigger Lambda function</em> is invoked directly by the <em>Deploy</em> action in CodePipeline. The CodePipeline action must pass a JSON structure to the trigger function through the UserParameters attribute, as follows:</p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;s3Bucket&quot;: &quot;codepipeline-StepFunctions-sample&quot;,
 &quot;stateMachineFile&quot;: &quot;state_machine_input.json&quot;
-}</code></pre> 
+}</code> 
 <p>The&nbsp;<em>s3Bucket</em>&nbsp;parameter specifies the S3 bucket location for the state machine input parameters file. The&nbsp;<em>stateMachineFile</em>&nbsp;parameter specifies the file holding the input parameters. By being able to specify different input parameters to the state machine, we make the Trigger Lambda function and the state machine reusable across environments. For example, the same state machine could be called from a&nbsp;<em>test</em>&nbsp;and&nbsp;<em>prod</em>&nbsp;pipeline action by specifying a different S3 bucket or state machine input file for each environment.</p> 
 <p>The Trigger Lambda function performs two main tasks: triggering the state machine and checking the execution state of the state machine. Its core logic is shown here:</p> 
-<pre><code class="lang-javascript">exports.index = function (event, context, callback) {
+<code class="lang-javascript">exports.index = function (event, context, callback) {
 try {
 console.log(&quot;Event: &quot; + JSON.stringify(event));
 console.log(&quot;Context: &quot; + JSON.stringify(context));
@@ -876,9 +876,9 @@ triggerStateMachine(event, context, callback);
 catch (err) {
 failure(Util.jobId(event), callback, context.invokeid, err.message);
 }
-}</code></pre> 
+}</code> 
 <p><em>Util.isContinuingPipelineTask(event)</em> is a utility function that checks if the Trigger Lambda function is being called for the first time (that is, no continuation token is passed by CodePipeline) or as a continuation of a previous call. In its first execution, the Lambda function will trigger the state machine and send a continuation token to CodePipeline that contains the state machine execution ARN. The state machine ARN is exposed to the Lambda function through a Lambda environment variable called <em>stateMachineArn</em>. Here is the code that triggers the state machine:</p> 
-<pre><code class="lang-javascript">function triggerStateMachine(event, context, callback) {
+<code class="lang-javascript">function triggerStateMachine(event, context, callback) {
 var stateMachineArn = process.env.stateMachineArn;
 var s3Bucket = Util.actionUserParameter(event, &quot;s3Bucket&quot;);
 var stateMachineFile = Util.actionUserParameter(event, &quot;stateMachineFile&quot;);
@@ -901,10 +901,10 @@ return continueExecution(Util.jobId(event), continuationToken, callback, message
 console.log(&quot;Error triggering state machine: &quot; + stateMachineArn + &quot;, Error: &quot; + err.message);
 failure(Util.jobId(event), callback, context.invokeid, err.message);
 })
-}</code></pre> 
+}</code> 
 <p>The Trigger Lambda function fetches the state machine input parameters from an S3 file, triggers the execution of the state machine using the input parameters and the&nbsp;<em>stateMachineArn</em>&nbsp;environment variable, and signals to&nbsp;CodePipeline&nbsp;that the execution should continue later by passing a continuation token that contains the state machine execution ARN. In case any of these operations fail and an exception is thrown, the Trigger Lambda function will fail the pipeline immediately by signaling a pipeline failure through the&nbsp;<em>putJobFailureResult</em>&nbsp;CodePipeline&nbsp;API.</p> 
 <p>If the Lambda function is continuing a previous execution, it will extract the state machine execution ARN from the continuation token and check the status of the state machine, as shown here.</p> 
-<pre><code class="lang-javascript">function monitorStateMachineExecution(event, context, callback) {
+<code class="lang-javascript">function monitorStateMachineExecution(event, context, callback) {
 var stateMachineArn = process.env.stateMachineArn;
 var continuationToken = JSON.parse(Util.continuationToken(event));
 var stateMachineExecutionArn = continuationToken.stateMachineExecutionArn;
@@ -926,7 +926,7 @@ return failure(Util.jobId(event), callback, context.invokeid, message);
 var message = &quot;Error monitoring execution: &quot; + stateMachineExecutionArn + &quot; of state machine: &quot; + stateMachineArn + &quot;, Error: &quot; + err.message;
 failure(Util.jobId(event), callback, context.invokeid, message);
 });
-}</code></pre> 
+}</code> 
 <p>If the state machine is in the&nbsp;<em>RUNNING</em>&nbsp;state, the Lambda function will send the continuation token back to the&nbsp;CodePipeline&nbsp;action. This will cause CodePipeline to call the Lambda function again a few seconds later. If the state machine has&nbsp;<em>SUCCEEDED</em>, then the Lambda function will notify the CodePipeline action that the action has succeeded. In any other case (<em>FAILURE,&nbsp;TIMED-OUT, or&nbsp;ABORT</em>), the Lambda function will fail the pipeline action.</p> 
 <p>This behavior is especially useful for developers who are building and debugging a new state machine because a bug in the state machine can potentially leave the pipeline action hanging for long periods of time until it times out. The Trigger Lambda function prevents this.</p> 
 <p>Also, by having the Trigger Lambda function as a means to decouple the pipeline and state machine, we make the state machine more reusable. It can be triggered from anywhere, not just from a&nbsp;CodePipeline&nbsp;action.</p> 
@@ -934,7 +934,7 @@ failure(Util.jobId(event), callback, context.invokeid, message);
 <p>Our sample pipeline contains two simple stages: the <em>Source</em> stage represented by a CodeCommit Git repository and the <em>Prod</em> stage, which contains the Deploy action that invokes the Trigger Lambda function. When the state machine decides that the change set created must be rejected (because it replaces or deletes some the existing production resources), it fails the pipeline without performing any updates to the existing infrastructure. (See the failed Deploy action in red.) Otherwise, the pipeline action succeeds, indicating that the existing provisioned infrastructure was either created (first run) or updated without impacting any resources. (See the green Deploy stage in the pipeline on the left.)</p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/10/12/codepipeline_pipeline-1.png" /></p> 
 <p>The JSON spec for the pipeline’s Prod stage is shown here. We use the <em>UserParameters</em> attribute to pass the S3 bucket and state machine input file to the Lambda function. These parameters are action-specific, which means that we can reuse the state machine in another pipeline action.</p> 
-<pre><code class="lang-json">{
+<code class="lang-json">{
 &quot;name&quot;: &quot;Prod&quot;,
 &quot;actions&quot;: [
 {
@@ -958,7 +958,7 @@ failure(Util.jobId(event), callback, context.invokeid, message);
 &quot;runOrder&quot;: 1
 }
 ]
-}</code></pre> 
+}</code> 
 <b>Conclusion</b> 
 <p>In this blog post, we discussed how state machines in AWS Step Functions can be used to handle&nbsp;workflow-driven&nbsp;actions. We showed how a Lambda function can be used to fully decouple the pipeline and the state machine and manage their interaction. The use of a state machine greatly simplified the associated CodePipeline action, allowing us to build a much simpler and cleaner pipeline while drilling down into the state machine’s execution for troubleshooting or debugging.</p> 
 <p>Here are two exercises you can complete by using the&nbsp;source code.</p> 
@@ -1109,7 +1109,7 @@ by
 <li>As part of install phase, required packages like Xvfb and Selenium are installed using yum.</li> 
 <li>During the pre_build phase, the test bed is prepared for test execution.</li> 
 <li>During the build phase, the appropriate DISPLAY is set and the tests are executed.</li> 
-<pre><code class="lang-yaml">version: 0.2
+<code class="lang-yaml">version: 0.2
 env:
 &nbsp; variables:
 &nbsp; &nbsp; BROWSER: &quot;chrome&quot;
@@ -1142,7 +1142,7 @@ phases:
 &nbsp; &nbsp; &nbsp; - export DISPLAY=:5
 &nbsp; &nbsp; &nbsp; - cd tests
 &nbsp; &nbsp; &nbsp; - echo &quot;Executing simple test...&quot;
-&nbsp; &nbsp; &nbsp; - python testsuite.py</code></pre> 
+&nbsp; &nbsp; &nbsp; - python testsuite.py</code> 
 <p>Because Ghost Driver runs headless, it can be executed on AWS Lambda. In keeping with a fire-and-forget model, I used CodeBuild to create the PhantomJS Lambda function and trigger the test invocations on Lambda in parallel. This is powerful because many tests can be executed in parallel on Lambda.</p> 
 <p><strong>Build Spec for PhantomJS</strong></p> 
 <p>The build specification for PhantomJS testing also includes multiple phases. It is a little different from the preceding example because we are using AWS Lambda for the test execution.</p> 
@@ -1150,7 +1150,7 @@ phases:
 <li>As part of install phase, the required packages like Selenium and the AWS CLI are installed using yum.</li> 
 <li>During the pre_build phase, the test bed is prepared for test execution.</li> 
 <li>During the build phase, a zip file that will be used to create the PhantomJS Lambda function is created and tests are executed on the Lambda function.</li> 
-<pre><code class="lang-yaml">version: 0.2
+<code class="lang-yaml">version: 0.2
 env:
 &nbsp; variables:
 &nbsp; &nbsp; BROWSER: &quot;phantomjs&quot;
@@ -1194,7 +1194,7 @@ phases:
 &nbsp; &nbsp; &nbsp; - export PhantomJSFunction=$func_name
 &nbsp; &nbsp; &nbsp; - cd ../tests/
 &nbsp; &nbsp; &nbsp; - python testsuite.py
-</code></pre> 
+</code> 
 <p>The list of test cases and the test modules that belong to each case are stored in an <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a> table. Based on the list of modules passed as an argument to the CodeBuild project, CodeBuild gets the test cases from that table and executes them. The test execution status and results are stored in another Amazon DynamoDB table. It will read the test status from the status table in DynamoDB and display it.</p> 
 <p>AWS CodeBuild and AWS Lambda perform the test execution as individual tasks. AWS CodePipeline plays an important role here by enabling continuous delivery and parallel execution of tests for optimized testing.</p> 
 <p>Here’s how to do it:</p> 
@@ -1350,7 +1350,7 @@ by
 <p>d. Provide the external account (Account B) permission to use this key. For more information, see <a href="https://blogs.aws.amazon.com/security/post/Tx2N2SRHXSNEX91/Share-Custom-Encryption-Keys-More-Securely-Between-Accounts-by-Using-AWS-Key-Man">Sharing custom encryption keys securely between accounts</a>.</p> 
 <p><em> arn:aws:iam::&lt;Account B ID&gt;:root</em></p> 
 <p>e. In Account B, delegate the permission to use this key to the role that AWS CodePipeline is using. In the&nbsp;CloudFormation template, you can see&nbsp;that <em><strong>CodePipelineTrustRole</strong></em>&nbsp;is used. Attach the following policy to the role. Ensure that you update the region and Account ID accordingly.</p> 
-<pre><code class="lang-js">{
+<code class="lang-js">{
 &nbsp;&nbsp;&nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,
 &nbsp;&nbsp;&nbsp; &quot;Statement&quot;: [
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
@@ -1385,12 +1385,12 @@ by
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
 &nbsp;&nbsp;&nbsp; ]
-}</code></pre> 
+}</code> 
 <p>f. Update the Lambda function, <strong><em>CopytoDest</em></strong>, to use the following in the parameter definition.</p> 
 <p>&nbsp;</p> 
-<pre><code class="lang-js">ServerSideEncryption: 'aws:kms',\n&quot;,
+<code class="lang-js">ServerSideEncryption: 'aws:kms',\n&quot;,
 SSEKMSKeyId: '&lt; keyeid &gt;'&nbsp;&nbsp;
-//ServerSideEncryption: 'AES256'\n&quot;,</code></pre> 
+//ServerSideEncryption: 'AES256'\n&quot;,</code> 
 <p>And there you go! You have enabled secure delivery of your source code into your cross-region/cross-account deployment solution.</p> 
 <h3><strong>About the Author</strong></h3> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/08/16/BK.jpeg" /><br /> BK Chaurasiya&nbsp;is a Solutions Architect with Amazon Web Services. He provides technical guidance, design advice and thought leadership to some of the largest and successful AWS customers and partners.</p> 
