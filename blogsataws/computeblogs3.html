@@ -191,6 +191,295 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger-626x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Implementing Default Directory Indexes in Amazon S3-backed Amazon CloudFront Origins Using Lambda@Edge</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ronnie Eichler</span></span> | on 
+<time property="datePublished" datetime="2017-10-18T07:35:23+00:00">18 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2895" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2895&amp;disqus_title=Implementing+Default+Directory+Indexes+in+Amazon+S3-backed+Amazon+CloudFront+Origins+Using+Lambda%40Edge&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2895');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>With the recent launch of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, it’s now possible for you to provide even more robust functionality to your static websites. <a href="https://aws.amazon.com/cloudfront">Amazon CloudFront</a> is a content distribution network service. In this post, I show how you can use Lambda@Edge along with the CloudFront origin access identity (OAI) for Amazon S3 and still provide simple URLs (such as www.example.com/about/ instead of www.example.com/about/index.html).<span id="more-2895"></span></p> 
+<h3>Background</h3> 
+<p>Amazon S3 is a great platform for <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/WebsiteHosting.html">hosting a static website</a>. You don’t need to worry about managing servers or underlying infrastructure—you just publish your static to content to an S3 bucket. S3 provides a DNS name such as &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com. Use this name for your website by creating a CNAME record in your domain’s DNS environment (or Amazon Route 53) as follows:</p> 
+<blockquote> 
+<p>www.example.com -&gt; &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com</p> 
+</blockquote> 
+<p>You can also put CloudFront in front of S3 to further scale the performance of your site and cache the content closer to your users. CloudFront can enable HTTPS-hosted sites, by either using a custom Secure Sockets Layer (SSL) certificate or a managed certificate from <a href="https://aws.amazon.com/blogs/aws/new-aws-certificate-manager-deploy-ssltls-based-apps-on-aws/">AWS Certificate Manager</a>. In addition, CloudFront also offers integration with <a href="https://aws.amazon.com/waf/">AWS WAF</a>, a web application firewall. As you can see, it’s possible to achieve some robust functionality by using S3, CloudFront, and other managed services and not have to worry about maintaining underlying infrastructure.</p> 
+<p>One of the key concerns that you might have when implementing any type of WAF or CDN is that you want to force your users to go through the CDN. If you implement CloudFront in front of S3, you can achieve this by using an <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html">OAI</a>. However, in order to do this, you cannot use the HTTP endpoint that is exposed by S3’s static website hosting feature. Instead, CloudFront must use the S3 REST endpoint to fetch content from your origin so that the request can be authenticated using the OAI. This presents some challenges in that the REST endpoint does not support redirection to a default index page.</p> 
+<p>CloudFront does allow you to specify a default root object (index.html), but it only works on the root of the website (such as http://www.example.com &gt; http://www.example.com/index.html). It does not work on any subdirectory (such as http://www.example.com/about/). If you were to attempt to request this URL through CloudFront, CloudFront would do a S3 GetObject API call against a key that does not exist.</p> 
+<p>Of course, it is a bad user experience to expect users to always type index.html at the end of every URL (or even know that it should be there). Until now, there has not been an easy way to provide these simpler URLs (equivalent to the DirectoryIndex Directive in an Apache Web Server configuration) to users through CloudFront. Not if you still want to be able to restrict access to the S3 origin using an OAI. However, with the release of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, you can use a JavaScript function running on the CloudFront edge nodes to look for these patterns and request the appropriate object key from the S3 origin.</p> 
+<h3>Solution</h3> 
+<p>In this example, you use the compute power at the CloudFront edge to inspect the request as it’s coming in from the client. Then re-write the request so that CloudFront requests a default index object (index.html in this case) for any request URI that ends in ‘/’.</p> 
+<p>When a request is made against a web server, the client specifies the object to obtain in the request. You can use this URI and apply a regular expression to it so that these URIs get resolved to a default index object before CloudFront requests the object from the origin. Use the following code:</p> 
+<pre><code class="lang-js">'use strict';
+exports.handler = (event, context, callback) =&gt; {
+// Extract the request from the CloudFront event that is sent to Lambda@Edge 
+var request = event.Records[0].cf.request;
+// Extract the URI from the request
+var olduri = request.uri;
+// Match any '/' that occurs at the end of a URI. Replace it with a default index
+var newuri = olduri.replace(/\/$/, '\/index.html');
+// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
+console.log(&quot;Old URI: &quot; + olduri);
+console.log(&quot;New URI: &quot; + newuri);
+// Replace the received URI with the URI that includes the index page
+request.uri = newuri;
+// Return to CloudFront
+return callback(null, request);
+};
+</code></pre> 
+<p>To get started, create an S3 bucket to be the origin for CloudFront:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1-921x1024.png" /></a></p> 
+<p>On the other screens, you can just accept the defaults for the purposes of this walkthrough. If this were a production implementation, I would recommend enabling bucket logging and specifying an existing S3 bucket as the destination for access logs. These logs can be useful if you need to troubleshoot issues with your S3 access.</p> 
+<p>Now, put some content into your S3 bucket. For this walkthrough, create two simple webpages to demonstrate the functionality: &nbsp;A page that resides at the website root, and another that is in a subdirectory.</p> 
+<p><strong>&lt;s3bucketname&gt;/index.html</strong></p> 
+<pre><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Root home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre> 
+<p><strong>&lt;s3bucketname&gt;/subdirectory/index.html</strong></p> 
+<pre><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre> 
+<p>When uploading the files into S3, you can accept the defaults. You add a bucket policy as part of the CloudFront distribution creation that allows CloudFront to access the S3 origin. You should now have an S3 bucket that looks like the following:</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png" /></a> 
+<p class="wp-caption-text">Root of bucket</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png" /></a> 
+<p class="wp-caption-text">Subdirectory in bucket</p> 
+<p>Next, create a CloudFront distribution that your users will use to access the content. Open the CloudFront console, and choose <strong>Create Distribution</strong>. For <strong>Select a delivery method for your content</strong>, under <strong>Web</strong>, choose <strong>Get Started</strong>.</p> 
+<p>On the next screen, you set up the distribution. Below are the options to configure:</p> 
+<li><strong>Origin Domain Name</strong>: &nbsp;Select the S3 bucket that you created earlier.</li> 
+<li><strong>Restrict Bucket Access:&nbsp;</strong>Choose&nbsp;<strong>Yes</strong>.</li> 
+<li><strong>Origin Access Identity:&nbsp;</strong>Create a new identity.</li> 
+<li><strong>Grant Read Permissions on Bucket</strong>: Choose&nbsp;<strong>Yes, Update Bucket Policy</strong>.</li> 
+<li><strong>Object Caching</strong>: Choose&nbsp;<strong>Customize</strong> (I am changing the behavior to avoid having CloudFront cache objects, as this could affect your ability to troubleshoot while implementing the Lambda code). 
+<li><strong>Minimum TTL</strong>: 0</li> 
+<li><strong>Maximum TTL</strong>: 0</li> 
+<li><strong>Default TTL</strong>: 0</li> 
+</ul> </li> 
+<p>You can accept all of the other defaults. Again, this is a proof-of-concept exercise. After you are comfortable that the CloudFront distribution is working properly with the origin and Lambda code, you can re-visit the preceding values and make changes before implementing it in production.</p> 
+<p>CloudFront distributions can take several minutes to deploy (because the changes have to propagate out to all of the edge locations). After that’s done, test the functionality of the S3-backed static website. Looking at the distribution, you can see that CloudFront assigns a domain name:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png" /></a></p> 
+<p>Try to access the website using a combination of various URLs:</p> 
+<p>http://&lt;domainname&gt;/: &nbsp;<strong>Works</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/
+*   Trying 54.192.192.214...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
+&gt; GET / HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; ETag: &quot;cb7e2634fe66c1fd395cf868087dd3b9&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: -D2FSRwzfcwyKZKFZr6DqYFkIf4t7HdGw2MkUF5sE6YFDxRJgi0R1g==
+&lt; Content-Length: 209
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:16 GMT
+&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Root home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>This is because CloudFront is configured to request a default root object (index.html) from the origin.</p> 
+<p>http://&lt;domainname&gt;/subdirectory/: &nbsp;<strong>Doesn’t work</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
+*   Trying 54.192.192.214...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
+&gt; GET /subdirectory/ HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; ETag: &quot;d41d8cd98f00b204e9800998ecf8427e&quot;
+&lt; x-amz-server-side-encryption: AES256
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: Iqf0Gy8hJLiW-9tOAdSFPkL7vCWBrgm3-1ly5tBeY_izU82ftipodA==
+&lt; Content-Length: 0
+&lt; Content-Type: application/x-directory
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:24 GMT
+&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>If you use a tool such like cURL to test this, you notice that CloudFront and S3 are returning a blank response. The reason for this is that the subdirectory does exist, but it does not resolve to an S3 object. Keep in mind that S3 is an object store, so there are no real directories. User interfaces such as the S3 console present a hierarchical view of a bucket with folders based on the presence of forward slashes, but behind the scenes the bucket is just a collection of keys that represent stored objects.</p> 
+<p>http://&lt;domainname&gt;/subdirectory/index.html: &nbsp;<strong>Works</strong></p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/index.html
+*   Trying 54.192.192.130...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.130) port 80 (#0)
+&gt; GET /subdirectory/index.html HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Date: Thu, 20 Jul 2017 20:35:15 GMT
+&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: RefreshHit from cloudfront
+&lt; X-Amz-Cf-Id: bkh6opXdpw8pUomqG3Qr3UcjnZL8axxOH82Lh0OOcx48uJKc_Dc3Cg==
+&lt; Content-Length: 227
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
+&lt; Via: 1.1 3f2788d309d30f41de96da6f931d4ede.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>This request works as expected because you are referencing the object directly. Now, you implement the Lambda@Edge function to return the default index.html page for any subdirectory. Looking at the example JavaScript code, here’s where the magic happens:</p> 
+<pre><code class="lang-js">var newuri = olduri.replace(/\/$/, '\/index.html');
+</code></pre> 
+<p>You are going to use a JavaScript regular expression to match any ‘/’ that occurs at the end of the URI and replace it with ‘/index.html’. This is the equivalent to what S3 does on its own with static website hosting. However, as I mentioned earlier, you can’t rely on this if you want to use a policy on the bucket to restrict it so that users must access the bucket through CloudFront. That way, all requests to the S3 bucket must be authenticated using the S3 REST API. Because of this, you implement a Lambda@Edge function that takes any client request ending in ‘/’ and append a default ‘index.html’ to the request before requesting the object from the origin.</p> 
+<p>In the Lambda console, choose <strong>Create function</strong>. On the next screen, skip the blueprint selection and choose <strong>Author from scratch</strong>, as you’ll use the sample code provided.</p> 
+<p>Next, configure the trigger. Choosing the empty box shows a list of available triggers. Choose <strong>CloudFront</strong> and select your CloudFront distribution ID (created earlier). For this example, leave <strong>Cache Behavior</strong> as <strong>*</strong> and <strong>CloudFront Event</strong> as <strong>Origin Request</strong>. Select the <strong>Enable trigger and replicate box</strong> and choose <strong>Next</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png" /></a></p> 
+<p>Next, give the function a name and a description. Then, copy and paste the following code:</p> 
+<pre><code class="lang-js">'use strict';
+exports.handler = (event, context, callback) =&gt; {
+// Extract the request from the CloudFront event that is sent to Lambda@Edge 
+var request = event.Records[0].cf.request;
+// Extract the URI from the request
+var olduri = request.uri;
+// Match any '/' that occurs at the end of a URI. Replace it with a default index
+var newuri = olduri.replace(/\/$/, '\/index.html');
+// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
+console.log(&quot;Old URI: &quot; + olduri);
+console.log(&quot;New URI: &quot; + newuri);
+// Replace the received URI with the URI that includes the index page
+request.uri = newuri;
+// Return to CloudFront
+return callback(null, request);
+};
+</code></pre> 
+<p>Next, define a role that grants permissions to the Lambda function. For this example, choose <strong>Create new role from template</strong>, <strong>Basic Edge Lambda permissions</strong>. This creates a new IAM role for the Lambda function and grants the following permissions:</p> 
+<pre><code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:logs:*:*:*&quot;
+]
+}
+]
+}
+</code></pre> 
+<p>In a nutshell, these are the permissions that the function needs to create the necessary CloudWatch log group and log stream, and to put the log events so that the function is able to write logs when it executes.</p> 
+<p>After the function has been created, you can go back to the browser (or cURL) and re-run the test for the subdirectory request that failed previously:</p> 
+<pre><code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
+*   Trying 54.192.192.202...
+* TCP_NODELAY set
+* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.202) port 80 (#0)
+&gt; GET /subdirectory/ HTTP/1.1
+&gt; Host: d3gt20ea1hllb.cloudfront.net
+&gt; User-Agent: curl/7.51.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Date: Thu, 20 Jul 2017 21:18:44 GMT
+&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
+&lt; Accept-Ranges: bytes
+&lt; Server: AmazonS3
+&lt; X-Cache: Miss from cloudfront
+&lt; X-Amz-Cf-Id: rwFN7yHE70bT9xckBpceTsAPcmaadqWB9omPBv2P6WkIfQqdjTk_4w==
+&lt; Content-Length: 227
+&lt; Content-Type: text/html
+&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
+&lt; Via: 1.1 3572de112011f1b625bb77410b0c5cca.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
+&lt; Connection: keep-alive
+&lt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;Subdirectory home page&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+* Curl_http_done: called premature == 0
+* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
+</code></pre> 
+<p>You have now configured a way for CloudFront to return a default index page for subdirectories in S3!</p> 
+<h3>Summary</h3> 
+<p>In this post, you used <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-edge.html">Lambda@Edge</a> to be able to use CloudFront with an S3 origin access identity and serve a default root object on subdirectory URLs. To find out some more about this use-case, see <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-the-edge.html">Lambda@Edge integration with CloudFront</a>&nbsp;in&nbsp;our documentation.</p> 
+<p>If you have questions or suggestions, feel free to comment below. For troubleshooting or implementation help, check out the Lambda <a href="https://forums.aws.amazon.com/forum.jspa?forumID=186">forum</a>.</p> 
+<footer> 
+TAGS: 
+<span property="keywords"><a href="https://aws.amazon.com/blogs/compute/tag/amazon-cloudfront/" rel="tag">Amazon CloudFront</a>, <a href="https://aws.amazon.com/blogs/compute/tag/aws-lambda/" rel="tag">AWS Lambda</a>, <a href="https://aws.amazon.com/blogs/compute/tag/lambdaedge/" rel="tag">Lambda@Edge</a>, <a href="https://aws.amazon.com/blogs/compute/tag/s3/" rel="tag">S3</a></span> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2895');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/11/withoutcold-1.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Analyzing Performance for Amazon Rekognition Apps Written on AWS Lambda Using AWS X-Ray</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1294,133 +1583,6 @@ AWS.Blog.commenting('#aws-comment-trigger-2792');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2792');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Provision Complex, On-Demand Infrastructures by Using Amazon API Gateway and AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ben Eichorst</span></span> and 
-<span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T07:11:20+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2714" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2714&amp;disqus_title=How+to+Provision+Complex%2C+On-Demand+Infrastructures+by+Using+Amazon+API+Gateway+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2714');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Many AWS customers are using the power of AWS CloudFormation to customize complex infrastructures. At the same time, they are moving towards self-service for their expanding customer bases. How can complex infrastructure be provisioned on-demand while minimizing customer use of the AWS Management Console?</p> 
-<p>Let’s say AnyCompany uses AWS services to process sensitive datasets owned by its customers. These customers need to be able to provision their own processing infrastructure on demand. However, AnyCompany doesn’t want the customers to access <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> directly, or see how customer data is processed. How can AnyCompany create resources with CloudFormation templates without exposing proprietary processing methods?</p> 
-<p>You can use <a href="https://aws.amazon.com/api-gateway/">Amazon API Gateway</a> and <a href="https://aws.amazon.com/lambda/">AWS Lambda </a>to provide complex, on-demand, data-processing infrastructure to users who have no need to access the AWS Management Console. In this post, we walk through the setup and configuration of working code examples that you (and your customers) can use to provision on-demand infrastructure. This post’s solution combines principles of immutable computing with a method to provide granular access to powerful capabilities available in the AWS Cloud. In this post, you create immutability for an Amazon EC2 instance by provisioning it without an SSH key or any other access mechanism. The instance can’t be altered after it’s launched.</p> 
-<p><span id="more-2714"></span></p> 
-<b>Solution architecture</b> 
-<p>API Gateway simplifies the creation, management, and deployment of APIs. Integration of API Gateway with Lambda, the AWS serverless compute service, allows for further interaction with the larger family of AWS services. In this post, the Lambda function provisions on-demand CloudFormation infrastructure stacks for our example service’s primary business function: &nbsp;the calculation of pi.</p> 
-<p>Two CloudFormation templates are used to provision infrastructure stacks:</p> 
-<li>The <em>primary</em> template</li> 
-<li>The <em>business-function</em> template</li> 
-<p>The primary CloudFormation template creates the base infrastructure that is shown in the following diagram.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /></a></p> 
-<p>The primary template creates a stack of resources:</p> 
-<li>API Gateway resources</li> 
-<li>The associated AWS Identity and Access Management (IAM) security roles</li> 
-<li>An <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket for the results of the data processed by the business-function template</li> 
-<li>A Lambda function specifically for the purpose of creating multiple iterations of a second <em>repeatable infrastructure</em>. This repeatable infrastructure, contained within the second CloudFormation template, is referred to as the business-function template.</li> 
-<p>The API created by the primary template allows system users to pass selected parameters to the business-function template, such as cost-center tags, a unique name, and data-processing parameters. The ability to pass parameters allows the business-function infrastructure to adapt to the specific needs of each request. In this post’s example—calculating the first 15,000 digits of pi—the number of digits calculated can be specified in the request initiated by the customer. For your own business function templates, this could be the location of input data or an email address to which results are sent.</p> 
-<p>In the example business-function template, the template provisions an immutable EC2 instance that calculates a specified number of digits of pi and uploads the results to the S3 bucket. The business-function stack then self-terminates, reducing any potential extra costs.</p> 
-<p>This architecture allows you, at multiple points, to control access, processing parameters, and workflow.</p> 
-<p>In the earlier diagram, (1) all access to the AWS Management Console and API for your account’s infrastructure is segregated through the use of API Gateway. Then, (2) IAM role–based restrictions are in place for API Gateway to call the Lambda function. The Lambda function serves to selectively add, subtract, or alter input parameters from external users. The code for this function is embedded in the primary CloudFormation template. You can modify the code to add specific tags for billing information or call other AWS services such as <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB </a>or <a href="https://aws.amazon.com/rds">Amazon RDS</a> to keep a record of which infrastructure is instantiated by which API users.</p> 
-<p>In our example template, the Lambda function is populated to pass only the required parameters for the business-function template’s calculation of pi. The use of the function restricts the ability of customers to inject unexpected or undesirable parameters. The solution then (3) uses a Lambda execution role to control the Lambda function’s access. Finally, (4) the Lambda function initiates the CloudFormation business-function template by using another IAM role that is restricted to instantiating only the resources required.</p> 
-<p>The use of an intermediate Lambda function here allows for heavy customization and filtering of the input requests from the customer-facing API Gateway.</p> 
-<b>Solution Features</b> 
-<p>By using this API Gateway–based solution, you can benefit in a number of ways:</p> 
-<li> <h4>User requests are decoupled from the infrastructure that fulfills those requests.</h4> <p>This post’s solution removes the need for users to have access to the AWS Management Console. Users can accomplish their infrastructure-backed requests on demand without having any direct access to the console. Additionally, processing methods and infrastructure can be switched in and out without any change to the external appearance of your service. For example, in this post, I could have a containerized solution such as <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Services (Amazon ECS) </a>process my pi-calculation service without any visibility to users.</p></li> 
-<li> <h4>Proprietary processing methods and infrastructure are obscured from users.</h4> <p>The solution in this post can protect the proprietary secrets of your company’s data processing service by obscuring which processing methods you are using and which infrastructure performs the processing. The solution also isolates users from viewing each other’s operations. Without having console access, users cannot determine which running processing stacks are initiated by other users.</p></li> 
-<li> <h4>On-demand infrastructure in specific configurations is created without allowing users to provision arbitrary infrastructure.</h4> <p>The solution in this post complements the functionality of the <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a>. Beyond allowing only preapproved infrastructure and preventing unapproved resources from executing outside your company’s policies, this API Gateway–driven method delivers a specific, processed result. For ease of troubleshooting and integration with DevOps workflows, you can standardize, version, and deploy complicated CloudFormation stacks for networking, compute, storage, and big data processing.</p></li> 
-<li> <h4>Simplification of the user experience.</h4> <p>This solution also simplifies the user experience. Commands that request a specific result are limited to a single, familiar REST API interface call that delivers only that result.</p></li> 
-<li> <h4>Cost savings through self-terminating infrastructure.</h4> <p>The architecture of this solution is augmented through the use of self-terminating CloudFormation stacks. Stacks can spin up expensive infrastructure to perform data processing on demand, and self-terminate as soon as the task has completed. This can save you infrastructure costs associated with idle resources.</p></li> 
-<b>Walkthrough: Deploy the solution</b> 
-<p>This post’s example templates create the base infrastructure and a business-function process. The business-function process can instantiate a single EC2 instance to calculate a specified number of digits of pi and deposit the results in an S3 bucket. As noted previously, this example includes built-in logic to automatically self-terminate the business-function template’s CloudFormation stacks after instantiation.</p> 
-<p>The following steps walk through how to provision this solution for creating on-demand business-function CloudFormation stacks through API Gateway. You can modify the business-function template code for your specialized infrastructure needs. However, you must upload the modified template to your own S3 bucket before completing Step 1 because the business-function template location is required for the primary template’s parameters.</p> 
-<p>Both templates are designed for use in the us-west-2 region and may require minor modifications to function properly in other regions.</p> 
-<h3>Costs</h3> 
-<p>API Gateway costs are based on the number of API calls requested, and the single call here leads to a near-zero cost. For current pricing, see <a href="https://aws.amazon.com/api-gateway/pricing/">Amazon API Gateway Pricing</a>. The associated <a href="https://aws.amazon.com/s3/pricing/">S3 costs</a> and <a href="https://aws.amazon.com/lambda/pricing/">Lambda costs</a> for this post also are negligible because you are not transferring much data or spending a significant amount of time processing serverless code. The most expensive part of this post’s solution is the <a href="https://aws.amazon.com/ec2/pricing/on-demand/">on-demand EC2 instance cost</a> invoked in each business-function template instantiation. This cost is approximately $0.012 per hour for each run with the default t2.micro EC2 instance. In total, running the solution as presented in this post should cost you less than $0.10 in order to test multiple calculations of pi.</p> 
-<p>&nbsp;</p> 
-<h3>1. Deploy the CloudFormation template</h3> 
-<p>First, deploy the primary CloudFormation template for API Gateway and other resources. This template creates IAM policies, IAM roles, API Gateway resources, a new S3 bucket, and a Lambda function.</p> 
-<p>The primary template requires you to have enabled <a href="https://aws.amazon.com/blogs/aws/new-usage-plans-for-amazon-api-gateway/">API Gateway Usage Plans</a>.</p> 
-<p>You can deploy the primary template and launch the primary stack in the us-west-2 region by selecting the following button. Aside from <strong>Stack name</strong>, the only required parameters are the exact location of the business-function template in S3 and a unique S3 bucket name as a location for template results.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=DemoAPIGControlCFStack&amp;templateURL=https://s3.amazonaws.com/awsiammedia/public/sample/APIGatewayWrapper/PrimaryAPIGatewayWrapperTemplate.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" /></a></p> 
-<ol> 
-<li>In the CloudFormation console, on the <strong>Specify Details</strong> page, type a stack name.</li> 
-<li>For <strong>NewS3BucketName</strong>, type a unique name.</li> 
-<li>For <strong>S3CFTLocation</strong>, leave the default value. If you adapt the primary template for your own customized business-function template, be sure to include the entire URI of the S3 location (for example, <em>https://s3-us-west-2.amazonaws.com/mys3bucket/businessFunctionTemplate.yaml</em>).</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png" /></a></p> 
-<ol> 
-<li>On the <strong>Options</strong> page, no changes are required, but you can specify additional tags if desired.</li> 
-<li>On the <strong>Capabilities</strong> page, acknowledge that CloudFormation might create IAM resources, as shown in the following screenshot. To finish creating the stack, choose <strong>Create</strong>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<h3>2. Create an API key for the API Gateway</h3> 
-<p>Though you could modify the example primary template for public use, this example restricts access to execute API calls through the use of API keys. After you create the API key, you must associate the new API key with the usage plan created by the primary template.</p> 
-<ol> 
-<li>In the <a href="https://console.aws.amazon.com/apigateway/home">API Gateway console</a>, choose <strong>API Keys</strong>.</li> 
-<li>Choose <strong>Actions</strong>, <strong>Create API key</strong>.</li> 
-<li>For <strong>Name</strong>, type a name for the key. For <strong>API Key</strong>, leave the default <strong>Auto Generate</strong></li> 
-<li>(Optional) For <strong>Description</strong>, type a value.</li> 
-<li>Choose <strong>Save</strong>.</li> 
-<li>Choose <strong>Add to Usage Plan</strong> and type WrappingApiUsagePlan. This usage plan defaults your Stage to PROD because it is the only configured stage.</li> 
-<li>To add the key to the usage plan, choose the green check icon. Your key should resemble the following screenshot.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png" /></a></li> 
-<li>Choose <strong>Show</strong> and note the API key value for the next step.</li> 
-</ol> 
-<h3>3. Initiate a REST API query</h3> 
-<p>Now, initiate a REST API query against the API that you created. in the example curl command below, replace the placeholder API key specified in the x-api-key HTTP header with your API key.</p> 
-<p>You also need to replace the example URI path with your API’s specific URI. Create the full URI by concatenating the base URI listed in the CloudFormation output for the primary template stack with the primary template’s API call path, which is /PROD/PerRunExecute. This full URI for your specific API call should closely resemble the <strong>URI path&nbsp;</strong>(e.g.&nbsp;<em>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</em>) in the following example curl command.</p> 
-<pre><code class="lang-bash">curl -v -X POST -i -H &quot;x-api-key: 012345ABCDefGHIjkLMS20tGRJ7othuyag&quot; <strong>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</strong> -d '{
-&quot;StackName&quot;:&quot;MyCalculatePiStack&quot;,
-&quot;CostCenter&quot;:&quot;12345&quot;,
-&quot;DigitsToCalculate&quot;: &quot;15000&quot;
-}'</code></pre> 
-<p>When you run the curl command, it executes a POST query to the REST API to instantiate the business-function template and calculate the first 15,000 digits of pi. A successful API query returns information on the curl request as well as CloudFormation API output similar to the following, indicating an “HTTPStatusCode” of 200.</p> 
-<pre><code class="lang-json">{&quot;StackId&quot;: &quot;arn:aws:cloudformation:us-west-2:123456789012:stack/MyCalculatePiStack/1234debf-9423-11e7-9a08-50399b8d8a8c&quot;, &quot;ResponseMetadata&quot;: {&quot;RetryAttempts&quot;: 0, &quot;HTTPStatusCode&quot;: 200, &quot;RequestId&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;HTTPHeaders&quot;: {&quot;x-amzn-requestid&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;date&quot;: &quot;Thu, 07 Sep 2017 23:19:52 GMT&quot;, &quot;content-length&quot;: &quot;388&quot;, &quot;content-type&quot;: &quot;text/xml&quot;}}}</code></pre> 
-<pre></pre> 
-<h3>4. Examine the output</h3> 
-<p>After the EC2 instance completes its processing and uploads the results to the S3 bucket created by the primary template, you can examine the output. Using the configured t2.micro EC2 instance, instantiation and calculation for the first 15,000 digits of pi takes approximately 5–10 minutes. You can monitor progress in the <a href="https://console.aws.amazon.com/ec2/v2/home">EC2 console</a> (where you see a new EC2 instance running) or the <a href="https://console.aws.amazon.com/cloudformation/home">CloudFormation console</a> (where you see the provisioned stack in a “created” state).</p> 
-<p>After the first 15,000 digits of pi have been uploaded to the S3 bucket, the EC2 instance self-terminates the stack. You can then download the results file from the S3 bucket, as shown below. The naming convention for pi calculating runs is “PiCalculation” concatenated with an epoch timestamp from the time of execution.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png" /></a></p> 
-<p>This file contains the instance ID that performed the processing, a time stamp, and the first 15,000 digits of pi. The output should look similar to the following screenshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png" /></a></p> 
-<p>&nbsp;</p> 
-<h3>5. Clean up</h3> 
-<p>To help minimize your costs, clean up any infrastructure that resulted from following the solution in this post. Remember that you first have to detach the API key that you created from the usage plan in order to delete the primary CloudFormation stack. You can do this by clicking the <strong>X</strong> for associated usage plans for your API key, as shown in the following screenshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png" /></a></p> 
-<p>You also must empty the S3 results bucket of all files for the bucket to be deleted when the CloudFormation stack self-terminates.</p> 
-<p>This solution can be adapted to any CloudFormation template encompassing a business function for your service.</p> 
-<b>Adapt to Your Services</b> 
-<p>To adapt this example to your own business-function:</p> 
-<ol> 
-<li>Write a CloudFormation template that implements your new business function.</li> 
-<li>In the primary template, customize the Lambda resource object code for “PerRunCloudFormationExecutionLambda” to accept and pass on the specific parameters needed by your business function template. Save it with a new name.</li> 
-<li>Upload your custom business-function CloudFormation template developed in step 1 to an S3 bucket with permissions that allow the CloudFormation service to access the template objects. For more information about S3 access control, see Managing Access Permissions to Your Amazon S3 Resource.</li> 
-<li>Start your new stack with the modified primary CloudFormation template. Pass it, as a parameter, the name of your new business function template as a parameter. You can reuse the same API Gateway usage plan created previously, if desired.</li> 
-<li>Test, using your new stack name in place of the bolded content above, and posting an API Gateway query with parameters needed by your new business function.</li> 
-</ol> 
-<b>Conclusion</b> 
-<p>By using API Gateway, you can control complex, on-demand CloudFormation stacks that create AWS infrastructure. When you combine this functionality with self-terminating templates, you can realize significant cost savings. API Gateway also allows for standardization of infrastructure. It can enable your users to instantiate complex and costly architectures on demand and only for as long as your users need them.</p> 
-<p>Though the solution in this post assumes that the business function is to calculate the first 15,000 digits of pi (a less than profitable venture these days), you can adopt the solution to deliver significant cost savings. For example, instead of a single EC2 instance, the business-function template could instantiate <a href="https://aws.amazon.com/redshift/">Amazon Redshift</a> (a petabyte-scale data warehouse), <a href="https://aws.amazon.com/emr/">Amazon EMR</a>, or any complex processing infrastructure. As with all on-demand AWS services, you pay for the infrastructure only when it is running.</p> 
-<p>If you have comments about any of this content, submit them in the “Comments” section below. If you have questions about implementing this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=199">API Gateway forum</a>.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2714');
 });
 </script> 
 </article> 

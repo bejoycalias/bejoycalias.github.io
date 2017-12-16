@@ -191,6 +191,133 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <br>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Provision Complex, On-Demand Infrastructures by Using Amazon API Gateway and AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ben Eichorst</span></span> and 
+<span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
+<time property="datePublished" datetime="2017-09-12T07:11:20+00:00">12 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2714" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2714&amp;disqus_title=How+to+Provision+Complex%2C+On-Demand+Infrastructures+by+Using+Amazon+API+Gateway+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2714');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Many AWS customers are using the power of AWS CloudFormation to customize complex infrastructures. At the same time, they are moving towards self-service for their expanding customer bases. How can complex infrastructure be provisioned on-demand while minimizing customer use of the AWS Management Console?</p> 
+<p>Let’s say AnyCompany uses AWS services to process sensitive datasets owned by its customers. These customers need to be able to provision their own processing infrastructure on demand. However, AnyCompany doesn’t want the customers to access <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> directly, or see how customer data is processed. How can AnyCompany create resources with CloudFormation templates without exposing proprietary processing methods?</p> 
+<p>You can use <a href="https://aws.amazon.com/api-gateway/">Amazon API Gateway</a> and <a href="https://aws.amazon.com/lambda/">AWS Lambda </a>to provide complex, on-demand, data-processing infrastructure to users who have no need to access the AWS Management Console. In this post, we walk through the setup and configuration of working code examples that you (and your customers) can use to provision on-demand infrastructure. This post’s solution combines principles of immutable computing with a method to provide granular access to powerful capabilities available in the AWS Cloud. In this post, you create immutability for an Amazon EC2 instance by provisioning it without an SSH key or any other access mechanism. The instance can’t be altered after it’s launched.</p> 
+<p><span id="more-2714"></span></p> 
+<b>Solution architecture</b> 
+<p>API Gateway simplifies the creation, management, and deployment of APIs. Integration of API Gateway with Lambda, the AWS serverless compute service, allows for further interaction with the larger family of AWS services. In this post, the Lambda function provisions on-demand CloudFormation infrastructure stacks for our example service’s primary business function: &nbsp;the calculation of pi.</p> 
+<p>Two CloudFormation templates are used to provision infrastructure stacks:</p> 
+<li>The <em>primary</em> template</li> 
+<li>The <em>business-function</em> template</li> 
+<p>The primary CloudFormation template creates the base infrastructure that is shown in the following diagram.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/1.png" /></a></p> 
+<p>The primary template creates a stack of resources:</p> 
+<li>API Gateway resources</li> 
+<li>The associated AWS Identity and Access Management (IAM) security roles</li> 
+<li>An <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket for the results of the data processed by the business-function template</li> 
+<li>A Lambda function specifically for the purpose of creating multiple iterations of a second <em>repeatable infrastructure</em>. This repeatable infrastructure, contained within the second CloudFormation template, is referred to as the business-function template.</li> 
+<p>The API created by the primary template allows system users to pass selected parameters to the business-function template, such as cost-center tags, a unique name, and data-processing parameters. The ability to pass parameters allows the business-function infrastructure to adapt to the specific needs of each request. In this post’s example—calculating the first 15,000 digits of pi—the number of digits calculated can be specified in the request initiated by the customer. For your own business function templates, this could be the location of input data or an email address to which results are sent.</p> 
+<p>In the example business-function template, the template provisions an immutable EC2 instance that calculates a specified number of digits of pi and uploads the results to the S3 bucket. The business-function stack then self-terminates, reducing any potential extra costs.</p> 
+<p>This architecture allows you, at multiple points, to control access, processing parameters, and workflow.</p> 
+<p>In the earlier diagram, (1) all access to the AWS Management Console and API for your account’s infrastructure is segregated through the use of API Gateway. Then, (2) IAM role–based restrictions are in place for API Gateway to call the Lambda function. The Lambda function serves to selectively add, subtract, or alter input parameters from external users. The code for this function is embedded in the primary CloudFormation template. You can modify the code to add specific tags for billing information or call other AWS services such as <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB </a>or <a href="https://aws.amazon.com/rds">Amazon RDS</a> to keep a record of which infrastructure is instantiated by which API users.</p> 
+<p>In our example template, the Lambda function is populated to pass only the required parameters for the business-function template’s calculation of pi. The use of the function restricts the ability of customers to inject unexpected or undesirable parameters. The solution then (3) uses a Lambda execution role to control the Lambda function’s access. Finally, (4) the Lambda function initiates the CloudFormation business-function template by using another IAM role that is restricted to instantiating only the resources required.</p> 
+<p>The use of an intermediate Lambda function here allows for heavy customization and filtering of the input requests from the customer-facing API Gateway.</p> 
+<b>Solution Features</b> 
+<p>By using this API Gateway–based solution, you can benefit in a number of ways:</p> 
+<li> <h4>User requests are decoupled from the infrastructure that fulfills those requests.</h4> <p>This post’s solution removes the need for users to have access to the AWS Management Console. Users can accomplish their infrastructure-backed requests on demand without having any direct access to the console. Additionally, processing methods and infrastructure can be switched in and out without any change to the external appearance of your service. For example, in this post, I could have a containerized solution such as <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Services (Amazon ECS) </a>process my pi-calculation service without any visibility to users.</p></li> 
+<li> <h4>Proprietary processing methods and infrastructure are obscured from users.</h4> <p>The solution in this post can protect the proprietary secrets of your company’s data processing service by obscuring which processing methods you are using and which infrastructure performs the processing. The solution also isolates users from viewing each other’s operations. Without having console access, users cannot determine which running processing stacks are initiated by other users.</p></li> 
+<li> <h4>On-demand infrastructure in specific configurations is created without allowing users to provision arbitrary infrastructure.</h4> <p>The solution in this post complements the functionality of the <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a>. Beyond allowing only preapproved infrastructure and preventing unapproved resources from executing outside your company’s policies, this API Gateway–driven method delivers a specific, processed result. For ease of troubleshooting and integration with DevOps workflows, you can standardize, version, and deploy complicated CloudFormation stacks for networking, compute, storage, and big data processing.</p></li> 
+<li> <h4>Simplification of the user experience.</h4> <p>This solution also simplifies the user experience. Commands that request a specific result are limited to a single, familiar REST API interface call that delivers only that result.</p></li> 
+<li> <h4>Cost savings through self-terminating infrastructure.</h4> <p>The architecture of this solution is augmented through the use of self-terminating CloudFormation stacks. Stacks can spin up expensive infrastructure to perform data processing on demand, and self-terminate as soon as the task has completed. This can save you infrastructure costs associated with idle resources.</p></li> 
+<b>Walkthrough: Deploy the solution</b> 
+<p>This post’s example templates create the base infrastructure and a business-function process. The business-function process can instantiate a single EC2 instance to calculate a specified number of digits of pi and deposit the results in an S3 bucket. As noted previously, this example includes built-in logic to automatically self-terminate the business-function template’s CloudFormation stacks after instantiation.</p> 
+<p>The following steps walk through how to provision this solution for creating on-demand business-function CloudFormation stacks through API Gateway. You can modify the business-function template code for your specialized infrastructure needs. However, you must upload the modified template to your own S3 bucket before completing Step 1 because the business-function template location is required for the primary template’s parameters.</p> 
+<p>Both templates are designed for use in the us-west-2 region and may require minor modifications to function properly in other regions.</p> 
+<h3>Costs</h3> 
+<p>API Gateway costs are based on the number of API calls requested, and the single call here leads to a near-zero cost. For current pricing, see <a href="https://aws.amazon.com/api-gateway/pricing/">Amazon API Gateway Pricing</a>. The associated <a href="https://aws.amazon.com/s3/pricing/">S3 costs</a> and <a href="https://aws.amazon.com/lambda/pricing/">Lambda costs</a> for this post also are negligible because you are not transferring much data or spending a significant amount of time processing serverless code. The most expensive part of this post’s solution is the <a href="https://aws.amazon.com/ec2/pricing/on-demand/">on-demand EC2 instance cost</a> invoked in each business-function template instantiation. This cost is approximately $0.012 per hour for each run with the default t2.micro EC2 instance. In total, running the solution as presented in this post should cost you less than $0.10 in order to test multiple calculations of pi.</p> 
+<p>&nbsp;</p> 
+<h3>1. Deploy the CloudFormation template</h3> 
+<p>First, deploy the primary CloudFormation template for API Gateway and other resources. This template creates IAM policies, IAM roles, API Gateway resources, a new S3 bucket, and a Lambda function.</p> 
+<p>The primary template requires you to have enabled <a href="https://aws.amazon.com/blogs/aws/new-usage-plans-for-amazon-api-gateway/">API Gateway Usage Plans</a>.</p> 
+<p>You can deploy the primary template and launch the primary stack in the us-west-2 region by selecting the following button. Aside from <strong>Stack name</strong>, the only required parameters are the exact location of the business-function template in S3 and a unique S3 bucket name as a location for template results.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=DemoAPIGControlCFStack&amp;templateURL=https://s3.amazonaws.com/awsiammedia/public/sample/APIGatewayWrapper/PrimaryAPIGatewayWrapperTemplate.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" /></a></p> 
+<ol> 
+<li>In the CloudFormation console, on the <strong>Specify Details</strong> page, type a stack name.</li> 
+<li>For <strong>NewS3BucketName</strong>, type a unique name.</li> 
+<li>For <strong>S3CFTLocation</strong>, leave the default value. If you adapt the primary template for your own customized business-function template, be sure to include the entire URI of the S3 location (for example, <em>https://s3-us-west-2.amazonaws.com/mys3bucket/businessFunctionTemplate.yaml</em>).</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/3.png" /></a></p> 
+<ol> 
+<li>On the <strong>Options</strong> page, no changes are required, but you can specify additional tags if desired.</li> 
+<li>On the <strong>Capabilities</strong> page, acknowledge that CloudFormation might create IAM resources, as shown in the following screenshot. To finish creating the stack, choose <strong>Create</strong>.</li> 
+</ol> 
+<p>&nbsp;</p> 
+<h3>2. Create an API key for the API Gateway</h3> 
+<p>Though you could modify the example primary template for public use, this example restricts access to execute API calls through the use of API keys. After you create the API key, you must associate the new API key with the usage plan created by the primary template.</p> 
+<ol> 
+<li>In the <a href="https://console.aws.amazon.com/apigateway/home">API Gateway console</a>, choose <strong>API Keys</strong>.</li> 
+<li>Choose <strong>Actions</strong>, <strong>Create API key</strong>.</li> 
+<li>For <strong>Name</strong>, type a name for the key. For <strong>API Key</strong>, leave the default <strong>Auto Generate</strong></li> 
+<li>(Optional) For <strong>Description</strong>, type a value.</li> 
+<li>Choose <strong>Save</strong>.</li> 
+<li>Choose <strong>Add to Usage Plan</strong> and type WrappingApiUsagePlan. This usage plan defaults your Stage to PROD because it is the only configured stage.</li> 
+<li>To add the key to the usage plan, choose the green check icon. Your key should resemble the following screenshot.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/4.png" /></a></li> 
+<li>Choose <strong>Show</strong> and note the API key value for the next step.</li> 
+</ol> 
+<h3>3. Initiate a REST API query</h3> 
+<p>Now, initiate a REST API query against the API that you created. in the example curl command below, replace the placeholder API key specified in the x-api-key HTTP header with your API key.</p> 
+<p>You also need to replace the example URI path with your API’s specific URI. Create the full URI by concatenating the base URI listed in the CloudFormation output for the primary template stack with the primary template’s API call path, which is /PROD/PerRunExecute. This full URI for your specific API call should closely resemble the <strong>URI path&nbsp;</strong>(e.g.&nbsp;<em>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</em>) in the following example curl command.</p> 
+<pre><code class="lang-bash">curl -v -X POST -i -H &quot;x-api-key: 012345ABCDefGHIjkLMS20tGRJ7othuyag&quot; <strong>https://abcdefghi.execute-api.us-west-2.amazonaws.com/PROD/PerRunExecute</strong> -d '{
+&quot;StackName&quot;:&quot;MyCalculatePiStack&quot;,
+&quot;CostCenter&quot;:&quot;12345&quot;,
+&quot;DigitsToCalculate&quot;: &quot;15000&quot;
+}'</code></pre> 
+<p>When you run the curl command, it executes a POST query to the REST API to instantiate the business-function template and calculate the first 15,000 digits of pi. A successful API query returns information on the curl request as well as CloudFormation API output similar to the following, indicating an “HTTPStatusCode” of 200.</p> 
+<pre><code class="lang-json">{&quot;StackId&quot;: &quot;arn:aws:cloudformation:us-west-2:123456789012:stack/MyCalculatePiStack/1234debf-9423-11e7-9a08-50399b8d8a8c&quot;, &quot;ResponseMetadata&quot;: {&quot;RetryAttempts&quot;: 0, &quot;HTTPStatusCode&quot;: 200, &quot;RequestId&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;HTTPHeaders&quot;: {&quot;x-amzn-requestid&quot;: &quot;0cbabc97-9423-11e7-97b3-395d92028ea7&quot;, &quot;date&quot;: &quot;Thu, 07 Sep 2017 23:19:52 GMT&quot;, &quot;content-length&quot;: &quot;388&quot;, &quot;content-type&quot;: &quot;text/xml&quot;}}}</code></pre> 
+<pre></pre> 
+<h3>4. Examine the output</h3> 
+<p>After the EC2 instance completes its processing and uploads the results to the S3 bucket created by the primary template, you can examine the output. Using the configured t2.micro EC2 instance, instantiation and calculation for the first 15,000 digits of pi takes approximately 5–10 minutes. You can monitor progress in the <a href="https://console.aws.amazon.com/ec2/v2/home">EC2 console</a> (where you see a new EC2 instance running) or the <a href="https://console.aws.amazon.com/cloudformation/home">CloudFormation console</a> (where you see the provisioned stack in a “created” state).</p> 
+<p>After the first 15,000 digits of pi have been uploaded to the S3 bucket, the EC2 instance self-terminates the stack. You can then download the results file from the S3 bucket, as shown below. The naming convention for pi calculating runs is “PiCalculation” concatenated with an epoch timestamp from the time of execution.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/s3results.png" /></a></p> 
+<p>This file contains the instance ID that performed the processing, a time stamp, and the first 15,000 digits of pi. The output should look similar to the following screenshot.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/07/results.png" /></a></p> 
+<p>&nbsp;</p> 
+<h3>5. Clean up</h3> 
+<p>To help minimize your costs, clean up any infrastructure that resulted from following the solution in this post. Remember that you first have to detach the API key that you created from the usage plan in order to delete the primary CloudFormation stack. You can do this by clicking the <strong>X</strong> for associated usage plans for your API key, as shown in the following screenshot.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/usageplans.png" /></a></p> 
+<p>You also must empty the S3 results bucket of all files for the bucket to be deleted when the CloudFormation stack self-terminates.</p> 
+<p>This solution can be adapted to any CloudFormation template encompassing a business function for your service.</p> 
+<b>Adapt to Your Services</b> 
+<p>To adapt this example to your own business-function:</p> 
+<ol> 
+<li>Write a CloudFormation template that implements your new business function.</li> 
+<li>In the primary template, customize the Lambda resource object code for “PerRunCloudFormationExecutionLambda” to accept and pass on the specific parameters needed by your business function template. Save it with a new name.</li> 
+<li>Upload your custom business-function CloudFormation template developed in step 1 to an S3 bucket with permissions that allow the CloudFormation service to access the template objects. For more information about S3 access control, see Managing Access Permissions to Your Amazon S3 Resource.</li> 
+<li>Start your new stack with the modified primary CloudFormation template. Pass it, as a parameter, the name of your new business function template as a parameter. You can reuse the same API Gateway usage plan created previously, if desired.</li> 
+<li>Test, using your new stack name in place of the bolded content above, and posting an API Gateway query with parameters needed by your new business function.</li> 
+</ol> 
+<b>Conclusion</b> 
+<p>By using API Gateway, you can control complex, on-demand CloudFormation stacks that create AWS infrastructure. When you combine this functionality with self-terminating templates, you can realize significant cost savings. API Gateway also allows for standardization of infrastructure. It can enable your users to instantiate complex and costly architectures on demand and only for as long as your users need them.</p> 
+<p>Though the solution in this post assumes that the business function is to calculate the first 15,000 digits of pi (a less than profitable venture these days), you can adopt the solution to deliver significant cost savings. For example, instead of a single EC2 instance, the business-function template could instantiate <a href="https://aws.amazon.com/redshift/">Amazon Redshift</a> (a petabyte-scale data warehouse), <a href="https://aws.amazon.com/emr/">Amazon EMR</a>, or any complex processing infrastructure. As with all on-demand AWS services, you pay for the infrastructure only when it is running.</p> 
+<p>If you have comments about any of this content, submit them in the “Comments” section below. If you have questions about implementing this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=199">API Gateway forum</a>.</p> 
+<footer> 
+</footer> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2714');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Parallel Processing in Python with&nbsp;AWS Lambda</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1666,150 +1793,6 @@ TAGS:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2404');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Kotlin and Groovy JVM Languages with AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Juan Villa</span></span> | on 
-<time property="datePublished" datetime="2017-06-23T07:21:46+00:00">23 JUN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/kotlin-and-groovy-jvm-languages-with-aws-lambda/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2430" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2430&amp;disqus_title=Kotlin+and+Groovy+JVM+Languages+with+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/kotlin-and-groovy-jvm-languages-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2430');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/06/23/jcv.jpeg" /></a><br /> Juan Villa – Partner Solutions Architect</p> 
-<p>&nbsp;</p> 
-<p>When most people hear “Java” they think of Java the programming language. Java is a lot more than a programming language, it also implies a larger ecosystem including the Java Virtual Machine (JVM). Java, the programming language, is just one of the many languages that can be compiled to run on the JVM. Some of the most popular JVM languages, other than Java, are Clojure, Groovy, Scala, Kotlin, JRuby, and Jython (see <a href="https://en.wikipedia.org/wiki/List_of_JVM_languages">this link</a> for a list of more JVM languages).</p> 
-<p>Did you know that you can compile and subsequently run all these languages on AWS Lambda?</p> 
-<p><a href="https://aws.amazon.com/lambda">AWS Lambda</a> supports the Java 8 runtime, but this does not mean you are limited to the Java language. The Java 8 runtime is capable of running JVM languages such as Kotlin and Groovy once they have been compiled and packaged as a “fat” JAR (a JAR file containing all necessary dependencies and classes bundled in).</p> 
-<p>In this blog post we’ll work through building AWS Lambda functions in both <a href="https://kotlinlang.org/">Kotlin</a> and <a href="http://www.groovy-lang.org/">Groovy</a> programming languages. To compile and package our projects we will use <a href="https://gradle.org/">Gradle</a> build tool.</p> 
-<p><span id="more-2430"></span></p> 
-<p>To follow along, please clone the Git repository available at GitHub <a href="https://github.com/awslabs/lambda-kotlin-groovy-example">here</a>. Also, I recommend using an Integrated Development Environment (IDE) such as JetBrain’s <a href="https://www.jetbrains.com/idea/">IntelliJ IDEA</a>, this is the IDE I used while working on these projects.</p> 
-<h4>Kotlin</h4> 
-<p><a href="https://kotlinlang.org/">Kotlin</a> is a statically-typed JVM language designed and developed by <a href="https://www.jetbrains.com/">JetBrains</a> (one of our <a href="https://aws.amazon.com/partners/">Amazon Partner Network</a> Technology partners) and the open source community. Compared to Java the programming language, Kotlin has additional powerful language features such as: <a href="https://kotlinlang.org/docs/reference/data-classes.html">Data Classes</a>, <a href="https://kotlinlang.org/docs/reference/functions.html#default-arguments">Default Arguments</a>, <a href="https://kotlinlang.org/docs/reference/extensions.html">Extensions</a>, <a href="https://kotlinlang.org/docs/reference/null-safety.html">Elvis Operator</a>, and <a href="https://kotlinlang.org/docs/reference/multi-declarations.html">Destructuring Declarations</a>. This is a just a short list of Kotlin’s powerful language features. For a more thorough list of features, and how to use them, refer to the <a href="https://kotlinlang.org/docs/reference/">full documentation</a> of the Kotlin language.</p> 
-<p>Let’s jump right into the code and see what an AWS Lambda function looks like in Kotlin.</p> 
-<pre><code class="lang-kotlin">package com.aws.blog.jvmlangs.kotlin
-import java.io.*
-import com.fasterxml.jackson.module.kotlin.*
-data class HandlerInput(val who: String)
-data class HandlerOutput(val message: String)
-class Main {
-&nbsp;&nbsp;&nbsp; val mapper = jacksonObjectMapper()
-&nbsp;&nbsp;&nbsp; fun handler(input: InputStream, output: OutputStream): Unit {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; val inputObj = mapper.readValue&lt;HandlerInput&gt;(input)
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mapper.writeValue(output, HandlerOutput(&quot;Hello ${inputObj.who}&quot;))
-&nbsp;&nbsp;&nbsp; }
-}</code></pre> 
-<p>The above example is a very simple Hello World application that accepts as an input a JSON object containing a key called “who” and returns a JSON object containing a key called “message” with a value of “Hello {who}”.</p> 
-<p>AWS Lambda does not support serializing JSON objects into Kotlin data classes, but don’t worry! AWS Lambda supports passing an input object as a Stream, and also supports an output Stream for returning a result (see <a href="http://docs.aws.amazon.com/lambda/latest/dg/java-handler-io-type-stream.html">this link</a> for more information). Combined with the Input/Output Stream form of the handler function, we are using the <a href="https://github.com/FasterXML/jackson">Jackson</a> library with a Kotlin extension function to support serialization and deserialization of Kotlin data class types.</p> 
-<p>To get started with this example, let’s first compile and package the Kotlin project.</p> 
-<pre><code class="lang-bash">git clone https://github.com/awslabs/lambda-kotlin-groovy-example
-cd lambda-kotlin-groovy-example/kotlin
-./gradlew shadowJar</code></pre> 
-<p>Once packaged, a JAR file containing all necessary dependencies will be available at “build/libs/ jvmlangs-kotlin-1.0-SNAPSHOT-all.jar”. Now let’s deploy this package to AWS Lambda.</p> 
-<p>To deploy the lambda function, we will be using the AWS Command Line Interface (CLI). You can find information on how to set up the AWS CLI <a href="https://aws.amazon.com/cli/">here</a>. This tool allows you to set up and manage AWS services via the command line.</p> 
-<pre><code class="lang-bash">aws lambda create-function --region us-east-1 --function-name kotlin-hello \
---zip-file fileb://build/libs/jvmlangs-kotlin-1.0-SNAPSHOT-all.jar \
---role arn:aws:iam::&lt;account_id&gt;:role/lambda_basic_execution \
---handler com.aws.blog.jvmlangs.kotlin.Main::handler --runtime java8 \
---timeout 15 --memory-size 128</code></pre> 
-<p>Once deployed, we can test the function by invoking the lambda function from the CLI.</p> 
-<pre><code class="lang-bash">aws lambda invoke --function-name kotlin-hello --payload '{&quot;who&quot;: &quot;AWS Fan&quot;}' output.txt
-cat output.txt</code></pre> 
-<p>If successful, you’ll see an output of <code class="lang-json">“{&quot;message&quot;:&quot;Hello AWS Fan&quot;}”</code>.</p> 
-<h4>Groovy</h4> 
-<p><a href="http://groovy-lang.org/">Groovy</a> is an optionally typed JVM language with both dynamic and static typing capabilities. Groovy is currently being supported by the <a href="http://www.apache.org/">Apache Software Foundation</a>. Like Kotlin, Groovy also packs a lot of powerful features such as: <a href="http://docs.groovy-lang.org/latest/html/documentation/#_closures">Closures</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_dynamic_vs_static">Dynamic Typing</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_collection_literal_type_inference">Collection Literals</a>, <a href="http://docs.groovy-lang.org/latest/html/documentation/#_string_interpolation">String Interpolation</a>, and <a href="http://docs.groovy-lang.org/latest/html/documentation/#_elvis_operator">Elvis Operator</a>. This is just a short list, see the <a href="http://docs.groovy-lang.org/latest/html/documentation/">full documentation</a> for a list of features and how to use them.</p> 
-<p>Once again, let’s jump right into the code.</p> 
-<pre><code class="lang-groovy">package com.aws.blog.jvmlangs.groovy
-class HandlerInput {
-&nbsp;&nbsp;&nbsp; String who
-}
-class HandlerOutput {
-&nbsp;&nbsp;&nbsp; String message
-}
-class Main {
-&nbsp;&nbsp;&nbsp; def handler(HandlerInput input) {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; return new HandlerOutput(message: &quot;Hello ${input.who}&quot;)
-&nbsp;&nbsp;&nbsp; }
-}</code></pre> 
-<p>Just like the Kotlin example, we have defined a function that takes a simple JSON object containing a “who” key value and build a response containing a “message” key. Note that in this case we are not using the Input/Output Stream form of the handler function, but rather we are letting AWS Lambda serialize the input JSON object into the type HandlerInput. To accomplish this, AWS Lambda uses the Jackson library and handles the serialization for us.</p> 
-<p>Let’s go ahead and compile and package this Groovy example.</p> 
-<pre><code class="lang-bash">git clone https://github.com/awslabs/lambda-kotlin-groovy-example
-cd lambda-kotlin-groovy-example/groovy
-./gradlew shadowJar</code></pre> 
-<p>Once packaged, a JAR file containing all necessary dependencies will be available at “build/libs/ jvmlangs-groovy-1.0-SNAPSHOT-all.jar”. Now let’s deploy this package to AWS Lambda.</p> 
-<pre><code class="lang-bash">aws lambda create-function --region us-east-1 --function-name groovy-hello \
---zip-file fileb://build/libs/jvmlangs-groovy-1.0-SNAPSHOT-all.jar \
---role arn:aws:iam::&lt;account_id&gt;:role/lambda_basic_execution \
---handler com.aws.blog.jvmlangs.groovy.Main::handler --runtime java8 \
---timeout 15 --memory-size 128</code></pre> 
-<p>Once deployed, we can test the function by invoking the lambda function from the CLI.</p> 
-<pre><code class="lang-bash">aws lambda invoke --function-name groovy-hello --payload '{&quot;who&quot;: &quot;AWS Fan&quot;}' output.txt
-cat output.txt</code></pre> 
-<p>If successful, you’ll see an output of <code class="lang-json">“{&quot;message&quot;:&quot;Hello AWS Fan&quot;}”</code>.</p> 
-<h4>Gradle Build Tool</h4> 
-<p>Finally, let’s touch up on how we built the JAR package from the Kotlin and Groovy sources above. To build the JARs we used the <a href="https://gradle.org/">Gradle</a> build tool. Gradle builds a project by reading instructions from a file called “build.gradle”. This is a file written in Gradle’s Groovy Domain Specific Langauge (DSL). You can find more information on the gradle build file by looking at their <a href="https://gradle.org/docs">documentation</a>. Let’s take a look at the Gradle build files we used for this post.</p> 
-<p>For the Kotlin example, this is the build file we used.</p> 
-<pre><code class="lang-gradle">buildscript {
-&nbsp;&nbsp;&nbsp; repositories {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mavenCentral()
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jcenter()
-&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; dependencies {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath &quot;org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath &quot;com.github.jengelman.gradle.plugins:shadow:1.2.3&quot;
-&nbsp;&nbsp;&nbsp; }
-}
-group 'com.aws.blog.jvmlangs.kotlin'
-version '1.0-SNAPSHOT'
-apply plugin: 'kotlin'
-apply plugin: 'com.github.johnrengelman.shadow'
-repositories {
-&nbsp;&nbsp;&nbsp; mavenCentral()
-}
-dependencies {
-&nbsp;&nbsp;&nbsp; compile &quot;org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version&quot;
-&nbsp;&nbsp;&nbsp; compile &quot;com.fasterxml.jackson.module:jackson-module-kotlin:2.8.2&quot;
-}</code></pre> 
-<p>For the Groovy example this is the build file we used.</p> 
-<pre><code class="lang-gradle">buildscript {
-&nbsp;&nbsp;&nbsp; repositories {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jcenter()
-&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; dependencies {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.3'
-&nbsp;&nbsp;&nbsp; }
-}
-group 'com.aws.blog.jvmlangs.groovy'
-version '1.0-SNAPSHOT'
-apply plugin: 'groovy'
-apply plugin: 'com.github.johnrengelman.shadow'
-repositories {
-&nbsp;&nbsp;&nbsp; mavenCentral()
-}
-dependencies {
-&nbsp;&nbsp;&nbsp; compile 'org.codehaus.groovy:groovy-all:2.3.11'
-&nbsp;&nbsp;&nbsp; testCompile group: 'junit', name: 'junit', version: '4.11'
-}</code></pre> 
-<p>As you can see, the build files for both Kotlin and Groovy files are very similar. For the Kotlin project we define a dependency on the Jackson Kotlin module. Also, for each respective language we include the language supporting libraries (kotlin-stdlib and groovy-all respectively).</p> 
-<p>In addition, you will notice that we are using a plugin called “shadow”. We use this plugin to package all the project dependencies into one JAR by using the Gradle task “shadowJar”. You can find more information on Shadow in their <a href="http://imperceptiblethoughts.com/shadow/">documentation</a>.</p> 
-<h4>Final Words</h4> 
-<p>Don’t stop here though! Take a look at other JVM languages and get them running on AWS Lambda with the Java 8 runtime. Maybe start with <a href="http://clojure.org/">Clojure</a>? or <a href="http://www.scala-lang.org/">Scala</a>?</p> 
-<p>Also take a look <a href="https://github.com/aws/aws-lambda-java-libs">AWS Lambda Java libraries</a> provided by AWS. They provide interfaces and models to make handling events from <a href="http://docs.aws.amazon.com/lambda/latest/dg/invoking-lambda-function.html">event sources</a> easier to handle.</p> 
-<footer> 
-</footer> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2430');
 });
 </script> 
 </article> 
