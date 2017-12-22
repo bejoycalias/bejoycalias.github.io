@@ -190,6 +190,128 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Registering Spot Instances with AWS OpsWorks Stacks</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Amir Golan</span></span> | on 
+<time property="datePublished" datetime="2016-12-23T03:48:21+00:00">23 DEC 2016</time> | 
+<a href="https://aws.amazon.com/blogs/devops/registering-spot-instances-with-aws-opsworks-stacks/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/opsworks/stacks/">AWS OpsWorks Stacks</a> is a configuration management service that helps you configure and operate applications of all shapes and sizes using Chef. You can define the application’s architecture and the specification of each component, including package installation, software configuration, and more.</p> 
+<p><a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot instances</a> allow you to bid on spare <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> computing capacity. Because Spot instances are often available at a discount compared to On-Demand instances, you can significantly reduce the cost of running your applications, grow your applications’ compute capacity and throughput for the same budget, and enable new types of cloud computing applications.</p> 
+<p>You can use Spot instances with AWS OpsWorks Stacks in the following ways:</p> 
+<li>As a part of an Auto Scaling group, as described in this blog post. You can follow the steps in the blog post and in the launch configuration described in step 5, choose the Spot instance option.</li> 
+<li>To provision a Spot instance in the EC2 console and have it automatically register with an OpsWorks stack, as described here.</li> 
+<p>The walkthrough assumes that your stack and the following resources you create are located in N. Virginia (us-east-1). If you want to use another region, be sure to set the region parameter accordingly.</p> 
+<p><strong>IAM instance profile</strong>: an IAM profile that grants your instances permission to register themselves with OpsWorks.</p> 
+<p><strong>Lambda function</strong>: a function that deregisters your instances from an OpsWorks stack.</p> 
+<p><strong>Spot instance</strong>: the Spot instance that will run your application.</p> 
+<p><strong>CloudWatch Event role</strong>: an event that will trigger the Lambda function whenever your Spot instance is terminated.</p> 
+<p><strong>Step 1: Create an IAM instance profile</strong></p> 
+<p>When a Spot instance starts, it must be able to make an API call to register itself with an OpsWorks stack. By assigning an instance with an IAM instance profile, the instance will be able to make calls to OpsWorks.</p> 
+<p>Open the IAM console at <a href="https://console.aws.amazon.com/iam/">https://console.aws.amazon.com/iam/</a>, choose <strong>Roles,</strong> and then choose <strong>Create New</strong> Role. Type a name for the role, and then choose <strong>Next Step</strong>. Choose the Amazon EC2 role, and then select the check box next to the AWSOpsWorksInstanceRegistration policy. Finally, select <strong>Next Step</strong>, and then choose <strong>Create Role</strong>. As its name suggests, the AWSOpsWorksInstanceRegistration policy will allow the instance to make API calls only to register an instance. Copy the following policy to the new role you’ve just created.</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;opsworks:AssignInstance&quot;,
+&quot;opsworks:DescribeInstances&quot;,
+&quot;ec2:CreateTags&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+}
+]
+}
+</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/1b.png" /></p> 
+<p><strong>Step 2: Create a Lambda function</strong></p> 
+<p>This Lambda function deregisters an instance from your OpsWorks stack. It will be invoked whenever the Spot instance is terminated.</p> 
+<p>Open the AWS Lambda console at <a href="https://us-west-2.console.aws.amazon.com/lambda/home">https://us-west-2.console.aws.amazon.com/lambda/home</a>, and choose the option to create a Lambda function. If you are prompted to choose a blueprint, choose <strong>Skip</strong>. Type a name for the Lambda function, and from the <strong>Runtime</strong> drop-down list, select <strong>Python 2.7</strong>.</p> 
+<p>Next, paste the following code into the <strong>Lambda Function</strong> Code text box:</p> 
+<code class="lang-python">import boto3
+def lambda_handler(event, context):
+ec2_instance_id = event['detail']['instance-id']
+ec2 = boto3.client('ec2')
+for tag in ec2.describe_instances(InstanceIds=[ec2_instance_id])['Reservations'][0]['Instances'][0]['Tags']:
+if (tag['Key'] == 'opsworks_stack_id'):
+opsworks_stack_id = tag['Value']
+opsworks = boto3.client('opsworks', 'us-east-1')
+for instance in opsworks.describe_instances(StackId=opsworks_stack_id)['Instances']:
+if ('Ec2InstanceId' in instance):
+if (instance['Ec2InstanceId'] == ec2_instance_id):
+print(&quot;Deregistering OpsWorks instance &quot; + instance['InstanceId'])
+opsworks.deregister_instance(InstanceId=instance['InstanceId'])
+return ec2_instance_id
+</code> 
+<p>The result should look like this:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/2-1.png" /></p> 
+<p>In the <strong>Lambda function handler and role </strong>section, create a custom role. Edit the policy document to allow the Lambda function to access the required resources:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ec2:DescribeInstances&quot;,
+&quot;opsworks:DescribeInstances&quot;,
+&quot;opsworks:DeregisterInstance&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+}
+]
+}
+</code> 
+<p>&nbsp;</p> 
+<p><strong>Step 3: Create a CloudWatch event</strong></p> 
+<p>Whenever the Spot instance is terminated, the Lambda function from step 2 must be triggered to deregister the instance from its associated stack.</p> 
+<p>Open the AWS CloudWatch console at <a href="https://console.aws.amazon.com/cloudwatch/home">https://console.aws.amazon.com/cloudwatch/home</a>, choose <strong>Events</strong>, and then choose the<strong> Create rule</strong> button. From <strong>Event selector</strong>, choose <strong>Amazon EC2</strong>. Select <strong>Specific state(s)</strong>, and then choose <strong>Terminated</strong>. Under <strong>Targets</strong>, for <strong>Function</strong>, select the Lambda function you created earlier. Finally, choose the <strong>Configure details</strong> button.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/3b.png" /></p> 
+<p><strong>Step 4: Create a Spot instance</strong></p> 
+<p>Open the EC2 console at <a href="https://console.aws.amazon.com/ec2sp/v1/spot/home">https://console.aws.amazon.com/ec2sp/v1/spot/home</a>, and choose the <strong>Request Spot Instances</strong> button. Use the latest release of Amazon Linux. On the details page, under <strong>IAM instance profile</strong>, choose the instance profile you created in step 1. Paste the following script into the <strong>User data</strong> field:</p> 
+<code class="lang-bash">#!/bin/bash
+sed -i'' -e 's/.*requiretty.*//' /etc/sudoers
+pip install --upgrade awscli
+STACK_ID=3464f35f-16b4-44dc-8073-a9cd19533ad5
+LAYER_ID=ba04682c-6e32-481d-9d0e-e2fa72b55314
+INSTANCE_ID=$(/usr/bin/aws opsworks register --use-instance-profile --infrastructure-class ec2 --region us-east-1 --stack-id $STACK_ID --override-hostname $(tr -cd 'a-z' &lt; /dev/urandom |head -c8) --local 2&gt;&amp;1 |grep -o 'Instance ID: .*' |cut -d' ' -f3)
+EC2_INSTANCE_ID=$(/usr/bin/aws opsworks describe-instances --region us-east-1 --instance-ids $INSTANCE_ID | grep -o '&quot;Ec2InstanceId&quot;: &quot;i-.*'| grep -o 'i-[a-z0-9]*')
+/usr/bin/aws ec2 create-tags --region us-east-1 --resources $EC2_INSTANCE_ID --tags Key=opsworks_stack_id,Value=$STACK_ID
+/usr/bin/aws opsworks wait instance-registered --region us-east-1 --instance-id $INSTANCE_ID
+/usr/bin/aws opsworks assign-instance --region us-east-1 --instance-id $INSTANCE_ID --layer-ids $LAYER_ID
+</code> 
+<p>On boot, this script will register your Spot instance with an OpsWorks stack and layer. Be sure to fill in the following fields:</p> 
+<code class="lang-bash">STACK_ID=YOUR_STACK_ID
+LAYER_ID=YOUR_LAYER_ID
+</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/4sd.png" /></p> 
+<p><strong>Important:</strong> Be sure to turn off auto healing for all of the layers in your stack to which you assign Spot instances. Otherwise, auto healing will attempt to revive your instances upon termination.</p> 
+<p>When the instance has been provisioned and come online, you’ll see <strong>fulfilled</strong> displayed in the <strong>Status</strong> column and <strong>active</strong> displayed in the <strong>State</strong> column. This process will take a few minutes. After the instance and request are both in an active state, the instance should be fully booted and registered with your OpsWorks stack/layer.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/5.png" /></p> 
+<p>You can also view the instance and its online state in the OpsWorks console under <strong>Spot Instance</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/6.png" /></p> 
+<p>You can manually terminate a Spot instance from the OpsWorks service console. Simply choose the <strong>stop</strong> button and the Spot instance will be terminated and removed from your stack. Unlike an On-Demand instance, when a Spot instance in OpsWorks is stopped, it cannot be restarted.</p> 
+<p>If your Spot instance is terminated through other means (for example, in the EC2 console), a CloudWatch event will trigger the Lambda function, which will deregister the instance from your OpsWorks stack.</p> 
+<p><strong>Conclusion</strong></p> 
+<p>You can now use OpsWorks Stacks to define your application’s architecture and software configuration while leveraging the attractive pricing of Spot instances. If you have questions or other feedback, please leave it in the comments.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Introducing Git Credentials: A Simple Way to Connect to AWS CodeCommit Repositories Using a Static User Name and Password</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -954,352 +1076,6 @@ by
 <p>Conclusion<br /> In this post, we showed how to ship Apache logs to Kibana by using Amazon Kinesis Agent, Amazon ES, and Firehose. It’s worth pointing out that Firehose automatically scales up or down based on the rate at which your application generates logs. To learn more about scaling Amazon ES clusters, see the <a href="http://docs.aws.amazon.com/elasticsearch-service/latest/developerguide/what-is-amazon-elasticsearch-service.html#concepts-scaling" target="_blank">Amazon Elasticsearch Service Developer Guide</a>.</p> 
 <p>Managed services like Amazon ES and Amazon Kinesis Firehose simplify provisioning and managing a log aggregation system. The ability to run SQL queries against your streaming log data using Amazon Kinesis Analytics further strengthens the case for using an EKK stack. <a href="https://s3-us-west-2.amazonaws.com/scriptdepot/es.template" target="_blank">The AWS CloudFormation template</a> used in this post is available to extend and build your own EKK stack.</p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building End-to-End Continuous Delivery and Deployment Pipelines in AWS and TeamCity</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Balaji Iyer</span></span> | on 
-<time property="datePublished" datetime="2016-10-31T12:14:54+00:00">31 OCT 2016</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/best-practices/" title="View all posts in Best practices"><span property="articleSection">Best practices</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/partners/" title="View all posts in Partners"><span property="articleSection">Partners</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/web-app/" title="View all posts in Web app"><span property="articleSection">Web app</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/building-end-to-end-continuous-delivery-and-deployment-pipelines-in-aws-and-teamcity/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-206" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=206&amp;disqus_title=Building+End-to-End+Continuous+Delivery+and+Deployment+Pipelines+in+AWS+and+TeamCity&amp;disqus_url=https://aws.amazon.com/blogs/devops/building-end-to-end-continuous-delivery-and-deployment-pipelines-in-aws-and-teamcity/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-206');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>By Balaji Iyer, Janisha Anand, and Frank Li</em></p> 
-<p>Organizations that transform their applications to cloud-optimized architectures need a seamless, end-to-end continuous delivery and deployment workflow: from source code, to build, to deployment, to software delivery.</p> 
-<p><strong>Continuous delivery</strong>&nbsp;is a&nbsp;<a href="https://aws.amazon.com/devops/">DevOps</a>&nbsp;software development practice where code changes are automatically built, tested, and prepared for a release to production. The practice expands on <a href="https://aws.amazon.com/devops/continuous-integration/">continuous integration</a>&nbsp;by deploying all code changes to a testing environment and/or a production environment after the build stage. When continuous delivery is implemented properly, developers will always have a deployment-ready build artifact that has undergone a standardized test process.</p> 
-<p><strong>Continuous deployment</strong> is the process of deploying application revisions to a production environment automatically, without explicit approval from a developer. This process makes the entire software release process automated. Features are released as soon as they are ready, providing maximum value to customers.</p> 
-<p>These two techniques enable development teams to deploy software rapidly, repeatedly, and reliably.</p> 
-<p>In this post, we will build an end-to-end continuous deployment and delivery pipeline using <a href="http://aws.amazon.com/codepipeline">AWS CodePipeline</a>&nbsp;(a fully managed&nbsp;<a href="http://aws.amazon.com/devops/continuous-delivery/">continuous delivery</a>&nbsp;service), <a href="http://aws.amazon.com/codedeploy">AWS CodeDeploy</a>&nbsp;(an automated application deployment service), and TeamCity’s <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">AWS CodePipeline plugin</a>. We will use <a href="http://aws.amazon.com/cloudformation">AWS CloudFormation</a> to setup and configure the end-to-end infrastructure and application <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-whatis-concepts.html#d0e3802">stacks</a>. The &shy;&shy;pipeline pulls source code from an Amazon S3 bucket, an AWS CodeCommit repository, or a GitHub repository. The source code will then be built and tested using TeamCity’s continuous integration server. Then AWS CodeDeploy will deploy the compiled and tested code to <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> instances.</p> 
-<p><strong>Prerequisites</strong></p> 
-<p>You’ll need an AWS account, an <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> key pair, and administrator-level permissions for AWS <a href="https://aws.amazon.com/iam/">Identity and Access Management (IAM)</a>, AWS CloudFormation, AWS CodeDeploy, AWS CodePipeline, Amazon EC2, and <a href="https://aws.amazon.com/s3/">Amazon S3</a>.</p> 
-<p><strong>Overview</strong></p> 
-<p>Here are the steps:</p> 
-<ol> 
-<li>Continuous integration server setup using TeamCity.</li> 
-<li>Continuous deployment using AWS CodeDeploy.</li> 
-<li>Building a delivery pipeline using AWS CodePipeline.</li> 
-</ol> 
-<p>In less than an hour, you’ll have an end-to-end, fully-automated continuous integration, continuous deployment, and delivery pipeline for your application. Let’s get started!</p> 
-<p><span id="more-206"></span></p> 
-<b>1. Continuous integration server setup using TeamCity</b> 
-<p>Click here on this button <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=TeamCityServer&amp;templateURL=https://s3.amazonaws.com/teamcity-aws-demo/TeamCity_Server_Template.cform"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png">here</a>.</p> 
-<p>The CloudFormation template does the following:</p> 
-<ol> 
-<li>Installs and configures the TeamCity server and its dependencies in Linux.</li> 
-<li>Installs the AWS CodePipeline <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">plugin</a> for TeamCity.</li> 
-<li>Installs a <a href="https://github.com/awslabs/aws-demo-php-simple-app">sample application</a> with build configurations.</li> 
-<li>Installs <a href="https://github.com/jetbrains/meta-runner-power-pack">PHP meta-runners</a> required to build the sample application.</li> 
-<li>Redirects TeamCity port 8111 to 80.</li> 
-</ol> 
-<p>Choose the AWS region where the TeamCity server will be hosted. For this demo, choose <strong>US East (N. Virginia)</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture2-300x282.png" /></p> 
-<p>On the <strong>Select Template </strong>page, choose <strong>Next</strong>.</p> 
-<p>On the <strong>Specify Details</strong> page, do the following:</p> 
-<ol> 
-<li>In <strong>Stack name</strong>, enter a name for the stack. The name must be unique in the region in which you are creating the stack.</li> 
-<li>In <strong>InstanceType</strong>, choose the instance type that best fits your requirements. The default value is t2.medium.</li> 
-</ol> 
-<p><strong>Note</strong>: The default instance type exceeds what’s included in the AWS Free Tier. If you use t2.medium, there will be charges to your account. The cost will depend on how long you keep the CloudFormation stack and its resources.</p> 
-<ol start="3"> 
-<li>In<strong> KeyName</strong>, choose the name of your Amazon EC2 key pair.</li> 
-<li>In <strong>SSHLocation</strong>, enter the IP address range that can be used to connect through SSH to the EC2 instance. SSH and HTTP access is limited to this IP address range.</li> 
-</ol> 
-<p><strong>Note: </strong>You can use <a href="http://checkip.amazonaws.com/">checkip.amazonaws.com</a>&nbsp;or <a href="http://www.whatsmyip.org/">whatsmyip.org</a> to find your IP address. Remember to add&nbsp;<strong>/32</strong>&nbsp;to any single domain or, if you are representing a larger IP address space, use the correct CIDR block notation.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture3.png" /></p> 
-<p>Choose <strong>Next</strong>.</p> 
-<p>Although it’s optional, on the<strong> Options</strong>&nbsp;page, type TeamCityServer for the instance name. This is the name used in the CloudFormation template for the stack. It’s a best practice to name your instance, because it makes it easier to identify or modify resources later on.</p> 
-<p>Choose&nbsp;<strong>Next</strong>.</p> 
-<p>On the <strong>Review </strong>page, choose <strong>Create</strong> button. It will take several minutes for AWS CloudFormation to create the resources for you.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture4.png" /></p> 
-<p>When the stack has been created, you will see a <strong>CREATE_COMPLETE</strong> message on the <strong>Overview</strong> tab in the <strong>Status</strong> column.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture5.png" /></p> 
-<p>You have now successfully created a TeamCity server. To access the server, on the <a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:search=TeamCityServer">EC2 Instance page</a>, choose <strong>Public IP</strong> for the TeamCityServer instance.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture6.png" /></p> 
-<p>On the <strong>TeamCity First Start</strong> page, choose <strong>Proceed</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture7.png" /></p> 
-<p>Although an internal database based on the HSQLDB database engine can be used for evaluation, TeamCity strongly recommends that you use an external database as a back-end TeamCity database in a production environment. An external database provides better performance and reliability. For more information, see the TeamCity <a href="https://confluence.jetbrains.com/display/TCD9/Setting+up+an+External+Database#SettingupanExternalDatabase-SelectingExternalDatabaseEngine">documentation</a>.</p> 
-<p>On the <strong>Database connection setup</strong> page, choose<strong> Proceed</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture8.png" /></p> 
-<p>The TeamCity server will start, which can take several minutes.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture9.png" /></p> 
-<p>Review and Accept the TeamCity License Agreement, and then choose <strong>Continue</strong>.</p> 
-<p>Next, create an Administrator account. Type a user name and password, and then choose <strong>Create Account</strong>.</p> 
-<p>You can navigate to the demo project from <strong>Projects</strong> in the top-left corner.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture10.png" /></p> 
-<p><strong>Note: </strong>You can create a project from a repository URL (the option used in this demo), or you can connect to your managed Git repositories, such as GitHub or BitBucket. The demo app used in this example can be found <a href="https://github.com/awslabs/aws-demo-php-simple-app">here</a>.</p> 
-<p>We have already created a sample project configuration. Under <strong>Build</strong>, choose <strong>Edit Settings</strong>, and then review the settings.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture11.png" /></p> 
-<p>Choose <strong>Build Step: PHP – PHPUnit</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture12.png" /></p> 
-<p>The fields on the<strong> Build Step</strong> page are already configured.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture13.png" /></p> 
-<p>Choose <strong>Run </strong>to start the build.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture14.png" /></p> 
-<p>To review the tests that are run as part of the build, choose <strong>Tests</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture15.png" /></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Picture16.png" /></p> 
-<p>You can view any build errors by choosing <strong>Build log</strong> from the same drop-down list.</p> 
-<p>Now that we have a successful build, we will use AWS CodeDeploy to set up a continuous deployment pipeline.</p> 
-<b>2. Continuous deployment using AWS CodeDeploy</b> 
-<p>Click here on this button <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=DeploymentPipeline&amp;templateURL=https://s3.amazonaws.com/teamcity-aws-demo/CodeDeploy_Master_Template.cform"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png" /></a> to launch an AWS CloudFormation stack that will use AWS CodeDeploy to set up a sample deployment pipeline. If you’re not already signed in to the AWS Management Console, you will be prompted to enter your AWS credentials.</p> 
-<p>You can download the master template used for this setup from <a href="https://s3.amazonaws.com/teamcity-aws-demo/CodeDeploy_Master_Template.cform">here</a>. The template nests two CloudFormation templates to execute all dependent stacks cohesively.</p> 
-<ol> 
-<li>Template 1 creates a fleet of up to three EC2 instances (with a base operating system of Windows or Linux), associates an instance profile, and installs the AWS CodeDeploy agent. The CloudFormation template can be downloaded from <a href="https://s3.amazonaws.com/teamcity-aws-demo/CodeDeploy_Template.cform">here</a>.</li> 
-<li>Template 2 creates an AWS CodeDeploy <a href="http://docs.aws.amazon.com/codedeploy/latest/userguide/how-to-create-deployment-group.html">deployment group</a> and then installs a sample application. The CloudFormation template can be downloaded from <a href="https://s3.amazonaws.com/teamcity-aws-demo/CodeDeploy_DeploymentGroup_Template.cform">here</a>.</li> 
-</ol> 
-<p>Choose the same AWS region you used when you created the TeamCity server (<strong>US East (N. Virginia)</strong>).</p> 
-<p><strong>Note:</strong> The templates contain Amazon Machine Image (AMI) mappings for us-east-1, us-west-2, eu-west-1, and ap-southeast-2 only.</p> 
-<p>On the <strong>Select Template </strong>page, choose <strong>Next</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture17.png" /></p> 
-<p>On the <strong>Specify Details </strong>page, in&nbsp;<strong>Stack name</strong>, type a name for the stack. In the <strong>Parameters </strong>section, do the following:</p> 
-<ol> 
-<li>In&nbsp;<strong>AppName</strong>, you can use the default, or you can type a name of your choice. The name must be between 2 and 15 characters long. It can contain lowercase and alphanumeric characters, hyphens (-), and periods (.), but the name must start with an alphanumeric character.</li> 
-</ol> 
-<ol start="2"> 
-<li>In <strong>DeploymentGroupName</strong>, you can use the default, or you type a name of your choice. The name must be between 2 and 25 characters long. It can contain lowercase and alphanumeric characters, hyphens (-), and periods (.), but the name must start with an alphanumeric character.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture18.png" /></p> 
-<ol start="3"> 
-<li>In <strong>InstanceType</strong>, choose the instance type that best fits the requirements of your application.</li> 
-<li>In <strong>InstanceCount</strong>, type the number of EC2 instances (up to three) that will be part of the deployment group.</li> 
-<li>For <strong>Operating System</strong>, choose <strong>Linux</strong> or <strong>Windows</strong>.</li> 
-<li>Leave <strong>TagKey</strong> and <strong>TagValue</strong> at their defaults. AWS CodeDeploy will use this tag key and value to locate the instances during deployments. For information about Amazon EC2 instance tags, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#Using_Tags_Console">Working with Tags Using the Console</a>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture19.png" /></li> 
-<li>In S3Bucket and S3Key, type the bucket name and S3 key where the application is located. The default points to a sample application that will be deployed to instances in the deployment group. Based on what you selected in the OperatingSystem field, use the following values.<br /> <strong>Linux:</strong><br /> S3Bucket: aws-codedeploy<br /> S3Key: samples/latest/SampleApp_Linux.zip<br /> <strong>Windows:</strong><br /> S3Bucket: aws-codedeploy<br /> S3Key: samples/latest/SampleApp_Windows.zip</li> 
-</ol> 
-<ol start="8"> 
-<li>In<strong> KeyName</strong>, choose the name of your Amazon EC2 key pair.</li> 
-<li>In <strong>SSHLocation</strong>, enter the IP address range that can be used to connect through SSH/RDP to the EC2 instance.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture20.png" /></p> 
-<p><strong>Note: </strong>You can use <a href="http://checkip.amazonaws.com/">checkip.amazonaws.com</a>&nbsp;or <a href="http://www.whatsmyip.org/">whatsmyip.org</a> to find your IP address. Remember to add&nbsp;<strong>/32</strong>&nbsp;to any single domain or, if you are representing a larger IP address space, use the correct CIDR block notation.</p> 
-<p>Follow the prompts, and then choose <strong>Next</strong>.</p> 
-<p>On the&nbsp;<strong>Review</strong><strong>&nbsp;</strong>page, select the&nbsp;<strong>I acknowledge that this template might cause AWS CloudFormation to create IAM resources</strong>&nbsp;check box. Review the other settings, and then choose&nbsp;<strong>Create</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture21.png" /></p> 
-<p>It will take several minutes for CloudFormation to create all of the resources on your behalf. The nested stacks will be launched sequentially. You can view progress messages on the <strong>Events</strong> tab in the AWS CloudFormation console.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture22.png" /></p> 
-<p>You can see the newly created application and deployment groups in the AWS CodeDeploy console.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture23.png" /></p> 
-<p>To verify that your application was deployed successfully, navigate to the DNS address of one of the instances.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture24.png" /></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture25.png" /></p> 
-<p>Now that we have successfully created a deployment pipeline, let’s integrate it with AWS CodePipeline.</p> 
-<b>3. Building a delivery pipeline using AWS CodePipeline</b> 
-<p>We will now create a delivery pipeline in AWS CodePipeline with the <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">TeamCity AWS CodePipeline plugin</a>.</p> 
-<ol> 
-<li>Using AWS CodePipeline, we will build a new pipeline with Source and Deploy stages.</li> 
-<li>Create a custom action for the TeamCity Build stage.</li> 
-<li>Create an AWS CodePipeline action trigger in TeamCity.</li> 
-<li>Create a Build stage in the delivery pipeline for TeamCity.</li> 
-<li>Publish the build artifact for deployment.</li> 
-</ol> 
-<h3>Step 1: Build a new pipeline with Source and Deploy stages using AWS CodePipeline.</h3> 
-<p>In this step, we will create an Amazon S3 bucket to use as the artifact store for this pipeline.</p> 
-<ol> 
-<li>Install and configure the <a href="http://docs.aws.amazon.com/streams/latest/dev/kinesis-tutorial-cli-installation.html">AWS CLI</a>.</li> 
-</ol> 
-<ol start="2"> 
-<li>Create an Amazon S3 bucket that will host the build artifact. Replace <em>account-number</em> with your AWS account number in the following steps. <code class="lang-bash">$ aws s3 mb s3://demo-app-build-account-number</code> </li> 
-</ol> 
-<ol start="3"> 
-<li>Enable bucket versioning <code class="lang-bash">$ aws s3api put-bucket-versioning --bucket demo-app-build-account-number --versioning-configuration Status=Enabled</code> </li> 
-</ol> 
-<ol start="4"> 
-<li>Download the sample build artifact and upload it to the Amazon S3 bucket created in step 2.</li> 
-</ol> 
-<li><strong>OSX/Linux:</strong> <code class="lang-bash">$ wget -qO- https://s3.amazonaws.com/teamcity-demo-app/Sample_Linux_App.zip | aws s3 cp - s3://demo-app-build-account-number/Sample_Linux_App.zip</code> </li> 
-<li><strong><strong>Windows:</strong></strong> <code class="lang-code">$ wget -qO- https://s3.amazonaws.com/teamcity-demo-app/Sample_Windows_App.zip
-$ aws s3 cp ./Sample_Windows_App.zip s3://demo-app-account-number</code> </li> 
-<p><strong>Note</strong>: You can use AWS CloudFormation to perform these steps in an automated way. When you choose <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=S3BucketStack&amp;templateURL=https://s3.amazonaws.com/teamcity-aws-demo/S3_Bucket_Template.cform"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png">this template</a> will be used. Use the following commands to extract the Amazon S3 bucket name, enable versioning on the bucket, and copy over the sample artifact.</p> 
-<code class="lang-bash">$ export bucket-name =&quot;$(aws cloudformation describe-stacks --stack-name “S3BucketStack” --output text --query 'Stacks[0].Outputs[?OutputKey==`S3BucketName`].OutputValue')&quot;
-$ aws s3api put-bucket-versioning --bucket $bucket-name --versioning-configuration Status=Enabled &amp;&amp; wget https://s3.amazonaws.com/teamcity-demo-app/Sample_Linux_App.zip &amp;&amp; aws s3 cp ./Sample_Linux_App.zip s3://$bucket-name</code> 
-<p>You can create a pipeline by using a CloudFormation stack or the AWS CodePipeline console.</p> 
-<h4>Option 1: Use AWS CloudFormation to create a pipeline</h4> 
-<p>We’re going to create a two-stage pipeline that uses a versioned Amazon S3 bucket and AWS CodeDeploy to release a sample application. (You can use an AWS CodeCommit repository or a GitHub repository as the source provider instead of Amazon S3.)</p> 
-<p>Click here on this button <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=DeliveryPipeline&amp;templateURL=https:%2F%2Fs3.amazonaws.com%2Fteamcity-aws-demo%2FCodePipeline_Template.cform"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png" /></a>&nbsp;to launch an AWS CloudFormation stack to set up a new delivery pipeline using the application and deployment group created in an earlier step. If you’re not already signed in to the AWS Management Console, you will be prompted to enter your AWS credentials.</p> 
-<p>Choose the <strong>US East (N. Virginia)</strong> region, and then choose <strong>Next</strong>.</p> 
-<p>Leave the default options, and then choose <strong>Next</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture26.png" /></p> 
-<p>On the <strong>Options </strong>page, choose <strong>Next</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture27.png" /></p> 
-<p><strong>Select</strong> the<strong> I acknowledge that AWS CloudFormation might create IAM resources</strong> check box, and then choose <strong>Create</strong>. This will create the delivery pipeline in AWS CodePipeline.</p> 
-<h4>Option 2: Use the AWS CodePipeline console to create a pipeline</h4> 
-<p>On the <strong>Create pipeline</strong> page, in <strong>Pipeline name</strong>, type a name for your pipeline, and then choose <strong>Next step</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture28.png" /></p> 
-<p>Depending on where your source code is located, you can choose Amazon S3, AWS CodeCommit, or GitHub as your<strong> Source provider</strong>. The pipeline will be triggered automatically upon every check-in to your GitHub or AWS CodeCommit repository or when an artifact is published into the S3 bucket. In this example, we will be accessing the product binaries from an Amazon S3 bucket.</p> 
-<p>Choose <strong>Next step</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture29.png" /></p> 
-<p>s3://demo-app-build-<em>account-number</em><em>/Sample_Linux_App.zip</em> (or) <em>Sample_Windows_App.zip</em></p> 
-<p><strong>Note:</strong> AWS CodePipeline requires a versioned S3 bucket for source artifacts. <a href="http://docs.aws.amazon.com/AmazonS3/latest/UG/enable-bucket-versioning.html">Enable versioning</a> for the S3 bucket where the source artifacts will be located.</p> 
-<p>On the <strong>Build </strong>page, choose <strong>No Build</strong>. We will update the build provider information later on.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture31.png" /></p> 
-<p>For <strong>Deployment provider</strong>, choose <strong>CodeDeploy</strong>. For <strong>Application name </strong>and <strong>Deployment group</strong>, choose the application and deployment group we created in the deployment pipeline step, and then choose <strong>Next step</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture32.png" /></p> 
-<p>An IAM role will provide the permissions required for AWS CodePipeline to perform the build actions and service calls.&nbsp; If you already have a role you want to use with the pipeline, choose it on the <strong>AWS Service Role</strong> page. Otherwise, type a name for your role, and then choose <strong>Create role</strong>.&nbsp; Review the predefined permissions, and then choose <strong>Allow</strong>. Then choose <strong>Next step</strong>.</p> 
-<p>&nbsp;</p> 
-<p>For information about AWS CodePipeline access permissions, see the&nbsp;<a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/access-permissions.html">AWS CodePipeline Access Permissions Reference</a>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture34.png" /></p> 
-<p>Review your pipeline, and then choose <strong>Create pipeline</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture35.png" /></p> 
-<p>This will trigger AWS CodePipeline to execute the Source and Beta steps. The source artifact will be deployed to the AWS CodeDeploy deployment groups.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture36.png" /></p> 
-<p>Now you can access the same DNS address of the AWS CodeDeploy instance to see the updated deployment. You will see the background color has changed to green and the page text has been updated.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture37.png" /></p> 
-<p>We have now successfully created a delivery pipeline with two stages and integrated the deployment with AWS CodeDeploy. Now let’s integrate the Build stage with TeamCity.</p> 
-<h3>Step 2: Create a custom action for TeamCity Build stage</h3> 
-<p>AWS CodePipeline includes a number of actions that help you configure build, test, and deployment resources for your automated release process. TeamCity is not included in the default actions, so we will create a <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/how-to-create-custom-action.html">custom action</a> and then include it in our delivery pipeline. TeamCity’s CodePipeline <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">plugin</a> will also create a job worker that will poll AWS CodePipeline for job requests for this custom action, execute the job, and return the status result to AWS CodePipeline.</p> 
-<p>TeamCity’s custom action type (Build/Test categories) can be integrated with AWS CodePipeline. It’s similar to Jenkins and Solano CI custom actions. TeamCity’s CodePipeline <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">plugin</a> will also create a job worker that will poll AWS CodePipeline for job requests for this custom action, execute the job, and return the status result to AWS CodePipeline.</p> 
-<p>The TeamCity AWS CodePipeline <a href="https://confluence.jetbrains.com/display/TW/AWS+CodePipeline+Plugin">plugin</a> is already installed on the TeamCity server we set up earlier. To learn more about installing TeamCity plugins, see <a href="https://confluence.jetbrains.com/display/TCDL/Installing+Additional+Plugins#InstallingAdditionalPlugins-InstallingTeamCityplugins">install the plugin</a>. We will now create a custom action to integrate TeamCity with AWS CodePipeline using a custom-action JSON file.</p> 
-<p>Download this file locally: <a href="https://github.com/JetBrains/teamcity-aws-codepipeline-plugin/blob/master/custom-action.json">https://github.com/JetBrains/teamcity-aws-codepipeline-plugin/blob/master/custom-action.json</a></p> 
-<p>Open a terminal session (Linux, OS X, Unix) or command prompt (Windows) on a computer where you have installed the AWS CLI. For information about setting up the AWS CLI, see <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-set-up.html">here</a>.</p> 
-<p>Use the AWS CLI to run the <strong>aws codepipeline create-custom-action-type</strong> command, specifying the name of the JSON file you just created.</p> 
-<p>For example, to create a build custom action:</p> 
-<code class="lang-bash">$ aws codepipeline create-custom-action-type --cli-input-json file://teamcity-custom-action.json</code> 
-<p>This should result in an output similar to this:</p> 
-<code class="lang-bash">{
-&quot;actionType&quot;: {
-&quot;inputArtifactDetails&quot;: {
-&quot;maximumCount&quot;: 5,
-&quot;minimumCount&quot;: 0
-},
-&quot;actionConfigurationProperties&quot;: [
-{
-&quot;description&quot;: &quot;The expected URL format is http[s]://host[:port]&quot;,
-&quot;required&quot;: true,
-&quot;secret&quot;: false,
-&quot;key&quot;: true,
-&quot;queryable&quot;: false,
-&quot;name&quot;: &quot;TeamCityServerURL&quot;
-},
-{
-&quot;description&quot;: &quot;Corresponding TeamCity build configuration external ID&quot;,
-&quot;required&quot;: true,
-&quot;secret&quot;: false,
-&quot;key&quot;: true,
-&quot;queryable&quot;: false,
-&quot;name&quot;: &quot;BuildConfigurationID&quot;
-},
-{
-&quot;description&quot;: &quot;Must be unique, match the corresponding field in the TeamCity build trigger settings, satisfy regular expression pattern: [a-zA-Z0-9_-]+] and have length &lt;= 20&quot;,
-&quot;required&quot;: true,
-&quot;secret&quot;: false,
-&quot;key&quot;: true,
-&quot;queryable&quot;: true,
-&quot;name&quot;: &quot;ActionID&quot;
-}
-],
-&quot;outputArtifactDetails&quot;: {
-&quot;maximumCount&quot;: 5,
-&quot;minimumCount&quot;: 0
-},
-&quot;id&quot;: {
-&quot;category&quot;: &quot;Build&quot;,
-&quot;owner&quot;: &quot;Custom&quot;,
-&quot;version&quot;: &quot;1&quot;,
-&quot;provider&quot;: &quot;TeamCity&quot;
-},
-&quot;settings&quot;: {
-&quot;entityUrlTemplate&quot;: &quot;{Config:TeamCityServerURL}/viewType.html?buildTypeId={Config:BuildConfigurationID}&quot;,
-&quot;executionUrlTemplate&quot;: &quot;{Config:TeamCityServerURL}/viewLog.html?buildId={ExternalExecutionId}&amp;tab=buildResultsDiv&quot;
-}
-}
-}</code> 
-<p>Before you add the custom action to your delivery pipeline, make the following changes to the TeamCity build server. You can access the server by opening the <strong>Public IP</strong> of the TeamCityServer instance from the <a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:search=TeamCityServer">EC2 Instance page</a>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture38.png" /></p> 
-<p>In TeamCity, choose <strong>Projects</strong>. Under <strong>Build Configuration Settings</strong>, choose <strong>Version Control Settings</strong>. You need to remove the version control trigger here so that the TeamCity build server will be triggered during the Source stage in AWS CodePipeline. Choose <strong>Detach</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture39.png" /></p> 
-<h3>Step 3: Create a new AWS CodePipeline action trigger in TeamCity</h3> 
-<p>Now add a new AWS CodePipeline trigger in your build configuration. Choose <strong>Triggers</strong>, and then choose <strong>Add new trigger</strong></p> 
-<p><strong><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture40.png" /></strong></p> 
-<p>From the drop-down menu, choose <strong>AWS CodePipeline Action</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture41.png" /></p> 
-<p>&nbsp;</p> 
-<p>In the AWS CodePipeline console, choose the region in which you created your delivery pipeline. Enter your access key credentials, and for <strong>Action ID</strong>, type a unique name. You will need this ID when you add a TeamCity Build stage to the pipeline.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture42.png" /></p> 
-<h3>Step 4: Create a new Build stage in the delivery pipeline for TeamCity</h3> 
-<p>Add a stage to the pipeline and name it <strong>Build</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture43-866x1024.png" /></p> 
-<p>From the drop-down menu, choose <strong>Build</strong>. In <strong>Action name</strong>, type a name for the action. In <strong>Build provider</strong>, choose <strong>TeamCity</strong>, and then choose <strong>Add action</strong>.</p> 
-<p>Select <strong>TeamCity</strong>, click <strong>Add action</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture44.png" /></p> 
-<p>For <strong>TeamCity Action Configuration</strong>, use the following:</p> 
-<p><strong>TeamCityServerURL</strong>:&nbsp; http://<em>&lt;Public DNS address of the TeamCity build server&gt;</em>[:port]</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture45.png" /></p> 
-<p><strong>BuildConfigurationID</strong>: In your TeamCity project, choose <strong>Build</strong>. You’ll find this ID (AwsDemoPhpSimpleApp_Build) under <strong>Build Configuration Settings</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture46.png" /></p> 
-<p><strong>ActionID</strong>: In your TeamCity project, choose <strong>Build</strong>. You’ll find this ID under <strong>Build Configuration Settings</strong>. Choose <strong>Triggers</strong>, and then choose<strong> AWS CodePipeline Action</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture47.png" /></p> 
-<p>Next, choose input and output artifacts for the Build stage, and then choose <strong>Add action</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture48.png" /></p> 
-<p>We will now publish a new artifact to the Amazon S3 artifact bucket we created earlier, so we can see the deployment of a new app and its progress through the delivery pipeline. The demo app used in this artifact can be found <a href="https://github.com/awslabs/aws-demo-php-simple-app">here</a> for Linux or <a href="https://github.com/awslabs/AWSCodePipeline-S3-AWSCodeDeploy_Windows">here</a> for Windows.</p> 
-<p>Download the sample build artifact and upload it to the Amazon S3 bucket created in step 2.</p> 
-<p>OSX/Linux:</p> 
-<code class="lang-bash">$ wget -qO- https://s3.amazonaws.com/teamcity-demo-app/PhpArtifact.zip | aws s3 cp - s3://demo-app-build-account-number/PhpArtifact.zip</code> 
-<p>Windows:</p> 
-<code class="lang-code">$ wget -qO- https://s3.amazonaws.com/teamcity-demo-app/WindowsArtifact.zip
-$ aws s3 cp ./WindowsArtifact.zip s3://demo-app-account-number
-</code> 
-<p>From the AWS CodePipeline <a href="https://console.aws.amazon.com/codepipeline/home?region=us-east-1#/dashboard">dashboard</a>, under delivery-pipeline, choose <strong>Edit</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture49.png" /></p> 
-<p>Edit Source stage by choosing the edit icon on the right.</p> 
-<p><strong>Amazon S3 location</strong>:</p> 
-<p>Linux: s3://demo-app-<span style="color: #ff0000"><em>account-number</em></span><em>/PhpArtifact.zip</em></p> 
-<p>Windows: s3://demo-app-<span style="color: #ff0000"><em>account-number</em></span><em>/WindowsArtifact.zip</em></p> 
-<p>Under <strong>Output artifacts</strong>, make sure <strong>My App </strong>is displayed for<strong> Output artifact #1</strong>. This will be the input artifact for the Build stage.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture50.png" /></p> 
-<p>The output artifact of the Build stage should be the input artifact of the Beta deployment stage (in this case, <strong>MyAppBuild</strong>).<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture51.png" /></p> 
-<p>Choose <strong>Update</strong>, and then choose <strong>Save pipeline changes</strong>. On the next page, choose <strong>Save and continue</strong>.</p> 
-<h3>Step 5: Publish the build artifact for deployment<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture52.png" /></h3> 
-<h4>Step (a)</h4> 
-<p>In TeamCity, on the <strong>Build Steps</strong> page, for <strong>Runner type</strong>, choose <strong>Command Line</strong>, and then add the following custom script to copy the source artifact to the TeamCity <a href="https://confluence.jetbrains.com/display/TCD9/Build+Checkout+Directory">build checkout directory</a>.</p> 
-<p><strong>Note:</strong> This step is required <em>only </em>if your AWS CodePipeline source provider is either AWS CodeCommit or Amazon S3. If your source provider is GitHub, this step is redundant, because the artifact is copied over automatically by the TeamCity AWS CodePipeline plugin.</p> 
-<p>In <strong>Step name</strong>, enter a name for the Command Line runner to easily distinguish the context of the step.</p> 
-<p>Syntax:</p> 
-<code class="lang-bash">$ cp -R %codepipeline.artifact.input.folder%/&lt;CodePipeline-Name&gt;/&lt;build-input-artifact-name&gt;/* % teamcity.build.checkoutDir%
-$ unzip *.zip -d %teamcity.build.checkoutDir%
-$ rm –rf %teamcity.build.checkoutDir%/*.zip</code> 
-<p>For <strong>Custom script</strong>, use the following commands:</p> 
-<code class="lang-bash">cp -R %codepipeline.artifact.input.folder%/delivery-pipeline/MyApp/* %teamcity.build.checkoutDir%
-unzip *.zip -d %teamcity.build.checkoutDir%
-rm –rf %teamcity.build.checkoutDir%/*.zip</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture53.png" /></p> 
-<h4>Step (b):</h4> 
-<p>For <strong>Runner type</strong>, choose <strong>Command Line</strong> runner type, and then add the following custom script to copy the build artifact to the output folder.</p> 
-<p>For <strong>Step name</strong>, enter a name for the Command Line runner.</p> 
-<p>Syntax:</p> 
-<code class="lang-bash">$ mkdir -p %codepipeline.artifact.output.folder%/&lt;CodePipeline-Name&gt;/&lt;build-output-artifact-name&gt;/
-$ cp -R %codepipeline.artifact.input.folder%/&lt;CodePipeline-Name&gt;/&lt;build-input-artifact-name&gt;/* %codepipeline.artifact.output.folder%/&lt;CodePipeline-Name/&lt;build-output-artifact-name&gt;/
-</code> 
-<p>For <strong>Custom script</strong>, use the following commands:</p> 
-<code class="lang-bash">$ mkdir -p %codepipeline.artifact.output.folder%/delivery-pipeline/MyAppBuild/
-$ cp -R %codepipeline.artifact.input.folder%/delivery-pipeline/MyApp/* %codepipeline.artifact.output.folder%/delivery-pipeline/MyAppBuild/
-</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture54.png" /></p> 
-<p>Drag and drop <strong>Copy Source Artifact To Build Checkout Directory</strong> to make it the first build step, and then choose <strong>Apply</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture55.png" /></p> 
-<p>Navigate to the AWS CodePipeline console. Choose the delivery pipeline, and then choose <strong>Release change</strong>. When prompted, choose <strong>Release</strong>.</p> 
-<p>Choose<strong> Release </strong>on the next prompt.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture56.png" /></p> 
-<p>The most recent change will run through the pipeline again. It might take a few moments before the status of the run is displayed in the pipeline view.</p> 
-<p>Here is what you’d see after AWS CodePipeline runs through all of the stages in the pipeline:<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture57.png" /></p> 
-<p>Let’s access one of the instances to see the new application deployment on the <a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:search=CodeDeployDemo">EC2 Instance page</a>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture58.png" /></p> 
-<p>If your base operating system is Windows, accessing the public DNS address of one of the AWS CodeDeploy instances will result in the following page.</p> 
-<blockquote> 
-Windows: <em>http://public-dns/</em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture59.png" /> 
-</blockquote> 
-<p>If your base operating system is Linux, when we access the public DNS address of one of the AWS CodeDeploy instances, we will see the following test page, which is the sample application.</p> 
-<blockquote> 
-Linux: <em>http://public-dns/www/index.php</em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/25/Picture60.png" /> 
-</blockquote> 
-<p>Congratulations! You’ve created an end-to-end deployment and delivery pipeline ─ from source code, to build, to deployment ─ in a fully automated way.</p> 
-<b>Summary:</b> 
-<p>In this post, you learned how to build an end-to-end delivery and deployment pipeline on AWS. Specifically, you learned how to build an end-to-end, fully automated, continuous integration, continuous deployment, and delivery pipeline for your application, at scale, using AWS deployment and management services. You also learned how AWS CodePipeline can be easily extended through the use of custom triggers to integrate other services like TeamCity.</p> 
-<p>If you have questions or suggestions, please leave a comment below.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-206');
-});
-</script> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

@@ -190,6 +190,127 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/1-topology.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Automating Security Group Updates with AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
+<time property="datePublished" datetime="2017-10-24T13:38:16+00:00">24 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2861" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2861&amp;disqus_title=Automating+Security+Group+Updates+with+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-security-group-updates-with-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2861');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Customers often use public endpoints to perform cross-region replication or other application layer communication to remote regions. But a common problem is how do you protect these endpoints? It can be tempting to open up the security groups to the world due to the complexity of keeping security groups in sync across regions with a dynamically changing infrastructure.</p> 
+<p>Consider a situation where you are running large clusters of instances in different regions that all require internode connectivity. One approach would be to use a VPN tunnel between regions to provide a secure tunnel over which to send your traffic. A good example of this is the <a title="undefined" href="https://aws.amazon.com/answers/networking/transit-vpc/" target="null">Transit VPC Solution</a>, which is a published AWS solution to help customers quickly get up and running. However, this adds additional cost and complexity to your solution due to the newly required additional infrastructure.</p> 
+<p>Another approach, which I’ll explore in this post, is to restrict access to the nodes by whitelisting the public IP addresses of your hosts in the opposite region. Today, I’ll outline a solution that allows for cross-region security group updates, can handle remote region failures, and supports external actions such as manually terminating instances or adding instances to an existing <a title="undefined" href="https://aws.amazon.com/autoscaling" target="null">Auto Scaling</a> group.<span id="more-2861"></span></p> 
+<b>Solution overview</b> 
+<p>The overview of this solution is diagrammed below. Although this post covers limiting access to your instances, you should still implement encryption to protect your data in transit.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/1-topology.png" /></p> 
+<p>If your entire infrastructure is running in a single region, you can reference a security group as the source, allowing your IP addresses to change without any updates required. However, if you’re going across the public internet between regions to perform things like application-level traffic or cross-region replication, this is no longer an option. Security groups are regional. When you go across regions it can be tempting to drop security to enable this communication.</p> 
+<p>Although using an Elastic IP address can provide you with a static IP address that you can define as a source for your security groups, this may not always be feasible, especially when automatic scaling is desired.</p> 
+<p>In this example scenario, you have a distributed database that requires full internode communication for replication. If you place a cluster in us-east-1 and us-west-2, you must provide a secure method of communication between the two. Because the database uses cloud best practices, you can add or remove nodes as the load varies.</p> 
+<p>To start the process of updating your security groups, you must know when an instance has come online to trigger your workflow. Auto Scaling groups have the concept of <a title="undefined" href="http://docs.aws.amazon.com/autoscaling/latest/userguide/lifecycle-hooks.html" target="null">lifecycle hooks</a> that enable you to perform custom actions as the group launches or terminates instances.</p> 
+<p>When Auto Scaling begins to launch or terminate an instance, it puts the instance into a wait state (<code>Pending:Wait</code> or <code>Terminating:Wait</code>). The instance remains in this state while you perform your various actions until either you tell Auto Scaling to <code>Continue</code>, <code>Abandon</code>, or the timeout period ends. A lifecycle hook can trigger a CloudWatch event, publish to an Amazon SNS topic, or send to an Amazon SQS queue. For this example, you use <a title="undefined" href="https://aws.amazon.com/cloudwatch" target="null">CloudWatch Events</a> to trigger an <a title="undefined" href="https://aws.amazon.com/lambda" target="null">AWS Lambda</a> function that updates an <a title="undefined" href="https://aws.amazon.com/dynamodb" target="null">Amazon DynamoDB</a> table.</p> 
+<b>Component breakdown</b> 
+<p>Here’s a quick breakdown of the components involved in this solution:</p> 
+<p style="padding-left: 30px">• Lambda function<br /> • CloudWatch event<br /> • DynamoDB table</p> 
+<h3>Lambda function</h3> 
+<p>The Lambda function automatically updates your security groups, in the following way:</p> 
+<p style="padding-left: 30px">1. Determines whether a change was triggered by your Auto Scaling group lifecycle hook or manually invoked for a “true up” functionality, which I discuss later in this post.<br /> 2. Describes the instances in the Auto Scaling group and obtain public IP addresses for each instance.<br /> 3. Updates both local and remote DynamoDB tables.<br /> 4. Compares the list of public IP addresses for both local and remote clusters with what’s already in the local region security group. Update the security group.<br /> 5. Compares the list of public IP addresses for both local and remote clusters with what’s already in the remote region security group. Update the security group<br /> 6. Signals <code>CONTINUE</code> back to the lifecycle hook.</p> 
+<h3>CloudWatch event</h3> 
+<p>The CloudWatch event triggers when an instance passes through either the <code>launching</code> or <code>terminating</code> states. When the Lambda function gets invoked, it receives an event that looks like the following:</p> 
+<code class="lang-json">{
+&quot;account&quot;: &quot;123456789012&quot;,
+&quot;region&quot;: &quot;us-east-1&quot;,
+&quot;detail&quot;: {
+&quot;LifecycleHookName&quot;: &quot;hook-launching&quot;,
+&quot;AutoScalingGroupName&quot;: &quot;&quot;,
+&quot;LifecycleActionToken&quot;: &quot;33965228-086a-4aeb-8c26-f82ed3bef495&quot;,
+&quot;LifecycleTransition&quot;: &quot;autoscaling:EC2_INSTANCE_LAUNCHING&quot;,
+&quot;EC2InstanceId&quot;: &quot;i-017425ec54f22f994&quot;
+},
+&quot;detail-type&quot;: &quot;EC2 Instance-launch Lifecycle Action&quot;,
+&quot;source&quot;: &quot;aws.autoscaling&quot;,
+&quot;version&quot;: &quot;0&quot;,
+&quot;time&quot;: &quot;2017-05-03T02:20:59Z&quot;,
+&quot;id&quot;: &quot;cb930cf8-ce8b-4b6c-8011-af17966eb7e2&quot;,
+&quot;resources&quot;: [
+&quot;arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:d3fe9d96-34d0-4c62-b9bb-293a41ba3765:autoScalingGroupName/&quot;
+]
+}</code> 
+<h3>DynamoDB table</h3> 
+<p>You use DynamoDB to store lists of remote IP addresses in a local table that is updated by the opposite region as a failsafe source of truth. Although you can describe your Auto Scaling group for the local region, you must maintain a list of IP addresses for the remote region.</p> 
+<p>To minimize the number of describe calls and prevent an issue in the remote region from blocking your local scaling actions, we keep a list of the remote IP addresses in a local DynamoDB table. Each Lambda function in each region is responsible for updating the public IP addresses of its Auto Scaling group for both the local and remote tables.</p> 
+<p>As with all the infrastructure in this solution, there is a DynamoDB table in both regions that mirror each other. For example, the following screenshot shows a sample DynamoDB table. The Lambda function in <code>us-east-1</code> would update the DynamoDB entry for <code>us-east-1</code> in both tables in both regions.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/2-ddb.png" /></p> 
+<p>By updating a DynamoDB table in both regions, it allows the local region to gracefully handle issues with the remote region, which would otherwise prevent your ability to scale locally. If the remote region becomes inaccessible, you have a copy of the latest configuration from the table that you can use to continue to sync with your security groups. When the remote region comes back online, it pushes its updated public IP addresses to the DynamoDB table. The security group is updated to reflect the current status by the remote Lambda function.</p> 
+<p>&nbsp;</p> 
+<b>Walkthrough</b> 
+<p><strong>Note: All of the following steps are performed in both regions. The Launch Stack buttons will default to the us-east-1 region.</strong></p> 
+<p>Here’s a quick overview of the steps involved in this process:</p> 
+<p style="padding-left: 30px">1. An instance is launched or terminated, which triggers an Auto Scaling group lifecycle hook, triggering the Lambda function via CloudWatch Events.<br /> 2. The Lambda function retrieves the list of public IP addresses for all instances in the local region Auto Scaling group.<br /> 3. The Lambda function updates the local and remote region DynamoDB tables with the public IP addresses just received for the local Auto Scaling group.<br /> 4. The Lambda function updates the local region security group with the public IP addresses, removing and adding to ensure that it mirrors what is present for the local and remote Auto Scaling groups.<br /> 5. The Lambda function updates the remote region security group with the public IP addresses, removing and adding to ensure that it mirrors what is present for the local and remote Auto Scaling groups.</p> 
+<h3>Prerequisites</h3> 
+<p>To deploy this solution, you need to have Auto Scaling groups, launch configurations, and a base security group in both regions. To expedite this process, <a title="undefined" href="https://github.com/awslabs/aws-automating-security-group-updates/blob/master/templates/prerequisites.yml" target="null">this CloudFormation template</a> can be launched in both regions.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Prerequisites&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/prerequisites.yml" target="_blank" rel="noopener noreferrer"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" /></a></p> 
+<h3>Step 1: Launch the AWS SAM template in the first region</h3> 
+<p>To make the deployment process easy, I’ve created an <a title="undefined" href="https://github.com/awslabs/serverless-application-model" target="null">AWS Serverless Application Model</a> (AWS SAM) template, which is a new specification that makes it easier to manage and deploy serverless applications on AWS. This template creates the following resources:</p> 
+<p style="padding-left: 30px">• A Lambda function, to perform the various security group actions<br /> • A DynamoDB table, to track the state of the local and remote Auto Scaling groups<br /> • Auto Scaling group lifecycle hooks for instance launching and terminating<br /> • A CloudWatch event, to track the <code>EC2 Instance-Launch Lifecycle-Action</code> and <code>EC2 Instance-terminate Lifecycle-Action</code> events<br /> • A pointer from the CloudWatch event to the Lambda function, and the necessary permissions</p> 
+<p>Download the template from <a title="undefined" href="https://github.com/awslabs/aws-automating-security-group-updates/blob/master/templates/master.yml" target="null">here</a> or click to launch.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Master&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/master.yml" target="_blank" rel="noopener noreferrer"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/17/2-launch.png" /></a></p> 
+<p>Upon launching the template, you’ll be presented with a list of parameters which includes the remote/local names for your Auto Scaling Groups, AWS region, Security Group IDs, DynamoDB table names, as well as where the code for the Lambda function is located. Because this is the first region you’re launching the stack in, fill out all the parameters except for the <em>RemoteTable</em> parameter as it hasn’t been created yet (you fill this in later).</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/3-cfn.png" /></p> 
+<h3>Step 2: Test the local region</h3> 
+<p>After the stack has finished launching, you can test the local region. Open the EC2 console and find the Auto Scaling group that was created when launching the prerequisite stack. Change the desired number of instances from 0 to 1.</p> 
+<p>For both regions, check your security group to verify that the public IP address of the instance created is now in the security group.</p> 
+<p>Local region:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/4-local-sg.png" /></p> 
+<p>Remote region:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/5-remote-sg.png" /></p> 
+<p>Now, change the desired number of instances for your group back to 0 and verify that the rules are properly removed.</p> 
+<p>Local region:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/6-local-sg.png" /></p> 
+<p>Remote region:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/7-remote-sg.png" /></p> 
+<h3>Step 3: Launch in the remote region</h3> 
+<p>When you deploy a Lambda function using CloudFormation, the Lambda zip file needs to reside in the same region you are launching the template. Once you choose your remote region, create an Amazon S3 bucket and upload the <a href="https://s3.amazonaws.com/computeblog-us-east-1/automate-sg-lambda/auto-sg-updater.zip">Lambda zip file</a> there. Next, go to the remote region and launch the same SAM template as before, but make sure you update the <strong>CodeBucket</strong> and <strong>CodeKey</strong> parameters. Also, because this is the second launch, you now have all the values and can fill out all the parameters, specifically the <em>RemoteTable</em> value.</p> 
+<p>&nbsp;</p> 
+<h3>Step 4: Update the local region Lambda environment variable</h3> 
+<p>When you originally launched the template in the local region, you didn’t have the name of the DynamoDB table for the remote region, because you hadn’t created it yet. Now that you have launched the remote template, you can perform a CloudFormation stack update on the initial SAM template. This populates the remote DynamoDB table name into the initial Lambda function’s environment variables.</p> 
+<p>In the CloudFormation console in the initial region, select the stack. Under <strong>Actions</strong>, choose <strong>Update Stack</strong>, and select the SAM template used for both regions. Under <strong>Parameters</strong>, populate the remote DynamoDB table name, as shown below. Choose <strong>Next</strong> and let the stack update complete. This updates your Lambda function and completes the setup process.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/15/8-CFN.png" /></p> 
+<p>&nbsp;</p> 
+<h3>Step 5: Final testing</h3> 
+<p>You now have everything fully configured and in place to trigger security group changes based on instances being added or removed to your Auto Scaling groups in both regions. Test this by changing the desired capacity of your group in both regions.</p> 
+<p>True up functionality<br /> If an instance is manually added or removed from the Auto Scaling group, the lifecycle hooks don’t get triggered. To account for this, the Lambda function supports a “true up” functionality in which the function can be manually invoked. If you paste in the following JSON text for your test event, it kicks off the entire workflow. For added peace of mind, you can also have this function fire via a CloudWatch event with a CRON expression for nearly continuous checking.</p> 
+<code class="lang-json">{
+&quot;detail&quot;: {
+&quot;AutoScalingGroupName&quot;: &quot;&lt;your ASG name&gt;&quot;
+},
+&quot;trueup&quot;:true
+}</code> 
+<b>Extra credit</b> 
+<p>Now that all the resources are created in both regions, go back and break down the policy to incorporate resource-level permissions for specific security groups, Auto Scaling groups, and the DynamoDB tables.</p> 
+<p>Although this post is centered around using public IP addresses for your instances, you could instead use a VPN between regions. In this case, you would still be able to use this solution to scope down the security groups to the cluster instances. However, the code would need to be modified to support private IP addresses.</p> 
+<p>&nbsp;</p> 
+<b>Conclusion</b> 
+<p>At this point, you now have a mechanism in place that captures when a new instance is added to or removed from your cluster and updates the security groups in both regions. This ensures that you are locking down your infrastructure securely by allowing access only to other cluster members.</p> 
+<p>Keep in mind that this architecture (lifecycle hooks, CloudWatch event, Lambda function, and DynamoDB table) requires that the infrastructure to be deployed in both regions, to have synchronization going both ways.</p> 
+<p>Because this Lambda function is modifying security group rules, it’s important to have an audit log of what has been modified and who is modifying them. The out-of-the-box function provides logs in CloudWatch for what IP addresses are being added and removed for which ports. As these are all API calls being made, they are logged in CloudTrail and can be traced back to the IAM role that you created for your lifecycle hooks. This can provide historical data that can be used for troubleshooting or auditing purposes.</p> 
+<p>Security is paramount at AWS. We want to ensure that customers are protecting access to their resources. This solution helps you keep your security groups in both regions automatically in sync with your Auto Scaling group resources. Let us know if you have any questions or other solutions you’ve come up with!</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2861');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger-626x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Implementing Default Directory Indexes in Amazon S3-backed Amazon CloudFront Origins Using Lambda@Edge</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1316,234 +1437,6 @@ TERRAFORM_CONFIG=$(pwd)/.terraformrc terraform destroy --force
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2819');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Delivering Graphics Apps with Amazon AppStream 2.0</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Deepak Suryanarayanan</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T10:02:21+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/amazon-appstream-2-0/" title="View all posts in Amazon AppStream 2.0*"><span property="articleSection">Amazon AppStream 2.0*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/desktop-app-streaming/" title="View all posts in Desktop &amp; App Streaming*"><span property="articleSection">Desktop &amp; App Streaming*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2792" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2792&amp;disqus_title=Delivering+Graphics+Apps+with+Amazon+AppStream+2.0&amp;disqus_url=https://aws.amazon.com/blogs/compute/delivering-graphics-apps-with-amazon-appstream-2-0/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2792');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><strong>Sahil Bahri, Sr. Product Manager, Amazon AppStream 2.0</strong></p> 
-<p><strong><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture6-300x207.png" /></a></strong></p> 
-<p>Do you need to provide a workstation class experience for users who run graphics apps? With Amazon AppStream 2.0, you can stream graphics apps from AWS to a web browser running on any supported device. AppStream 2.0 offers a choice of GPU instance types. The range includes the newly launched Graphics Design instance, which allows you to offer a fast, fluid user experience at a fraction of the cost of using a graphics workstation, without upfront investments or long-term commitments.</p> 
-<p>In this post, I discuss the Graphics Design instance type in detail, and how you can use it to deliver a graphics application such as Siemens NX―a popular CAD/CAM application that we have been testing on AppStream 2.0 with engineers from Siemens PLM.</p> 
-<h3>Graphics Instance Types on AppStream 2.0</h3> 
-<p>First, a quick recap on the GPU&nbsp;instance types available with AppStream 2.0. In July, 2017, we launched graphics support for AppStream 2.0 with <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-graphics-applications/">two new instance types</a> that Jeff Barr discussed on the <a href="https://aws.amazon.com/blogs/aws/new-gpu-powered-streaming-instances-for-amazon-appstream-2-0/">AWS Blog</a>:</p> 
-<li>Graphics Desktop</li> 
-<li>Graphics Pro</li> 
-<p>Many customers in industries such as engineering, media, entertainment, and oil and gas are using these instances to deliver high-performance graphics applications to their users. These instance types are based on dedicated NVIDIA GPUs and can run the most demanding graphics applications, including those that rely on CUDA graphics API libraries.</p> 
-<p>Last week, we added a new lower-cost instance type: <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/introducing-amazon-appstream-2-graphics-design-a-new-lower-cost-instance-type-for-streaming-graphics-applications/">Graphics Design</a>. This instance type is a great fit for engineers, 3D modelers, and designers who use graphics applications that rely on the hardware acceleration of DirectX, OpenGL, or OpenCL APIs, such as Siemens NX, Autodesk AutoCAD, or Adobe Photoshop. The Graphics Design instance is based on AMD’s FirePro S7150x2 Server GPUs and equipped with AMD Multiuser GPU technology. The instance type uses virtualized GPUs to achieve lower costs, and is available in four instance sizes to scale and match the requirements of your applications.</p> 
-<table style="border: 2px solid black;border-collapse: collapse;margin-left: auto;margin-right: auto"> 
-<tbody> 
-<tr style="border-bottom: 1px solid black;background-color: #e0e0e0"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>Instance</b></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>vCPUs</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Instance RAM (GiB)</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center"><strong>GPU Memory (GiB)</strong></td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>stream.graphics-design.large</b></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">7.5 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">15.3 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.2xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">30.5 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>stream.graphics-design.4xlarge</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">16</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">61 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>The following table compares all three graphics instance types on AppStream 2.0, along with example applications you could use with each.</p> 
-<table style="border: 2px solid black;border-collapse: collapse;margin-left: auto;margin-right: auto"> 
-<tbody> 
-<tr style="border-bottom: 1px solid black;background-color: #e0e0e0"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>&nbsp;</b></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics Design</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics Desktop</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center"><strong>Graphics Pro</strong></td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><b>Number of instance sizes</b></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">3</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>GPU memory range<br /> </strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">1–8 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">4 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8–32 GiB</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>vCPU range</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">2–16</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">8</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">16–32</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Memory range</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">7.5–61 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">15 GiB</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">122–488 GiB</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Graphics libraries supported</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AMD FirePro S7150x2</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">NVIDIA GRID K520</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">NVIDIA Tesla M60</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Price range (N. Virginia AWS Region)</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$0.25 – $2.00/hour</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$0.5/hour</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">$2.05 – $8.20/hour</td> 
-</tr> 
-<tr style="border-bottom: 1px solid black"> 
-<td style="border-right: 1px solid black;padding: 4px"><strong>Example applications</strong></td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">Adobe Premiere Pro, AutoDesk Revit, Siemens NX</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AVEVA E3D, SOLIDWORKS</td> 
-<td style="border-right: 1px solid black;padding: 4px;text-align: center">AutoDesk Maya, Landmark DecisionSpace, Schlumberger Petrel</td> 
-</tr> 
-</tbody> 
-</table> 
-<h3>Example graphics instance set up with Siemens NX</h3> 
-<p>In the section, I walk through setting up Siemens NX with Graphics Design instances on AppStream 2.0. After set up is complete, users can able to access NX from within their browser and also access their design files from a file share. You can also use these steps to set up and test your own graphics applications on AppStream 2.0. Here’s the workflow:</p> 
-<ol> 
-<li>Create a file share to load and save design files.</li> 
-<li>Create an AppStream 2.0 image with Siemens NX installed.</li> 
-<li>Create an AppStream 2.0 fleet and stack.</li> 
-<li>Invite users to access Siemens NX through a browser.</li> 
-<li>Validate the setup.</li> 
-</ol> 
-<p>To learn more about AppStream 2.0 concepts and set up, see the previous post <a href="https://aws.amazon.com/blogs/compute/scaling-your-desktop-application-streams-with-amazon-appstream-2-0/">Scaling Your Desktop Application Streams with Amazon AppStream 2.0</a>. For a deeper review of all the setup and maintenance steps, see <a href="http://docs.aws.amazon.com/appstream2/latest/developerguide/what-is-appstream.html">Amazon AppStream 2.0 Developer Guide</a>.</p> 
-<h4><span style="color: #000080"><strong>Step 1: Create a file share to load and save design files</strong></span></h4> 
-<p><strong>To launch and configure the file server</strong></p> 
-<ol> 
-<li>Open the EC2 console and choose <strong>Launch Instance</strong>.</li> 
-<li>Scroll to the <strong>Microsoft Windows Server 2016 Base Image</strong> and choose <strong>Select</strong>.</li> 
-<li>Choose an instance type and size for your file server (I chose the general purpose m4.large instance). Choose <strong>Next: Configure Instance Details</strong>.</li> 
-<li>Select a VPC and subnet. You launch AppStream 2.0 resources in the same VPC. Choose <strong>Next: Add Storage.</strong></li> 
-<li>If necessary, adjust the size of your EBS volume. Choose <strong>Review and Launch, Launch</strong>.</li> 
-<li>On the Instances page, give your file server a name, such as My File Server.</li> 
-<li>Ensure that the security group associated with the file server instance allows for incoming traffic from the security group that you select for your AppStream 2.0 fleets or image builders. You can use the default security group and select the same group while creating the image builder and fleet in later steps.</li> 
-</ol> 
-<p>Log in to the file server using a remote access client such as Microsoft Remote Desktop. For more information about connecting to an EC2 Windows instance, see&nbsp;<a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/connecting_to_windows_instance.html#connect-rdp">Connect to Your Windows Instance</a>.</p> 
-<p><strong>To enable file sharing</strong></p> 
-<ol> 
-<li>Create a new folder (such as C:\My Graphics Files) and upload the shared files to make available to your users.</li> 
-<li>From the Windows control panel, enable network discovery.</li> 
-<li>Choose <strong>Server Manager</strong>, <strong>File and Storage Services, Volumes</strong>.</li> 
-<li>Scroll to Shares and choose <strong>Start the</strong> <strong>Add Roles and Features Wizard</strong>. Go through the wizard to install the <strong>File Server and Share</strong> role.</li> 
-<li>From the left navigation menu, choose <strong>Shares</strong>.</li> 
-<li>Choose <strong>Start the New Share Wizard</strong> to set up your folder as a file share.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture1.png" /></a></li> 
-<li>Open the context (right-click) menu on the share and choose <strong>Properties, Permissions, Customize Permissions</strong>.</li> 
-<li>Choose <strong>Permissions, Add</strong>. Add <strong>Read</strong> and <strong>Execute</strong> permissions for everyone on the network.</li> 
-</ol> 
-<h4><span style="color: #000080"><strong>Step 2: &nbsp;Create an AppStream 2.0 image with Siemens NX installed</strong></span></h4> 
-<p><strong>To connect to the image builder and install applications</strong></p> 
-<ol> 
-<li>Open the <a href="https://us-west-2.console.aws.amazon.com/appstream2/home?region=us-west-2#/stacks">AppStream 2.0 management console</a> and choose <strong>Images</strong>,<strong> Image Builder</strong>,<strong> Launch Image Builder</strong>.</li> 
-<li>Create a graphics design image builder in the same VPC as your file server.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture2.png" /></a></li> 
-<li>From the <strong>Image builder</strong> tab, select your image builder and choose <strong>Connect</strong>. This opens a new browser tab and display a desktop to log in to.</li> 
-<li>Log in to your image builder as ImageBuilderAdmin.</li> 
-<li>Launch the <strong>Image Assistant</strong>.</li> 
-<li>Download and install Siemens NX and other applications on the image builder. I added Blender and Firefox, but you could replace these with your own applications.</li> 
-<li>To verify the user experience, you can test the application performance on the instance.</li> 
-</ol> 
-<p>Before you finish creating the image, you must mount the file share by enabling a few Microsoft Windows services.</p> 
-<p><strong>To mount the file share</strong></p> 
-<ol> 
-<li>Open services.msc and check the following services:</li> 
-</ol> 
-<li>DNS Client</li> 
-<li>Function Discovery Resource Publication</li> 
-<li>SSDP Discovery</li> 
-<li>UPnP Device H</li> 
-<ol start="2"> 
-<li>If any of the preceding services have <strong>Startup Type</strong> set to <strong>Manual</strong>, open the context (right-click) menu on the service and choose <strong>Start</strong>. Otherwise, open the context (right-click) menu on the service and choose <strong>Properties</strong>. For <strong>Startup Type</strong>, choose <strong>Manual</strong>, <strong>Apply</strong>. To start the service, choose <strong>Start</strong>.</li> 
-<li>From the Windows control panel, enable network discovery.</li> 
-<li>Create a batch script that mounts a file share from the storage server set up earlier. The file share is mounted automatically when a user connects to the AppStream 2.0 environment.</li> 
-</ol> 
-<p style="padding-left: 90px"><strong>Logon Script Location:</strong> C:\Users\Public\logon.bat</p> 
-<p style="padding-left: 90px"><strong>Script Contents: </strong></p> 
-<p style="padding-left: 90px">:loop</p> 
-<p style="padding-left: 90px">net use H: <em>\\path\to\network\share</em><em>&nbsp;</em></p> 
-<p style="padding-left: 90px">PING localhost -n 30 &gt;NUL</p> 
-<p style="padding-left: 90px">IF NOT EXIST H:\ GOTO loop</p> 
-<ol start="5"> 
-<li>Open gpedit.msc and choose <strong>User Configuration</strong>, <strong>Windows Settings</strong>, <strong>Scripts</strong>. Set logon.bat as the user logon script.</li> 
-<li>Next, create a batch script that makes the mounted drive visible to the user.</li> 
-</ol> 
-<p style="padding-left: 90px"><strong>Logon Script Location:</strong> C:\Users\Public\startup.bat</p> 
-<p style="padding-left: 90px"><strong>Script Contents: </strong><br /> REG DELETE “HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer” /v “NoDrives” /f</p> 
-<ol start="7"> 
-<li>Open <strong>Task Scheduler</strong> and choose <strong>Create Task</strong>.</li> 
-<li>Choose <strong>General</strong>, provide a task name, and then choose <strong>Change User or Group</strong>.</li> 
-<li>For <strong>Enter the object name to select</strong>, enter <strong>SYSTEM</strong> and choose <strong>Check Names</strong>, <strong>OK</strong>.</li> 
-<li>Choose <strong>Triggers</strong>, <strong>New</strong>. For <strong>Begin the task</strong>, choose <strong>At startup</strong>. Under <strong>Advanced Settings</strong>, change <strong>Delay task for</strong> to 5 minutes. Choose <strong>OK</strong>.</li> 
-<li>Choose <strong>Actions</strong>, <strong>New</strong>. Under <strong>Settings</strong>, for <strong>Program/script</strong>, enter <strong>C:\Users\Public\startup.bat</strong>. Choose <strong>OK</strong>.</li> 
-<li>Choose <strong>Conditions</strong>. Under <strong>Power</strong>, clear the <strong>Start the task only if the computer is on AC power</strong> Choose <strong>OK</strong>.</li> 
-<li>To view your scheduled task, choose <strong>Task Scheduler Library</strong>. Close Task Scheduler when you are done.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture3.png" /></a></li> 
-</ol> 
-<h4><span style="color: #000080">Step 3: &nbsp;Create an AppStream 2.0 fleet and stack</span></h4> 
-<p><strong>To create a fleet and stack</strong></p> 
-<ol> 
-<li>In the AppStream 2.0 management console, choose <strong>Fleets, Create Fleet. </strong></li> 
-<li>Give the fleet a name, such as Graphics-Demo-Fleet, that uses the newly created image and the same VPC as your file server.</li> 
-<li>Choose <strong>Stacks</strong>, <strong>Create Stack</strong>. Give the stack a name, such as Graphics-Demo-Stack.</li> 
-<li>After the stack is created, select it and choose <strong>Actions</strong>, <strong>Associate Fleet</strong>. Associate the stack with the fleet you created in step 1.</li> 
-</ol> 
-<h4><span style="color: #000080">Step 4: &nbsp;Invite users to access Siemens NX through a browser</span></h4> 
-<p><strong>To invite users</strong></p> 
-<ol> 
-<li>Choose <strong>User Pools</strong>, <strong>Create User</strong> to create users.</li> 
-<li>Enter a name and email address for each user.</li> 
-<li>Select the users just created, and choose <strong>Actions</strong>,<strong> Assign Stack</strong> to provide access to the stack created in step 2. You can also provide access using SAML 2.0 and connect to your Active Directory if necessary. For more information, see the <a href="https://aws.amazon.com/blogs/compute/enabling-identity-federation-with-ad-fs-3-0-and-amazon-appstream-2-0/">Enabling Identity Federation with AD FS 3.0 and Amazon AppStream 2.0</a> post.</li> 
-</ol> 
-<p>Your user receives an email invitation to set up an account and use a web portal to access the applications that you have included in your stack.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture4.png" /></a></p> 
-<h4><span style="color: #000080">Step 5: &nbsp;Validate the setup</span></h4> 
-<p><strong>Time for a test drive with Siemens NX on AppStream 2.0!</strong></p> 
-<ol> 
-<li>Open the link for the AppStream 2.0 web portal shared through the email invitation. The web portal opens in your default browser. You must sign in with the temporary password and set a new password. After that, you get taken to your app catalog.</li> 
-<li>Launch Siemens NX and interact with it using the demo files available in the shared storage folder – My Graphics Files.<em>&nbsp;</em></li> 
-</ol> 
-<p>After I launched NX, I captured the screenshot below. The Siemens PLM team also recorded a <a href="https://www.youtube.com/watch?v=lOWPcFjwkCE">video with NX running on AppStream 2.0</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/Picture5.png" /></a></p> 
-<h3>Summary</h3> 
-<p>In this post, I discussed the GPU instances available for delivering rich graphics applications to users in a web browser. While I demonstrated a simple setup, you can scale this out to launch a production environment with users signing in using <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-appstream-2-0-now-supports-microsoft-active-directory-domains/">Active Directory credentials,&nbsp;</a> accessing <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/amazon-appstream-2-0-now-offers-persistent-storage-for-end-users-files-backed-by-amazon-s3/">persistent storage with Amazon S3</a>, and using other commonly requested features reviewed in the <a href="https://aws.amazon.com/blogs/aws/amazon-appstream-2-0-launch-recap-domain-join-simple-network-setup-and-lots-more/">Amazon AppStream 2.0 Launch Recap – Domain Join, Simple Network Setup, and Lots More</a> post.</p> 
-<p>To learn more about AppStream 2.0 and capabilities added this year, see <a href="https://aws.amazon.com/appstream2/resources/">Amazon AppStream 2.0 Resources</a>.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2792');
 });
 </script> 
 </article> 

@@ -190,6 +190,120 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Building a Secure Cross-Account Continuous Delivery Pipeline</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
+<time property="datePublished" datetime="2017-05-16T08:58:11+00:00">16 MAY 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/aws-building-a-secure-cross-account-continuous-delivery-pipeline/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Most organizations create multiple AWS accounts because they provide the highest level of resource and security isolation. In this blog post, I will discuss how to use cross account <a title="undefined" href="https://aws.amazon.com/iam/" target="null">AWS Identity and Access Management (IAM)</a> access to orchestrate continuous integration and continuous deployment.</p> 
+<b>Do I need multiple accounts?</b> 
+<p>If you answer “yes” to any of the following questions you should consider creating more AWS accounts:</p> 
+<li>Does your business require administrative isolation between workloads? Administrative isolation by account is the most straightforward way to grant independent administrative groups different levels of administrative control over AWS resources based on workload, development lifecycle, business unit (BU), or data sensitivity.</li> 
+<li>Does your business require limited visibility and discoverability of workloads? Accounts provide a natural boundary for visibility and discoverability. Workloads cannot be accessed or viewed unless an administrator of the account enables access to users managed in another account.</li> 
+<li>Does your business require isolation to minimize blast radius? Separate accounts help define boundaries and provide natural blast-radius isolation to limit the impact of a critical event such as a security breach, an unavailable <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html">AWS Region or Availability Zone</a>, account suspensions, and so on.</li> 
+<li>Does your business require a particular workload to operate within <a href="http://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html">AWS service limits</a> without impacting the limits of another workload? You can use AWS account service limits to impose restrictions on a business unit, development team, or project. For example, if you create an AWS account for a project group, you can limit the number of Amazon Elastic Compute Cloud (<a href="https://aws.amazon.com/ec2/">Amazon EC2</a>) or high performance computing (HPC) instances that can be launched by the account.</li> 
+<li>Does your business require strong isolation of recovery or auditing data? If regulatory requirements require you to control access and visibility to auditing data, you can isolate the data in an account separate from the one where you run your workloads (for example, by writing <a href="https://aws.amazon.com/cloudtrail/?sc_channel=PS&amp;sc_campaign=acquisition_US&amp;sc_publisher=google&amp;sc_medium=cloudtrail_b_test_q32016&amp;sc_content=cloudtrail_bmm&amp;sc_detail=%2Bcloudtrail&amp;sc_category=cloudtrial&amp;sc_segment=105093175122&amp;sc_matchtype=b&amp;sc_country=US&amp;s_kwcid=AL!4422!3!105093175122!b!!g!!%2Bcloudtrail&amp;ef_id=WFGCgwAABYUoeNPB:20170502153559:s">AWS CloudTrail</a> logs to a different account).</li> 
+<li>Do your workloads depend on specific instance reservations to support high availability (HA) or disaster recovery (DR) capacity requirements? Reserved Instances (RIs) ensure reserved capacity for services such as Amazon EC2 and Amazon Relational Database Service (<a href="https://aws.amazon.com/rds/">Amazon RDS</a>) at the individual account level.</li> 
+<b>Use case</b> 
+<p>The identities in this use case are set up as follows:</p> 
+<li><strong>DevAccount </strong></li> 
+<p>Developers check the code into an <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a> repository. It stores all the repositories as a single source of truth for application code. Developers have full control over this account. This account is usually used as a sandbox for developers.</p> 
+<li><strong>ToolsAccount</strong></li> 
+<p>A central location for all the tools related to the organization, including continuous delivery/deployment services such as <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> and <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a>. Developers have limited/read-only access in this account. The Operations team has more control.</p> 
+<li><strong>TestAccount</strong></li> 
+<p>Applications using the CI/CD orchestration for test purposes are deployed from this account. Developers and the Operations team have limited/read-only access in this account.</p> 
+<li><strong>ProdAccount</strong></li> 
+<p>Applications using the CI/CD orchestration tested in the ToolsAccount are deployed to production from this account. Developers and the Operations team have limited/read-only access in this account.</p> 
+<b>Solution</b> 
+<p>In this solution, we will check in sample code for an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function in the Dev account. This will trigger the pipeline (created in AWS CodePipeline) and run the build using AWS CodeBuild in the Tools account. The pipeline will then deploy the Lambda function to the Test and Prod accounts.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/CrossAccount-CI-CD.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/CrossAccount-CI-CD.jpg" /></a></p> 
+<p>&nbsp;</p> 
+<b>Setup</b> 
+<ol> 
+<li>Clone this repository. It contains the <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation templates </a>that we will use in this walkthrough.</li> 
+</ol> 
+<code class="lang-bash">git clone https://github.com/awslabs/aws-refarch-cross-account-pipeline.git
+</code> 
+<ol start="2"> 
+<li>Follow the instructions in the repository README to push the sample AWS Lambda application to an AWS CodeCommit repository in the Dev account.</li> 
+<li>Install the AWS Command Line Interface as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">here</a>. To prepare your access keys or assume-role to make calls to AWS, configure the AWS CLI as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>.</li> 
+</ol> 
+<b></b> 
+<b>Walkthrough</b> 
+<p><strong>Note:</strong> Follow the steps in the order they’re written. Otherwise, the resources might not be created correctly.</p> 
+<ol> 
+<li>In the Tools account, deploy this CloudFormation template. It will create <a href="http://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#master_keys">the customer master keys</a> (CMK) in <a href="http://docs.aws.amazon.com/kms/latest/developerguide/overview.html">AWS Key Management Service</a> (AWS KMS), grant access to Dev, Test, and Prod accounts to use these keys, and create an <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket to hold artifacts from AWS CodePipeline.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name pre-reqs \
+--template-file ToolsAcct/pre-reqs.yaml --parameter-overrides \
+DevAccount=ENTER_DEV_ACCT TestAccount=ENTER_TEST_ACCT \
+ProductionAccount=ENTER_PROD_ACCT</code> 
+<p>In the output section of the CloudFormation console, make a note of the <a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html">Amazon Resource Number</a> (ARN) of the CMK and the S3 bucket name. You will need them in the next step.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/10/Screen-Shot-2017-04-18-at-5.36.32-PM.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/10/Screen-Shot-2017-04-18-at-5.36.32-PM.png" /></a></p> 
+<ol start="2"> 
+<li>In the Dev account, which hosts the AWS CodeCommit repository, deploy this CloudFormation template. This template will create the IAM roles, which will later be assumed by the pipeline running in the Tools account. Enter the AWS account number for the Tools account and the CMK ARN.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name toolsacct-codepipeline-role \
+--template-file DevAccount/toolsacct-codepipeline-codecommit.yaml \
+--capabilities CAPABILITY_NAMED_IAM \
+--parameter-overrides ToolsAccount=ENTER_TOOLS_ACCT CMKARN=FROM_1st_Step</code> 
+<ol start="3"> 
+<li>In the Test and Prod accounts where you will deploy the Lambda code, execute this CloudFormation template. This template creates IAM roles, which will later be assumed by the pipeline to create, deploy, and update the sample AWS Lambda function through CloudFormation.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name toolsacct-codepipeline-cloudformation-role \
+--template-file TestAccount/toolsacct-codepipeline-cloudformation-deployer.yaml \
+--capabilities CAPABILITY_NAMED_IAM \
+--parameter-overrides ToolsAccount=ENTER_TOOLS_ACCT CMKARN=FROM_1st_STEP  \
+S3Bucket=FROM_1st_STEP</code> 
+<ol start="4"> 
+<li>In the Tools account, which hosts AWS CodePipeline, execute this CloudFormation template. This creates a pipeline, but does not add permissions for the cross accounts (Dev, Test, and Prod).</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name sample-lambda-pipeline \
+--template-file ToolsAcct/code-pipeline.yaml \
+--parameter-overrides DevAccount=ENTER_DEV_ACCT TestAccount=ENTER_TEST_ACCT \
+ProductionAccount=ENTER_PROD_ACCT CMKARN=FROM_1st_STEP \
+S3Bucket=FROM_1st_STEP--capabilities CAPABILITY_NAMED_IAM</code> 
+<ol start="5"> 
+<li>In the Tools account, execute this CloudFormation template, which give access to the role created in step 4. This role will be assumed by AWS CodeBuild to decrypt artifacts in the S3 bucket. This is the same template that was used in step 1, but with different parameters.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name pre-reqs \
+--template-file ToolsAcct/pre-reqs.yaml \
+--parameter-overrides CodeBuildCondition=true</code> 
+<ol start="6"> 
+<li>In the Tools account, execute this CloudFormation template, which will do the following: 
+<ol start="a"> 
+<li>Add the IAM role created in step 2. This role is used by AWS CodePipeline in the Tools account for checking out code from the AWS CodeCommit repository in the Dev account.</li> 
+<li>Add the IAM role created in step 3. This role is used by AWS CodePipeline in the Tools account for deploying the code package to the Test and Prod accounts.</li> 
+</ol> </li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --stack-name sample-lambda-pipeline \
+--template-file ToolsAcct/code-pipeline.yaml \
+--parameter-overrides CrossAccountCondition=true \
+--capabilities CAPABILITY_NAMED_IAM</code> 
+<b>What did we just do?</b> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/details-cross-account-pipeline.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/details-cross-account-pipeline.png" /></a></p> 
+<ol> 
+<li>The pipeline created in step 4 and updated in step 6 checks out code from the AWS CodeCommit repository. It uses the IAM role created in step 2. The IAM role created in step 4 has permissions to assume the role created in step 2. This role will be assumed by AWS CodeBuild to decrypt artifacts in the S3 bucket, as described in step 5.</li> 
+<li>The IAM role created in step 2 has permission to check out code. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/DevAccount/toolsacct-codepipeline-codecommit.yaml#L35">here</a>.</li> 
+<li>The IAM role created in step 2 also has permission to upload the checked-out code to the S3 bucket created in step 1. It uses the KMS keys created in step 1 for server-side encryption.</li> 
+<li>Upon successfully checking out the code, AWS CodePipeline triggers AWS CodeBuild. The AWS CodeBuild project created in step 4 is configured to use the CMK created in step 1 for cryptography operations. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/ToolsAcct/code-pipeline.yaml#L94">here</a>. The AWS CodeBuild role is created later in step 4. In step 5, access is granted to the AWS CodeBuild role to allow the use of the CMK for cryptography.</li> 
+<li>AWS CodeBuild uses <a href="https://pypi.python.org/pypi/pip">pip</a> to install any libraries for the sample Lambda function. It also executes the <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html">aws cloudformation package</a> command to create a Lambda function deployment package, uploads the package to the specified S3 bucket, and adds a reference to the uploaded package to the CloudFormation template. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/ToolsAcct/code-pipeline.yaml#L118">here</a>.</li> 
+<li>Using the role created in step 3, AWS CodePipeline executes the transformed CloudFormation template (received as an output from AWS CodeBuild) in the Test account. The AWS CodePipeline role created in step 4 has permissions to assume the IAM role created in step 3, as described in step 5.</li> 
+<li>The IAM role assumed by AWS CodePipeline passes the role to an IAM role that can be assumed by CloudFormation. AWS CloudFormation creates and updates the Lambda function using the code that was built and uploaded by AWS CodeBuild.</li> 
+</ol> 
+<p>This is what the pipeline looks like using the sample code:<br /> <a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/Screen-Shot-2017-04-27-at-10.56.56-AM.png"><img class="aligncenter wp-image-1011 size-medium" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/Screen-Shot-2017-04-27-at-10.56.56-AM.png" /></a></p> 
+<b>Conclusion</b> 
+<p>Creating multiple AWS accounts provides the highest degree of isolation and is appropriate for a number of use cases. However, keeping a centralized account to orchestrate continuous delivery and deployment using AWS CodePipeline and AWS CodeBuild eliminates the need to duplicate the delivery pipeline. You can secure the pipeline through the use of cross account IAM roles and the encryption of artifacts using AWS KMS. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_aws-accounts.html">Providing Access to an IAM User in Another AWS Account That You Own in the IAM User Guide</a>.</p> 
+<b>References</b> 
+<li><a href="https://d0.awsstatic.com/aws-answers/AWS_Multi_Account_Security_Strategy.pdf">AWS Multiple Account Security Strategy</a></li> 
+<li><a href="https://d0.awsstatic.com/aws-answers/AWS_Multi_Account_Billing_Strategy.pdf">AWS Multiple Account Billing Strategy</a></li> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Use AWS CloudFormation to Automate the Creation of an S3 Bucket with Cross-Region Replication Enabled</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -970,128 +1084,6 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-487');
 });
 </script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Registering Spot Instances with AWS OpsWorks Stacks</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Amir Golan</span></span> | on 
-<time property="datePublished" datetime="2016-12-23T03:48:21+00:00">23 DEC 2016</time> | 
-<a href="https://aws.amazon.com/blogs/devops/registering-spot-instances-with-aws-opsworks-stacks/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/opsworks/stacks/">AWS OpsWorks Stacks</a> is a configuration management service that helps you configure and operate applications of all shapes and sizes using Chef. You can define the application’s architecture and the specification of each component, including package installation, software configuration, and more.</p> 
-<p><a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot instances</a> allow you to bid on spare <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> computing capacity. Because Spot instances are often available at a discount compared to On-Demand instances, you can significantly reduce the cost of running your applications, grow your applications’ compute capacity and throughput for the same budget, and enable new types of cloud computing applications.</p> 
-<p>You can use Spot instances with AWS OpsWorks Stacks in the following ways:</p> 
-<li>As a part of an Auto Scaling group, as described in this blog post. You can follow the steps in the blog post and in the launch configuration described in step 5, choose the Spot instance option.</li> 
-<li>To provision a Spot instance in the EC2 console and have it automatically register with an OpsWorks stack, as described here.</li> 
-<p>The walkthrough assumes that your stack and the following resources you create are located in N. Virginia (us-east-1). If you want to use another region, be sure to set the region parameter accordingly.</p> 
-<p><strong>IAM instance profile</strong>: an IAM profile that grants your instances permission to register themselves with OpsWorks.</p> 
-<p><strong>Lambda function</strong>: a function that deregisters your instances from an OpsWorks stack.</p> 
-<p><strong>Spot instance</strong>: the Spot instance that will run your application.</p> 
-<p><strong>CloudWatch Event role</strong>: an event that will trigger the Lambda function whenever your Spot instance is terminated.</p> 
-<p><strong>Step 1: Create an IAM instance profile</strong></p> 
-<p>When a Spot instance starts, it must be able to make an API call to register itself with an OpsWorks stack. By assigning an instance with an IAM instance profile, the instance will be able to make calls to OpsWorks.</p> 
-<p>Open the IAM console at <a href="https://console.aws.amazon.com/iam/">https://console.aws.amazon.com/iam/</a>, choose <strong>Roles,</strong> and then choose <strong>Create New</strong> Role. Type a name for the role, and then choose <strong>Next Step</strong>. Choose the Amazon EC2 role, and then select the check box next to the AWSOpsWorksInstanceRegistration policy. Finally, select <strong>Next Step</strong>, and then choose <strong>Create Role</strong>. As its name suggests, the AWSOpsWorksInstanceRegistration policy will allow the instance to make API calls only to register an instance. Copy the following policy to the new role you’ve just created.</p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;opsworks:AssignInstance&quot;,
-&quot;opsworks:DescribeInstances&quot;,
-&quot;ec2:CreateTags&quot;
-],
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-}
-]
-}
-</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/1b.png" /></p> 
-<p><strong>Step 2: Create a Lambda function</strong></p> 
-<p>This Lambda function deregisters an instance from your OpsWorks stack. It will be invoked whenever the Spot instance is terminated.</p> 
-<p>Open the AWS Lambda console at <a href="https://us-west-2.console.aws.amazon.com/lambda/home">https://us-west-2.console.aws.amazon.com/lambda/home</a>, and choose the option to create a Lambda function. If you are prompted to choose a blueprint, choose <strong>Skip</strong>. Type a name for the Lambda function, and from the <strong>Runtime</strong> drop-down list, select <strong>Python 2.7</strong>.</p> 
-<p>Next, paste the following code into the <strong>Lambda Function</strong> Code text box:</p> 
-<code class="lang-python">import boto3
-def lambda_handler(event, context):
-ec2_instance_id = event['detail']['instance-id']
-ec2 = boto3.client('ec2')
-for tag in ec2.describe_instances(InstanceIds=[ec2_instance_id])['Reservations'][0]['Instances'][0]['Tags']:
-if (tag['Key'] == 'opsworks_stack_id'):
-opsworks_stack_id = tag['Value']
-opsworks = boto3.client('opsworks', 'us-east-1')
-for instance in opsworks.describe_instances(StackId=opsworks_stack_id)['Instances']:
-if ('Ec2InstanceId' in instance):
-if (instance['Ec2InstanceId'] == ec2_instance_id):
-print(&quot;Deregistering OpsWorks instance &quot; + instance['InstanceId'])
-opsworks.deregister_instance(InstanceId=instance['InstanceId'])
-return ec2_instance_id
-</code> 
-<p>The result should look like this:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/2-1.png" /></p> 
-<p>In the <strong>Lambda function handler and role </strong>section, create a custom role. Edit the policy document to allow the Lambda function to access the required resources:</p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;logs:CreateLogGroup&quot;,
-&quot;logs:CreateLogStream&quot;,
-&quot;logs:PutLogEvents&quot;
-],
-&quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;ec2:DescribeInstances&quot;,
-&quot;opsworks:DescribeInstances&quot;,
-&quot;opsworks:DeregisterInstance&quot;
-],
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-}
-]
-}
-</code> 
-<p>&nbsp;</p> 
-<p><strong>Step 3: Create a CloudWatch event</strong></p> 
-<p>Whenever the Spot instance is terminated, the Lambda function from step 2 must be triggered to deregister the instance from its associated stack.</p> 
-<p>Open the AWS CloudWatch console at <a href="https://console.aws.amazon.com/cloudwatch/home">https://console.aws.amazon.com/cloudwatch/home</a>, choose <strong>Events</strong>, and then choose the<strong> Create rule</strong> button. From <strong>Event selector</strong>, choose <strong>Amazon EC2</strong>. Select <strong>Specific state(s)</strong>, and then choose <strong>Terminated</strong>. Under <strong>Targets</strong>, for <strong>Function</strong>, select the Lambda function you created earlier. Finally, choose the <strong>Configure details</strong> button.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/3b.png" /></p> 
-<p><strong>Step 4: Create a Spot instance</strong></p> 
-<p>Open the EC2 console at <a href="https://console.aws.amazon.com/ec2sp/v1/spot/home">https://console.aws.amazon.com/ec2sp/v1/spot/home</a>, and choose the <strong>Request Spot Instances</strong> button. Use the latest release of Amazon Linux. On the details page, under <strong>IAM instance profile</strong>, choose the instance profile you created in step 1. Paste the following script into the <strong>User data</strong> field:</p> 
-<code class="lang-bash">#!/bin/bash
-sed -i'' -e 's/.*requiretty.*//' /etc/sudoers
-pip install --upgrade awscli
-STACK_ID=3464f35f-16b4-44dc-8073-a9cd19533ad5
-LAYER_ID=ba04682c-6e32-481d-9d0e-e2fa72b55314
-INSTANCE_ID=$(/usr/bin/aws opsworks register --use-instance-profile --infrastructure-class ec2 --region us-east-1 --stack-id $STACK_ID --override-hostname $(tr -cd 'a-z' &lt; /dev/urandom |head -c8) --local 2&gt;&amp;1 |grep -o 'Instance ID: .*' |cut -d' ' -f3)
-EC2_INSTANCE_ID=$(/usr/bin/aws opsworks describe-instances --region us-east-1 --instance-ids $INSTANCE_ID | grep -o '&quot;Ec2InstanceId&quot;: &quot;i-.*'| grep -o 'i-[a-z0-9]*')
-/usr/bin/aws ec2 create-tags --region us-east-1 --resources $EC2_INSTANCE_ID --tags Key=opsworks_stack_id,Value=$STACK_ID
-/usr/bin/aws opsworks wait instance-registered --region us-east-1 --instance-id $INSTANCE_ID
-/usr/bin/aws opsworks assign-instance --region us-east-1 --instance-id $INSTANCE_ID --layer-ids $LAYER_ID
-</code> 
-<p>On boot, this script will register your Spot instance with an OpsWorks stack and layer. Be sure to fill in the following fields:</p> 
-<code class="lang-bash">STACK_ID=YOUR_STACK_ID
-LAYER_ID=YOUR_LAYER_ID
-</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/4sd.png" /></p> 
-<p><strong>Important:</strong> Be sure to turn off auto healing for all of the layers in your stack to which you assign Spot instances. Otherwise, auto healing will attempt to revive your instances upon termination.</p> 
-<p>When the instance has been provisioned and come online, you’ll see <strong>fulfilled</strong> displayed in the <strong>Status</strong> column and <strong>active</strong> displayed in the <strong>State</strong> column. This process will take a few minutes. After the instance and request are both in an active state, the instance should be fully booted and registered with your OpsWorks stack/layer.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/5.png" /></p> 
-<p>You can also view the instance and its online state in the OpsWorks console under <strong>Spot Instance</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/23/6.png" /></p> 
-<p>You can manually terminate a Spot instance from the OpsWorks service console. Simply choose the <strong>stop</strong> button and the Spot instance will be terminated and removed from your stack. Unlike an On-Demand instance, when a Spot instance in OpsWorks is stopped, it cannot be restarted.</p> 
-<p>If your Spot instance is terminated through other means (for example, in the EC2 console), a CloudWatch event will trigger the Lambda function, which will deregister the instance from your OpsWorks stack.</p> 
-<p><strong>Conclusion</strong></p> 
-<p>You can now use OpsWorks Stacks to define your application’s architecture and software configuration while leveraging the attractive pricing of Spot instances. If you have questions or other feedback, please leave it in the comments.</p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

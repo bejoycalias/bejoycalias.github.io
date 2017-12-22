@@ -190,6 +190,88 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using Amazon CloudWatch and Amazon SNS to Notify when AWS X-Ray Detects Elevated Levels of Latency, Errors, and Faults in Your Application</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Bharath Kumar</span></span> | on 
+<time property="datePublished" datetime="2017-12-20T13:11:00+00:00">20 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-x-ray/" title="View all posts in AWS X-Ray*"><span property="articleSection">AWS X-Ray*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/using-amazon-cloudwatch-and-amazon-sns-to-notify-when-aws-x-ray-detects-elevated-levels-of-latency-errors-and-faults-in-your-application/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/xray/">AWS X-Ray</a> helps developers analyze and debug production applications built using microservices or serverless architectures and quantify customer impact. With X-Ray, you can understand how your application and its underlying services are performing and identify and troubleshoot the root cause of performance issues and errors. You can use these insights to identify issues and opportunities for optimization.</p> 
+<p>In this blog post, I will show you how you can use <a href="https://aws.amazon.com/cloudwatch/">Amazon CloudWatch</a> and <a href="https://aws.amazon.com/sns/">Amazon SNS</a> to get notified when X-Ray detects high latency, errors, and faults in your application. Specifically, I will show you how to use this <a href="https://github.com/aws-samples/aws-xray-cloudwatch-event">sample app</a> to get notified through an email or SMS message when your end users observe high latencies or server-side errors when they use your application. You can customize the alarms and events by updating the sample app code.</p> 
+<b>Sample App Overview</b> 
+<p>The sample app uses the X-Ray GetServiceGraph API to get the following information:</p> 
+<li>Aggregated response time.</li> 
+<li>Requests that failed with 4xx status code (errors).</li> 
+<li>429 status code (throttle).</li> 
+<li>5xx status code (faults).</li> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/architecture-1024x576.png" /> 
+<p class="wp-caption-text">Overview of sample app architecture</p> 
+<h3>Getting started</h3> 
+<p>The sample app uses AWS CloudFormation to deploy the required resources.<br /> To install the sample app:</p> 
+<ol> 
+<li>Run git clone to get the sample app.</li> 
+<li>Update the JSON file in the Setup folder with threshold limits and notification details.</li> 
+<li>Run the install.py script to install the sample app.</li> 
+</ol> 
+<p>For more information about the installation steps, see the <a title="undefined" href="https://github.com/aws-samples/aws-xray-cloudwatch-event/blob/master/README.md" target="null">readme</a> file on GitHub.</p> 
+<p>You can update the app configuration to include your phone number or email to get notified when your application in X-Ray breaches the latency, error, and fault limits you set in the configuration. If you prefer to not provide your phone number and email, then you can use the CloudWatch alarm deployed by the sample app to monitor your application in X-Ray.</p> 
+<p>The sample app deploys resources with the sample app namespace you provided during setup. This enables you to have multiple sample apps in the same region.</p> 
+<h3>CloudWatch rules</h3> 
+<p>The sample app uses two CloudWatch rules:</p> 
+<ol> 
+<li><em>SCHEDULEDLAMBDAFOR-sample_app_name</em> to trigger at regular intervals the AWS Lambda function that queries the GetServiceGraph API.</li> 
+<li><em>XRAYALERTSFOR-sample_app_name</em> to look for published CloudWatch events that match the pattern defined in this rule.</li> 
+</ol> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/CloudWatch-Rules-1024x255.png" /> 
+<p class="wp-caption-text">CloudWatch rules created for the sample app</p> 
+<h3>CloudWatch alarms</h3> 
+<p>If you did not provide your phone number or email in the JSON file, the sample app uses a CloudWatch alarm named <em>XRayCloudWatchAlarm-sample_app_name</em> in combination with the CloudWatch event that you can use for monitoring.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/CloudWatch-Alarm-1024x265.png" /> 
+<p class="wp-caption-text">CloudWatch alarm created for the sample app</p> 
+<h3>Amazon SNS messages</h3> 
+<p>The sample app creates two SNS topics:</p> 
+<li><em>sample_app_name-cloudwatcheventsnstopic</em> to send out an SMS message when the CloudWatch event matches a pattern published from the Lambda function.</li> 
+<li><em>sample_app_name-cloudwatchalarmsnstopic</em> to send out an email message when the CloudWatch alarm goes into an ALARM state.</li> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/Amazon-SNS.png" /> 
+<p class="wp-caption-text">Amazon SNS created for the sample app</p> 
+<b>Getting notifications</b> 
+<p>The CloudWatch event looks for the following matching pattern:<br /> <code></code></p> 
+<code class="lang-json">{
+&quot;detail-type&quot;: [
+&quot;XCW Notification for Alerts&quot;
+],
+&quot;source&quot;: [
+&quot;&lt;sample_app_name&gt;-xcw.alerts&quot;
+]
+}
+</code> 
+<p>The event then invokes an SNS topic that sends out an SMS message.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/sms-169x300.png" /> 
+<p class="wp-caption-text">SMS that is sent when CloudWatch Event invokes Amazon SNS topic</p> 
+<p>The CloudWatch alarm looks for the <em><a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cwe-metricscollected.html" target="null">TriggeredRules</a></em> metric that is published whenever the CloudWatch event matches the event pattern. It goes into the <em>ALARM</em> state whenever <em>TriggeredRules &gt; 0</em> for the specified evaluation period and invokes an SNS topic that sends an email message.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/email-1024x488.png" /> 
+<p class="wp-caption-text">Email that is sent when CloudWatch Alarm goes to ALARM state</p> 
+<b>Stopping notifications</b> 
+<p>If you provided your phone number or email address, but would like to stop getting notified, change the <em>SUBSCRIBE_TO_EMAIL_SMS</em> environment variable in the Lambda function to <strong>No</strong>. Then, go to the Amazon SNS console and delete the subscriptions. You can still monitor your application for elevated levels of latency, errors, and faults by using the CloudWatch console.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/lambdaenvironmentvariable-1024x160.png" /> 
+<p class="wp-caption-text">Change environment variable in Lambda</p> 
+<p>&nbsp;</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/19/deletesubscriptions-1024x228.png" /> 
+<p class="wp-caption-text">Delete subscriptions to stop getting notified</p> 
+<b>Uninstalling the sample app</b> 
+<p>To uninstall the sample app, run the <em>uninstall.py</em> script in the Setup folder.</p> 
+<b>Extending the sample app</b> 
+<p>The sample app notifes you when when X-Ray detects high latency, errors, and faults in your application. You can extend it to provide more value for your use cases (for example, to perform an action on a resource when the state of a CloudWatch alarm changes).</p> 
+<p>To summarize, after this set up you will be able to get notified through Amazon SNS when X-Ray detects high latency, errors and faults in your application.</p> 
+<p>I hope you found this information about setting up alarms and alerts for your application in AWS X-Ray helpful. Feel free to leave questions or other feedback in the comments. Feel free to learn more about <a href="https://aws.amazon.com/xray/">AWS X-Ray</a>, <a href="https://aws.amazon.com/sns/">Amazon SNS</a> and <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch</a></p> 
+<h3>About the Author</h3> 
+<p><a title="undefined" href="https://www.linkedin.com/in/bharathkumarvenkateshkumar/" target="null">Bharath Kumar</a> is a Sr.Product Manager with AWS X-Ray. He has developed and launched mobile games, web applications on microservices and serverless architecture.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Using Custom Source Actions in AWS CodePipeline for Increased Visibility for Third-Party Source Control</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1275,94 +1357,6 @@ by
 <hr /> 
 <h4>About the Author</h4> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/09/15/headshot-small-150x150.png" />Paul Roberts&nbsp;is a Strategic Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps, or Artificial Intelligence,&nbsp;he is often found in Lake Tahoe exploring the various mountain ranges with his family.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Ensuring Security of Your Code in a Cross-Region/Cross-Account Deployment Solution</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">BK Chaurasiya</span></span> | on 
-<time property="datePublished" datetime="2017-08-16T12:03:10+00:00">16 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/best-practices/" title="View all posts in Best practices"><span property="articleSection">Best practices</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/ensuring-security-of-your-code-in-a-cross-regioncross-account-deployment-solution/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>There are multiple ways you can protect your data while it is in transit and at rest. You can protect your data in transit by using SSL or by using client-side encryption.&nbsp;<a href="https://aws.amazon.com/kms/">AWS Key Management Service (AWS KMS)</a> is a managed service that makes it easy for you to create, control, rotate, and use your encryption keys. AWS KMS allows you to create custom keys. You can then share these keys with <a href="https://aws.amazon.com/iam/">AWS Identity and Access Management (IAM)</a> users and roles in your AWS account or in an AWS account owned by someone else.</p> 
-<p>In my previous <a href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/">post</a>, I described a solution for building a cross-region/cross-account code deployment solution on AWS. In this post, I describe a few options for&nbsp;protecting your source code as it travels between regions and between AWS accounts.</p> 
-<p>To recap, you deployed the infrastructure as&nbsp;shown in the following diagram.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram10.png" /></p> 
-<li>You had your development environment running in Region A in AWS Account A.</li> 
-<li>You had your QA environment running in Region B in AWS Account B.</li> 
-<li>You had a staging or production environment running in Region C in AWS Account C.</li> 
-<p>An update to the source code in Region A triggered validation and deployment of source code changes in the pipeline in Region A. A successful processing of source code in all of its AWS CodePipeline states invoked a Lambda function, which copied the source code into an S3 bucket in Region B. After the source code was copied into this bucket, it triggered a similar chain of processes into the different AWS CodePipeline stages in Region B.</p> 
-<p>&nbsp;</p> 
-<h3><strong>Ensuring Security for Your Source Code</strong></h3> 
-<p>You might&nbsp;choose to encrypt the source code .zip file before uploading to the S3 bucket that is in Account A, Region A, using Amazon S3 server-side encryption:</p> 
-<h4><strong>1. Using the Amazon S3 service master key</strong></h4> 
-<p>Refer back to the Lambda function created for you by the CloudFormation stack in the previous <a href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/">post</a>. Go to the AWS Lambda console and your function name should be &lt;stackname&gt;-CopytoDest-XXXXXXX.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/23/Lambda_BK.png" /></p> 
-<p>&nbsp;</p> 
-<p>Use the following parameter for the copyObject function – <em>ServerSideEncryption: ‘AES256’</em></p> 
-<p><strong>Note</strong>: The set-up already uses this option by default.</p> 
-<p>The <em>copyObject</em> function decrypts the .zip file and copies the object into account B.</p> 
-<p>&nbsp;</p> 
-<h4><strong>2. Using an AWS KMS master key</strong></h4> 
-<p>Since the KMS keys are constrained in a region, copying the object (source code .zip file) into a different account across the region requires&nbsp;cross-account access to the KMS key. This must occur before Amazon S3 can use that key for encryption and decryption.</p> 
-<p>Use the following parameter for the&nbsp;<em>copyObject</em> function – <em>ServerSideEncryption: ‘aws:kms’</em> and provide an&nbsp;<em>SSEKMSKeyId: ‘&lt;keyeid&gt;’</em></p> 
-<p><strong>To enable cross-account access for the KMS key and use it in Lambda function</strong></p> 
-<p>a. Create a KMS key in the source account (Account A), region B – for example,&nbsp;<strong><em>XRDepTestKey</em></strong></p> 
-<p><strong>Note</strong>: This key must&nbsp;be created in region B. This is because the source code will&nbsp;be copied in an S3 bucket that exists in region B and the KMS key must&nbsp;be accessible in this region.</p> 
-<p>b. To enable the&nbsp;Lambda function to be able to use this KMS key, add <strong><em>lambdaS3CopyRole</em></strong>&nbsp;as a user for this key. The Lambda function and associated role and policies are defined in the <a href="https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/template/XregionCodePipeLineCF.template">CloudFormation template</a>.</p> 
-<p>c. Note the ARN of the key that you generated.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/23/keyARN.jpg" /></p> 
-<p>d. Provide the external account (Account B) permission to use this key. For more information, see <a href="https://blogs.aws.amazon.com/security/post/Tx2N2SRHXSNEX91/Share-Custom-Encryption-Keys-More-Securely-Between-Accounts-by-Using-AWS-Key-Man">Sharing custom encryption keys securely between accounts</a>.</p> 
-<p><em> arn:aws:iam::&lt;Account B ID&gt;:root</em></p> 
-<p>e. In Account B, delegate the permission to use this key to the role that AWS CodePipeline is using. In the&nbsp;CloudFormation template, you can see&nbsp;that <em><strong>CodePipelineTrustRole</strong></em>&nbsp;is used. Attach the following policy to the role. Ensure that you update the region and Account ID accordingly.</p> 
-<code class="lang-js">{
-&nbsp;&nbsp;&nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,
-&nbsp;&nbsp;&nbsp; &quot;Statement&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Sid&quot;: &quot;AllowUseOfTheKey&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:Encrypt&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:Decrypt&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:ReEncrypt*&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:GenerateDataKey*&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:DescribeKey&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;arn:aws:kms:&lt;regionB&gt;:&lt;AccountA ID&gt;:key/&lt;KMS Key in Region B ID&gt;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; },
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Sid&quot;: &quot;AllowAttachmentOfPersistentResources&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:CreateGrant&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:ListGrants&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:RevokeGrant&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;arn:aws:kms:&lt;regionB&gt;:&lt;AccountA ID&gt;:key/&lt;KMS Key in Region B ID&gt;&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Condition&quot;: {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Bool&quot;: {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:GrantIsForAWSResource&quot;: true
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; ]
-}</code> 
-<p>f. Update the Lambda function, <strong><em>CopytoDest</em></strong>, to use the following in the parameter definition.</p> 
-<p>&nbsp;</p> 
-<code class="lang-js">ServerSideEncryption: 'aws:kms',\n&quot;,
-SSEKMSKeyId: '&lt; keyeid &gt;'&nbsp;&nbsp;
-//ServerSideEncryption: 'AES256'\n&quot;,</code> 
-<p>And there you go! You have enabled secure delivery of your source code into your cross-region/cross-account deployment solution.</p> 
-<h3><strong>About the Author</strong></h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/08/16/BK.jpeg" /><br /> BK Chaurasiya&nbsp;is a Solutions Architect with Amazon Web Services. He provides technical guidance, design advice and thought leadership to some of the largest and successful AWS customers and partners.</p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

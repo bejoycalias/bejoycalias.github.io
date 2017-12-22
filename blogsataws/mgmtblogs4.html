@@ -190,6 +190,173 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">The Right Way to Store Secrets using Parameter Store</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-08-27T23:00:38+00:00">27 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/the-right-way-to-store-secrets-using-parameter-store/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This guest post was written by Evan Johnson, who works in the Security team at Segment.</em></p> 
+<p>The way companies manage application secrets is critical. Even today, the most high profile security companies can suffer breaches from improper secrets management practices. Having internet facing credentials is like leaving your house key under a doormat that millions of people walk over daily. Even if the secrets are hard to find, it is a game of hide and seek that you eventually lose.</p> 
+<p>At <a href="https://segment.com/">Segment</a>, we centrally and securely manage our secrets with <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager Parameter Store</a>, lots of Terraform code, and <a href="https://github.com/segmentio/chamber">chamber</a>. Parameter store is a great tool for achieving secrets management. If you are running workloads on AWS, then using Parameter Store as a managed secrets store is worth serious consideration. This post has all the information you need to get running with Parameter Store in production.</p> 
+<p><span id="more-1184"></span></p> 
+<h3>Service Identity</h3> 
+<p>At Segment, we run hundreds of services that communicate with one another, AWS APIs, and third-party APIs. The services we run have different needs and should only have access to systems that are strictly necessary. This is called the ‘principle of least privilege’.</p> 
+<p>As an example, our main webserver should never have access to security audit logs for our infrastructure. Without giving containers and services an identity, it is not possible to protect and restrict access to secrets with access control policies. Our services identify themselves using IAM roles. From the AWS docs – “<em>An IAM role … is an AWS identity with permission policies that determine what the identity can and cannot do in AWS</em>.”</p> 
+<p>For example, our IAM roles for instances have write-only access to an Amazon S3 bucket for appending audit logs, but prevent the deletion and reading of those logs.</p> 
+<h4>How do containers get their role securely?</h4> 
+<p>A requirement to using <a href="https://aws.amazon.com/ecs/">Amazon ECS</a> is that all containers must run the <a href="https://github.com/aws/amazon-ecs-agent">Amazon ECS container agent</a> (ecs-agent). The agent runs as a container that orchestrates and provides an API with which other containers can communicate. The agent is the central nervous system of how containers fetch IAM role credentials.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/Diagram1a.png" /></p> 
+<p>One important piece to the agent is that it runs an HTTP API that MUST be accessible to the other containers that are running in the cluster. To make this API available, an iptables rule is set on the host instance. This iptables rule forwards traffic destined for a magic IP address to the ecs-agent container.</p> 
+<code class="lang-bash">iptables -t nat \
+-A OUTPUT \
+-d 169.254.170.2 \
+-p tcp \
+-m tcp \
+--dport 80 \
+-j REDIRECT \
+--to-ports 51679</code> 
+<p>Before the agent starts a container, it first fetches credentials for the container’s task role from the AWS credential service. The agent next sets the credentials key ID, a UUID, as the AWS_CONTAINER_CREDENTIALS_RELATIVE_URI environment variable inside the container when it is started.</p> 
+<code class="lang-bash">$ env
+...
+AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/v2/credentials/53875b56-621a-4b07-8ab6-02ea315b5693
+...</code> 
+<p>Using this relative URI and UUID, containers fetch AWS credentials from the agent over HTTP. One container cannot access the authentication credentials to impersonate another container because the UUID is sufficiently difficult to guess.</p> 
+<code class="lang-bash">$ curl 169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq .
+{
+&quot;RoleArn&quot;: &quot;arn:aws:iam::111111111111:role/test-service&quot;,
+&quot;AccessKeyId&quot;: &quot;ASIAIYLSOW5USUQCZAAQ&quot;,
+&quot;SecretAccessKey&quot;: &quot;REDACTRED&quot;,
+&quot;Token&quot;: &quot;REDACTED&quot;,
+&quot;Expiration&quot;: &quot;2017-08-10T02:01:43Z&quot;
+}</code> 
+<h4>Additional security details</h4> 
+<p>As heavy Amazon ECS users, we did find security foot-guns associated with ECS task roles. It’s important to realize that any container that can access the Amazon EC2 metadata service on behalf of its host can become any other task role on the system. This could allow containers to circumvent access control policies and gain access to unauthorized systems.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/Diagram2.png" /></p> 
+<p>The two ways a container can access the metadata service is using host networking and over the docker bridge. When a container is run with <span style="text-decoration: underline">–network=’host’</span>, it is always able to connect to the EC2 metadata service using its host’s network. Setting the <span style="text-decoration: underline">ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST</span> variable to false in the ecs-agent config file prevents containers from running with this permission.</p> 
+<p>Additionally, it’s important to block access to the metadata service IP address over the Docker bridge using iptables. The <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">IAM task role documentation</a> recommends preventing access to the EC2 metadata service with this specific rule.</p> 
+<code class="lang-bash">$ iptables --insert FORWARD 1 --in-interface docker+ --destination 169.254.169.254/32 --jump DROP</code> 
+<p>The principle of least privilege is always important to keep in mind when building a security system. Setting <span style="text-decoration: underline">ECS_DISABLE_PRIVILEGED</span> to true in the host’s ecs-agent config file can prevent privileged Docker containers from being run and causing other more nuanced security problems.</p> 
+<h3>Parameter Store</h3> 
+<p>Parameter Store is an AWS service that stores strings. It can store secret data and non-secret data alike. Secrets stored in Parameter Store are secure strings, encrypted with a customer-specific AWS KMS key.</p> 
+<p>Under the hood, a service that requests secure strings from the Parameter Store has a lot of things happening behind the scenes.</p> 
+<ol> 
+<li>The ECS container agent requests the host instance’s temporary credentials.</li> 
+<li>The agent continuously generates temporary credentials for each ECS task role running on ECS, using an undocumented service called ACS.</li> 
+<li>When the agent starts each task, it sets a secret UUID in the environment of the container.</li> 
+<li>When the task needs its task role credentials, it requests them from the ecs-agent API and authenticates with the secret UUID.</li> 
+<li>The ECS task requests its secrets from Parameter Store using the task role credentials.</li> 
+<li>Parameter Store transparently decrypts these secure strings before returning them to the ECS task.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/diagram3-1.png" /></p> 
+<p>Using roles with Parameter Store is especially nice because it does not require maintaining additional authentication tokens. This would create additional headache and additional secrets to manage!</p> 
+<h4>Parameter Store IAM Policies</h4> 
+<p>Each role that accesses the Parameter Store requires the <span style="text-decoration: underline">ssm:GetParameters</span> permission. “SSM” stands for “Simple System Manager”, the previous name for Systems Manager, and is how <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-access.html">AWS denotes Parameter Store operations</a>.</p> 
+<p>The ssm:GetParameters permission is the policy used to enforce access control and protect one service’s secrets from another. Segment gives all services an IAM role that grants access to secrets that match the format&nbsp; {{service_name}}/*.&nbsp; Parameter Store <a href="https://aws.amazon.com/blogs/mt/organize-parameters-by-hierarchy-tags-or-amazon-cloudwatch-events-with-amazon-ec2-systems-manager-parameter-store/">supports hierarchies natively</a>, so this permission provides each service with its own directory of secrets.</p> 
+<code class="lang-json">{
+&quot;Sid&quot;: &quot;&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: &quot;ssm:GetParameters&quot;,
+&quot;Resource&quot;: [
+&quot;arn:aws:ssm:*:*:parameter/{{service_name}}/*&quot;,
+]
+},</code> 
+<p>In addition to the access control policies, Segment uses a dedicated AWS KMS key to encrypt secure strings within the Parameter Store. Each IAM role is granted a small set of KMS permissions in order to decrypt the secrets they store in Parameter Store.</p> 
+<code class="lang-json">{
+&quot;Sid&quot;: &quot;&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;kms:ListKeys&quot;,
+&quot;kms:ListAliases&quot;,
+&quot;kms:Describe*&quot;,
+&quot;kms:Decrypt&quot;
+],
+&quot;Resource&quot;: &quot;parameter_store_key&quot;
+}</code> 
+<h3>Automating service identity and policies</h3> 
+<p class="hide-language">Segment has a small Terraform module that abstracts away the creation of a unique IAM role, load balancers, DNS records, Auto Scaling, and CloudWatch alarms. Below, I show how our nginx load balancer is defined using our service module.</p> 
+<code class="lang-yaml">module &quot;nginx&quot; {
+source            = &quot;../modules/service&quot;
+name              = &quot;nginx&quot;
+image             = &quot;segment/nginx&quot;
+product_area      = &quot;foudation-security&quot;
+health_check_path = &quot;/healthcheck&quot;
+environment       = &quot;${var.environment}&quot;
+}</code> 
+<p>Under the hood, the task role given to each service has all of the IAM policies we previously listed, restricting access to Parameter Store by the value in the name field. No configuration required.</p> 
+<p>Additionally, developers have the option to override which secrets their service has access to by providing a “secret label”. This secret label replaces their service name in their IAM policy. If NGINX were to need the same secrets as an HAProxy instance, the two services can share credentials by using the same secret label.</p> 
+<code class="lang-yaml"></code><code class="lang-yaml">module &quot;nginx&quot; {
+source            = &quot;../modules/service&quot;
+name              = &quot;nginx&quot;
+image             = &quot;segment/nginx&quot;
+product_area      = &quot;foudation-security&quot;
+health_check_path = &quot;/healthcheck&quot;
+environment       = &quot;${var.environment}&quot;
+# Share secrets with loadbalancers
+<strong>secret_label = &quot;loadbalancers&quot;</strong>
+}</code> 
+<h3>Parameter Store in production</h3> 
+<p>All Segment employees authenticate with AWS using aws-vault, which can securely store AWS credentials in the macOS keychain or in an encrypted file for Linux users. Segment has several AWS accounts. Engineers can interact with each account using aws-vault, and execute commands locally with their AWS credentials populated in their environment.<code class="lang-json"><br /> </code></p> 
+<code class="lang-bash">$ aws-vault exec development -- aws s3 ls s3://segmentio-bucket</code> 
+<h4>Using Chamber with Parameter Store</h4> 
+<p>Chamber is a CLI tool that Segment built to allow developers and code to communicate with Parameter Store in a consistent manner. By allowing developers to use the same tools that run in production, we decrease the number of differences between code running in development with staging and production.</p> 
+<p>Chamber works with aws-vault, and has only a few key subcommands:</p> 
+<li>exec—a command after loading secrets in to the environment.</li> 
+<li>history—of changes made to a secret in parameter store.</li> 
+<li>list—the names of all secrets in a services path.</li> 
+<li>write—a secret to the Parameter Store.</li> 
+<p>Chamber leverages Parameter Store’s built in search and history mechanisms to implement the list and history subcommands. All strings stored in Parameter Store are automatically versioned. The subcommand used to fetch secrets from the Parameter Store is exec. When developers use the exec subcommand, they use it with aws-vault.</p> 
+<p><code class="lang-bash">$ aws-vault exec development -- chamber exec loadbalancers -- nginx</code></p> 
+<p>In the preceding command, chamber is executed with the credentials and permissions of the employee in the development account, and it fetches the secrets associated with loadbalancers from Parameter Store. After chamber populates the environment, it runs the NGINX server.</p> 
+<h4 class="hide-language">Running chamber in production</h4> 
+<p>Chamber is packaged inside our Docker containers as a binary and is the entry point of the container. Chamber passes signals to the program it executes in order to allow the program to gracefully handle them.</p> 
+<p>Here’s a diff of what it required to make our main website chamber ready.</p> 
+<code class="lang-bash">-ENTRYPOINT [&quot;node&quot;, &quot;server/boot.js&quot;] 
++ENTRYPOINT [&quot;chamber&quot;, &quot;exec&quot;, &quot;app&quot;, &quot;--&quot;, &quot;node&quot;, &quot;server/boot.js&quot;]</code> 
+<p>Non-Docker containers can also use chamber to populate the environment before creating configuration files out of templates, run daemons, etc.</p> 
+<h3>Auditing</h3> 
+<p>All access to Parameter Store is logged with AWS CloudTrail. This makes keeping a full audit trail for all parameters simple and inexpensive. It also makes building custom alerting and audit logging straightforward.</p> 
+<code class="lang-json">...
+&quot;eventTime&quot;: &quot;2017-08-02T18:54:06Z&quot;,
+&quot;eventSource&quot;: &quot;ssm.amazonaws.com&quot;,
+&quot;eventName&quot;: &quot;GetParameters&quot;,
+&quot;awsRegion&quot;: &quot;us-west-2&quot;,
+&quot;sourceIPAddress&quot;: &quot;127.0.0.1&quot;,
+&quot;userAgent&quot;: &quot;aws-sdk-go/1.8.1 (go1.8.3; linux; amd64)&quot;,
+&quot;requestParameters&quot;: {
+&quot;withDecryption&quot;: true,
+&quot;names&quot;: [
+&quot;test-service.secretname&quot;
+]
+},
+&quot;responseElements&quot;: null,
+&quot;requestID&quot;: &quot;88888888-4444-4444-4444-121212121212&quot;,
+&quot;eventID&quot;: &quot;88888888-4444-4444-4444-121212121212&quot;,
+&quot;readOnly&quot;: true,
+...</code> 
+<p>CloudTrail makes it possible to determine exactly what secrets are used and can make discovering unused secrets or unauthorized access to secrets possible.</p> 
+<p>AWS logs all Parameter Store access for free as a CloudTrail management event. Most security information and events management (SIEM) solutions can be configured to watch, and read data from S3.</p> 
+<h3>Summary</h3> 
+<p>Using Parameter Store and IAM, Segment was able to build a small tool that provides all of the properties most important in a secrets management system.</p> 
+<li>Protect the secrets at rest with strong encryption.</li> 
+<li>Enforce strong access control policies.</li> 
+<li>Create audit logs of authentication and access history.</li> 
+<li>Great developer experience.</li> 
+<p>Secrets management is very challenging to get right. Many products have been built to manage secrets, but none fit the use cases needed by Segment better than Parameter Store.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/evan.png">Segment</a>. Segment is the infrastructure for customer data. Businesses use Segment’s API to unlock 200+ tools for every team across their organization. With Segment, developers can stop building tedious and expensive one-off data integrations, turning on their favorite apps right from the Segment dashboard.</p> 
+<p><a href="https://segment.com/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/segment.png" /></a></p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<hr /> 
+<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author.</em></p> 
+<p><code class="lang-bash"></code><code class="lang-bash"></code></p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Multi-Account Strategy: Using AWS CloudFormation Custom Resources to Create Amazon Route 53 Resources in Another Account</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1898,108 +2065,6 @@ Start-DscConfiguration -Path Install-SsmDoIIS -Wait</code> </li>
 <p>Systems Manager offers a suite of tools to help you manage both your EC2 and on-premises instances. In this post, I discussed some common approaches to mitigate configuration drift at scale. Finally, I provided an example walk-through to try mitigating configuration drift using Systems Manager and PowerShell DSC.</p> 
 <b>About the Author</b> 
 <p><strong><a href="https://www.linkedin.com/in/shaunbreen/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/02/shaunbreen.png" /></a>Shaun Breen is a Systems Development Engineer on the Amazon EC2 Windows team</strong>.&nbsp;The EC2 Windows team is responsible for producing Windows Server AMIs and Systems Manager documents. Shaun enjoys developing solutions that make EC2 the best place to run Microsoft Windows Server in the cloud. When not working on EC2 Windows solutions, he enjoys attending sporting events, coaching ice hockey, and spending time with his wife and three children.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Organize Parameters by Hierarchy, Tags, or Amazon CloudWatch Events with Amazon EC2 Systems Manager Parameter Store</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-07-25T17:30:01+00:00">25 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/organize-parameters-by-hierarchy-tags-or-amazon-cloudwatch-events-with-amazon-ec2-systems-manager-parameter-store/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post was written by Lusha Zhang, Software Development Engineer with Amazon Web Services.</em></p> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Parameter Store</a>, part of <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a>, provides a centralized, encrypted store to manage your configuration data, whether plaintext data (database strings) or secrets (passwords, API keys for example). Because Parameter Store is available through the AWS CLI, APIs, and SDKs, you can easily reference parameters across AWS services such as AWS Lambda and Amazon ECS.</p> 
-<p>For additional posts on Parameter Store, please see:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/managing-secrets-for-amazon-ecs-applications-using-parameter-store-and-iam-roles-for-tasks/">Managing Secrets for Amazon ECS Applications Using Parameter Store and IAM Roles for Tasks</a></li> 
-<li><a href="https://aws.amazon.com/blogs/mt/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/">Use Parameter Store to Securely Access Secrets and Config Data in AWS CodeDeploy</a></li> 
-<p>Parameter Store recently <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-ec2-systems-manager-adds-hierarchy-tagging-and-notification-support-for-parameter-store/">launched</a> hierarchy support, parameter tagging, and CloudWatch Events support, which makes it easy to organize and manage parameters at scale. In this post, I demonstrate how you can use these new features to scale and improve your security posture.</p> 
-<p><span id="more-864"></span></p> 
-<h3>Hierarchical parameters</h3> 
-<p>Parameter Store support for hierarchies lets you organize parameters based on your deployment. It provides powerful tools for parameter organization, querying, and permission control.</p> 
-<p>A common DevOps scenario is to automate software deployment across different environments such as Dev, Beta, and Prod. For example, when you create a deployment configuration, you can use Parameter Store to save your settings. Maybe you have to set the minimum healthy host number or percentage for each deployment environment, and want to store it in Parameter Store, with different values for each environment.</p> 
-<h4>Step 1. Create the path for deployment configuration</h4> 
-<p>Use the following commands to create the path and parameters to store:</p> 
-<code class="lang-bash">aws ssm put-parameter --name /DeploymentConfig/Prod/FleetHealth --value 75 --type String
-aws ssm put-parameter --name /DeploymentConfig/Beta/FleetHealth --value 20 --type String
-</code> 
-<p>You can also organize your secrets under a dedicated path. For example,</p> 
-<code class="lang-bash">aws ssm put-parameter –-name /DeploymentConfig/Prod/Password/SQLPassword –-value <span style="color: #ff0000">&lt;password&gt;</span> --type SecureString</code> 
-<p>For more information about how to use the SecureString type parameter, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-about.html">About Systems Manager Parameters</a>.</p> 
-<p>Your parameter hierarchy now looks like the following:</p> 
-<p>&nbsp;</p> 
-<p>Step 2. Use parameters to manage your deployment configuration<br /> When you create a deployment configuration using an AWS CloudFormation template, you can set the FleetHealth for a Prod stage as in the following example.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/hierarchy.png" /></p> 
-<h4>Step 2. Use parameters to manage your deployment configuration</h4> 
-<p>When you create a deployment configuration using an AWS CloudFormation template, you can set the FleetHealth for a Prod stage as in the following example.</p> 
-<code class="lang-bash">#!/bin/bash
-fleetHealth=$(aws ssm get-parameter --name /DeploymentConfig/Prod/FleetHealth --query Parameter.Value)
-aws cloudformation create-stack --stack-name <span style="color: #ff0000">&lt;stack_name&gt;</span> --template-url <span style="color: #ff0000">&lt;templateurl&gt;</span> --parameters ParameterKey=FleetHealth,ParameterValue=$fleetHealth
-</code> 
-<p>You can retrieve all the configuration parameters of your Prod or Beta environments using the recursive flag and parse the configuration hierarchy returned to get the parameter of your choice.</p> 
-<code class="lang-bash">aws ssm get-parameters-by-path --path /DeploymentConfig/Prod –-recursive</code> 
-<p>You can also filter parameters by path from the AWS Management Console or AWS CLI.</p> 
-<code class="lang-bash">aws ssm describe-parameters --parameter-filters Key=Path,Option=Recursive,Values=/DeploymentConfig/Prod</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/getParamsbypath.png" /></p> 
-<h4>Control access to hierarchies</h4> 
-<p>Now that you have created a parameter hierarchy for your deployment configuration in the Prod and Beta environments, you may want to restrict access to parameters. Maybe the Dev team should have access only to the Beta environment parameters, and not to the Prod environment parameters.</p> 
-<p>Use IAM to control access to the Beta parameter hierarchy. For example, the following IAM policy restricts user access to Prod parameters.</p> 
-<code class="lang-json">{
-&quot;Effect&quot;: &quot;Deny&quot;,
-&quot;Action&quot;: [
-&quot;ssm:GetParametersByPath&quot;
-],
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;ssm:Recursive&quot;: [
-&quot;true&quot;
-]
-}
-},
-&quot;Resource&quot;:“arn:aws:ssm:&lt;region&gt;:&lt;account_id&gt;:parameter/DeploymentConfig/Prod*&quot;
-}
-</code> 
-<p>Now when a user runs the following command, they get AccessDeniedException.</p> 
-<code class="lang-bash">aws ssm get-parameters-by-path --path /DeploymentConfig/Prod —-recursive</code> 
-<h3>Tagging parameters</h3> 
-<p>Tags let you manage your AWS resources easily. You can now also tag parameters, allowing you to group and query them. Using the same deployment configuration example, you can add a tag with a <span style="text-decoration: underline">Tag Key</span> value of “Password”, and <span style="text-decoration: underline">Tag Value</span> equal to “Beta” or “Prod”.</p> 
-<code class="lang-bash">aws ssm add-tags-to-resource --resource-type Parameter --resource-id  /DeploymentConfig/Beta/FleetHealth --tags Key=Password,Value=Beta</code> 
-<p>You can also apply multiple filters to get a combined filter result. For example, if you apply Tag Key Password and a path /DeploymentConfig/Beta with the recursive flag, you get those parameters in your Beta environment that are password-related.</p> 
-<code class="lang-bash">aws ssm describe-parameters --parameter-filters Key=tag:Password Key=Path,Option=Recursive,Values=/DeploymentConfig/Beta</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/multiple-tag-filters.png">Controlling Access to Systems Manager Parameters</a>.</p> 
-<h3>Get change notifications with CloudWatch Events rules</h3> 
-<p>Parameter Store is now a <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">CloudWatch Events</a> source. You can set up CloudWatch rules to trigger a CloudWatch Event target such as a Lambda function or SNS topic whenever a parameter gets created, updated, or deleted.</p> 
-<p>The following example shows you how to set up a CloudWatch rule to trigger an SNS topic for your parameter update. For more information, see <a href="http://docs.aws.amazon.com/gettingstarted/latest/deploy/creating-an-sns-topic.html">Step 2: Create an SNS Topic</a>. After you set up your SNS topic to trigger an email notification about your parameter update, create a CloudWatch rule to associate with the SNS topic as a target. You can edit the Event Pattern value to specify the parameters for which to get notified:</p> 
-<code class="lang-json">{
-&quot;source&quot;: [
-&quot;aws.ssm&quot;
-],
-&quot;detail-type&quot;: [
-&quot;Parameter Store Change&quot;
-],
-&quot;detail&quot;: {
-&quot;name&quot;: [
-&quot;/DeploymentConfig/Prod/FleetHealth&quot;,
-&quot;/DeploymentConfig/Beta/FleetHealth&quot;
-],
-&quot;operation&quot;: [
-&quot;Update&quot;,
-&quot;Delete&quot;
-]
-}
-}
-</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/CWE-filled.png" /></p> 
-<p>When you change the value of the /DeploymentConfig/Beta/FleetHealth parameter, the CloudWatch event should show up in the metrics.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/CWE-metrics.png" /></p> 
-<p>In the meantime, the SNS topic that you created is triggered and you should receive an email as well.</p> 
-<h3>Conclusion</h3> 
-<p>This post demonstrated several new Parameter Store features to manage parameters: &nbsp;hierarchy, tagging, and CloudWatch notifications. Hierarchical parameters make it easier to organize and control access to configuration data, whether plaintext or secrets. Tagging support provides you with another way to group and query parameters easily. With CloudWatch Events, you can get timely notifications about parameter updates.</p> 
-<hr /> 
-<h3>About the Author</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/lusha-zhang.jpg" />Lusha Zhang is a Software Development Engineer in the Amazon EC2 System Manager Team. She has worked on various products at Amazon from Amazon Textbook Rentals to AWS Parameter Store. Outside work, she enjoys playing the violin and the piano as well as surfing in the Pacific Northwest.</p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

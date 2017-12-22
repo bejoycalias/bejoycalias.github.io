@@ -190,6 +190,94 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Ensuring Security of Your Code in a Cross-Region/Cross-Account Deployment Solution</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">BK Chaurasiya</span></span> | on 
+<time property="datePublished" datetime="2017-08-16T12:03:10+00:00">16 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/best-practices/" title="View all posts in Best practices"><span property="articleSection">Best practices</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/ensuring-security-of-your-code-in-a-cross-regioncross-account-deployment-solution/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>There are multiple ways you can protect your data while it is in transit and at rest. You can protect your data in transit by using SSL or by using client-side encryption.&nbsp;<a href="https://aws.amazon.com/kms/">AWS Key Management Service (AWS KMS)</a> is a managed service that makes it easy for you to create, control, rotate, and use your encryption keys. AWS KMS allows you to create custom keys. You can then share these keys with <a href="https://aws.amazon.com/iam/">AWS Identity and Access Management (IAM)</a> users and roles in your AWS account or in an AWS account owned by someone else.</p> 
+<p>In my previous <a href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/">post</a>, I described a solution for building a cross-region/cross-account code deployment solution on AWS. In this post, I describe a few options for&nbsp;protecting your source code as it travels between regions and between AWS accounts.</p> 
+<p>To recap, you deployed the infrastructure as&nbsp;shown in the following diagram.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram10.png" /></p> 
+<li>You had your development environment running in Region A in AWS Account A.</li> 
+<li>You had your QA environment running in Region B in AWS Account B.</li> 
+<li>You had a staging or production environment running in Region C in AWS Account C.</li> 
+<p>An update to the source code in Region A triggered validation and deployment of source code changes in the pipeline in Region A. A successful processing of source code in all of its AWS CodePipeline states invoked a Lambda function, which copied the source code into an S3 bucket in Region B. After the source code was copied into this bucket, it triggered a similar chain of processes into the different AWS CodePipeline stages in Region B.</p> 
+<p>&nbsp;</p> 
+<h3><strong>Ensuring Security for Your Source Code</strong></h3> 
+<p>You might&nbsp;choose to encrypt the source code .zip file before uploading to the S3 bucket that is in Account A, Region A, using Amazon S3 server-side encryption:</p> 
+<h4><strong>1. Using the Amazon S3 service master key</strong></h4> 
+<p>Refer back to the Lambda function created for you by the CloudFormation stack in the previous <a href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/">post</a>. Go to the AWS Lambda console and your function name should be &lt;stackname&gt;-CopytoDest-XXXXXXX.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/23/Lambda_BK.png" /></p> 
+<p>&nbsp;</p> 
+<p>Use the following parameter for the copyObject function – <em>ServerSideEncryption: ‘AES256’</em></p> 
+<p><strong>Note</strong>: The set-up already uses this option by default.</p> 
+<p>The <em>copyObject</em> function decrypts the .zip file and copies the object into account B.</p> 
+<p>&nbsp;</p> 
+<h4><strong>2. Using an AWS KMS master key</strong></h4> 
+<p>Since the KMS keys are constrained in a region, copying the object (source code .zip file) into a different account across the region requires&nbsp;cross-account access to the KMS key. This must occur before Amazon S3 can use that key for encryption and decryption.</p> 
+<p>Use the following parameter for the&nbsp;<em>copyObject</em> function – <em>ServerSideEncryption: ‘aws:kms’</em> and provide an&nbsp;<em>SSEKMSKeyId: ‘&lt;keyeid&gt;’</em></p> 
+<p><strong>To enable cross-account access for the KMS key and use it in Lambda function</strong></p> 
+<p>a. Create a KMS key in the source account (Account A), region B – for example,&nbsp;<strong><em>XRDepTestKey</em></strong></p> 
+<p><strong>Note</strong>: This key must&nbsp;be created in region B. This is because the source code will&nbsp;be copied in an S3 bucket that exists in region B and the KMS key must&nbsp;be accessible in this region.</p> 
+<p>b. To enable the&nbsp;Lambda function to be able to use this KMS key, add <strong><em>lambdaS3CopyRole</em></strong>&nbsp;as a user for this key. The Lambda function and associated role and policies are defined in the <a href="https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/template/XregionCodePipeLineCF.template">CloudFormation template</a>.</p> 
+<p>c. Note the ARN of the key that you generated.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/07/23/keyARN.jpg" /></p> 
+<p>d. Provide the external account (Account B) permission to use this key. For more information, see <a href="https://blogs.aws.amazon.com/security/post/Tx2N2SRHXSNEX91/Share-Custom-Encryption-Keys-More-Securely-Between-Accounts-by-Using-AWS-Key-Man">Sharing custom encryption keys securely between accounts</a>.</p> 
+<p><em> arn:aws:iam::&lt;Account B ID&gt;:root</em></p> 
+<p>e. In Account B, delegate the permission to use this key to the role that AWS CodePipeline is using. In the&nbsp;CloudFormation template, you can see&nbsp;that <em><strong>CodePipelineTrustRole</strong></em>&nbsp;is used. Attach the following policy to the role. Ensure that you update the region and Account ID accordingly.</p> 
+<code class="lang-js">{
+&nbsp;&nbsp;&nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,
+&nbsp;&nbsp;&nbsp; &quot;Statement&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Sid&quot;: &quot;AllowUseOfTheKey&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:Encrypt&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:Decrypt&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:ReEncrypt*&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:GenerateDataKey*&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:DescribeKey&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;arn:aws:kms:&lt;regionB&gt;:&lt;AccountA ID&gt;:key/&lt;KMS Key in Region B ID&gt;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; },
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Sid&quot;: &quot;AllowAttachmentOfPersistentResources&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Effect&quot;: &quot;Allow&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:CreateGrant&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:ListGrants&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:RevokeGrant&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;arn:aws:kms:&lt;regionB&gt;:&lt;AccountA ID&gt;:key/&lt;KMS Key in Region B ID&gt;&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Condition&quot;: {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Bool&quot;: {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;kms:GrantIsForAWSResource&quot;: true
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; ]
+}</code> 
+<p>f. Update the Lambda function, <strong><em>CopytoDest</em></strong>, to use the following in the parameter definition.</p> 
+<p>&nbsp;</p> 
+<code class="lang-js">ServerSideEncryption: 'aws:kms',\n&quot;,
+SSEKMSKeyId: '&lt; keyeid &gt;'&nbsp;&nbsp;
+//ServerSideEncryption: 'AES256'\n&quot;,</code> 
+<p>And there you go! You have enabled secure delivery of your source code into your cross-region/cross-account deployment solution.</p> 
+<h3><strong>About the Author</strong></h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/08/16/BK.jpeg" /><br /> BK Chaurasiya&nbsp;is a Solutions Architect with Amazon Web Services. He provides technical guidance, design advice and thought leadership to some of the largest and successful AWS customers and partners.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/08/10/devsecops2_1.jpg" /> 
 <b class="lb-b blog-post-title" property="name headline">Automating Blue/Green Deployments of Infrastructure and Application Code using AMIs, AWS Developer Tools, &amp; Amazon EC2 Systems Manager</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -2104,120 +2192,6 @@ commands:
 <li>Adding AWS CodePipeline to monitor your AWS CodeCommit repository. When a new version is committed, AWS CodePipeline will call AWS CodeBuild and re-create your AMIs automatically.</li> 
 <li>Using CloudWatch Events to implement automated compliance. You can use an <a href="https://aws.amazon.com/lambda/?sc_channel=PS&amp;sc_campaign=acquisition_US&amp;sc_publisher=google&amp;sc_medium=lambda_b&amp;sc_content=lambda_e&amp;sc_detail=aws%20lambda&amp;sc_category=lambda&amp;sc_segment=186623768554&amp;sc_matchtype=e&amp;sc_country=US&amp;s_kwcid=AL!4422!3!186623768554!e!!g!!aws%20lambda&amp;ef_id=WFGCgwAABYUoeNPB:20170501191444:s">AWS Lambda</a> function to verify that all EC2 instances launched in your account are using one of your preconfigured custom AMIs.</li> 
 <p>For next steps and taking advantage of other more advanced features and services please see <a href="https://aws.amazon.com/blogs/devops/how-to-create-an-ami-builder-with-aws-codebuild-and-hashicorp-packer-part-2/" title="How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer – Part 2" target="null">part 2</a> in this two-part series. The post uses AWS services such as AWS CodePipeline, AWS CloudFormation, and Amazon Cloudwatch Events to continuously release new AMIs from end to end.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building a Secure Cross-Account Continuous Delivery Pipeline</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
-<time property="datePublished" datetime="2017-05-16T08:58:11+00:00">16 MAY 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/aws-building-a-secure-cross-account-continuous-delivery-pipeline/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Most organizations create multiple AWS accounts because they provide the highest level of resource and security isolation. In this blog post, I will discuss how to use cross account <a title="undefined" href="https://aws.amazon.com/iam/" target="null">AWS Identity and Access Management (IAM)</a> access to orchestrate continuous integration and continuous deployment.</p> 
-<b>Do I need multiple accounts?</b> 
-<p>If you answer “yes” to any of the following questions you should consider creating more AWS accounts:</p> 
-<li>Does your business require administrative isolation between workloads? Administrative isolation by account is the most straightforward way to grant independent administrative groups different levels of administrative control over AWS resources based on workload, development lifecycle, business unit (BU), or data sensitivity.</li> 
-<li>Does your business require limited visibility and discoverability of workloads? Accounts provide a natural boundary for visibility and discoverability. Workloads cannot be accessed or viewed unless an administrator of the account enables access to users managed in another account.</li> 
-<li>Does your business require isolation to minimize blast radius? Separate accounts help define boundaries and provide natural blast-radius isolation to limit the impact of a critical event such as a security breach, an unavailable <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html">AWS Region or Availability Zone</a>, account suspensions, and so on.</li> 
-<li>Does your business require a particular workload to operate within <a href="http://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html">AWS service limits</a> without impacting the limits of another workload? You can use AWS account service limits to impose restrictions on a business unit, development team, or project. For example, if you create an AWS account for a project group, you can limit the number of Amazon Elastic Compute Cloud (<a href="https://aws.amazon.com/ec2/">Amazon EC2</a>) or high performance computing (HPC) instances that can be launched by the account.</li> 
-<li>Does your business require strong isolation of recovery or auditing data? If regulatory requirements require you to control access and visibility to auditing data, you can isolate the data in an account separate from the one where you run your workloads (for example, by writing <a href="https://aws.amazon.com/cloudtrail/?sc_channel=PS&amp;sc_campaign=acquisition_US&amp;sc_publisher=google&amp;sc_medium=cloudtrail_b_test_q32016&amp;sc_content=cloudtrail_bmm&amp;sc_detail=%2Bcloudtrail&amp;sc_category=cloudtrial&amp;sc_segment=105093175122&amp;sc_matchtype=b&amp;sc_country=US&amp;s_kwcid=AL!4422!3!105093175122!b!!g!!%2Bcloudtrail&amp;ef_id=WFGCgwAABYUoeNPB:20170502153559:s">AWS CloudTrail</a> logs to a different account).</li> 
-<li>Do your workloads depend on specific instance reservations to support high availability (HA) or disaster recovery (DR) capacity requirements? Reserved Instances (RIs) ensure reserved capacity for services such as Amazon EC2 and Amazon Relational Database Service (<a href="https://aws.amazon.com/rds/">Amazon RDS</a>) at the individual account level.</li> 
-<b>Use case</b> 
-<p>The identities in this use case are set up as follows:</p> 
-<li><strong>DevAccount </strong></li> 
-<p>Developers check the code into an <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a> repository. It stores all the repositories as a single source of truth for application code. Developers have full control over this account. This account is usually used as a sandbox for developers.</p> 
-<li><strong>ToolsAccount</strong></li> 
-<p>A central location for all the tools related to the organization, including continuous delivery/deployment services such as <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> and <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a>. Developers have limited/read-only access in this account. The Operations team has more control.</p> 
-<li><strong>TestAccount</strong></li> 
-<p>Applications using the CI/CD orchestration for test purposes are deployed from this account. Developers and the Operations team have limited/read-only access in this account.</p> 
-<li><strong>ProdAccount</strong></li> 
-<p>Applications using the CI/CD orchestration tested in the ToolsAccount are deployed to production from this account. Developers and the Operations team have limited/read-only access in this account.</p> 
-<b>Solution</b> 
-<p>In this solution, we will check in sample code for an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function in the Dev account. This will trigger the pipeline (created in AWS CodePipeline) and run the build using AWS CodeBuild in the Tools account. The pipeline will then deploy the Lambda function to the Test and Prod accounts.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/CrossAccount-CI-CD.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/CrossAccount-CI-CD.jpg" /></a></p> 
-<p>&nbsp;</p> 
-<b>Setup</b> 
-<ol> 
-<li>Clone this repository. It contains the <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation templates </a>that we will use in this walkthrough.</li> 
-</ol> 
-<code class="lang-bash">git clone https://github.com/awslabs/aws-refarch-cross-account-pipeline.git
-</code> 
-<ol start="2"> 
-<li>Follow the instructions in the repository README to push the sample AWS Lambda application to an AWS CodeCommit repository in the Dev account.</li> 
-<li>Install the AWS Command Line Interface as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">here</a>. To prepare your access keys or assume-role to make calls to AWS, configure the AWS CLI as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>.</li> 
-</ol> 
-<b></b> 
-<b>Walkthrough</b> 
-<p><strong>Note:</strong> Follow the steps in the order they’re written. Otherwise, the resources might not be created correctly.</p> 
-<ol> 
-<li>In the Tools account, deploy this CloudFormation template. It will create <a href="http://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#master_keys">the customer master keys</a> (CMK) in <a href="http://docs.aws.amazon.com/kms/latest/developerguide/overview.html">AWS Key Management Service</a> (AWS KMS), grant access to Dev, Test, and Prod accounts to use these keys, and create an <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket to hold artifacts from AWS CodePipeline.</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name pre-reqs \
---template-file ToolsAcct/pre-reqs.yaml --parameter-overrides \
-DevAccount=ENTER_DEV_ACCT TestAccount=ENTER_TEST_ACCT \
-ProductionAccount=ENTER_PROD_ACCT</code> 
-<p>In the output section of the CloudFormation console, make a note of the <a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html">Amazon Resource Number</a> (ARN) of the CMK and the S3 bucket name. You will need them in the next step.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/10/Screen-Shot-2017-04-18-at-5.36.32-PM.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/10/Screen-Shot-2017-04-18-at-5.36.32-PM.png" /></a></p> 
-<ol start="2"> 
-<li>In the Dev account, which hosts the AWS CodeCommit repository, deploy this CloudFormation template. This template will create the IAM roles, which will later be assumed by the pipeline running in the Tools account. Enter the AWS account number for the Tools account and the CMK ARN.</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name toolsacct-codepipeline-role \
---template-file DevAccount/toolsacct-codepipeline-codecommit.yaml \
---capabilities CAPABILITY_NAMED_IAM \
---parameter-overrides ToolsAccount=ENTER_TOOLS_ACCT CMKARN=FROM_1st_Step</code> 
-<ol start="3"> 
-<li>In the Test and Prod accounts where you will deploy the Lambda code, execute this CloudFormation template. This template creates IAM roles, which will later be assumed by the pipeline to create, deploy, and update the sample AWS Lambda function through CloudFormation.</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name toolsacct-codepipeline-cloudformation-role \
---template-file TestAccount/toolsacct-codepipeline-cloudformation-deployer.yaml \
---capabilities CAPABILITY_NAMED_IAM \
---parameter-overrides ToolsAccount=ENTER_TOOLS_ACCT CMKARN=FROM_1st_STEP  \
-S3Bucket=FROM_1st_STEP</code> 
-<ol start="4"> 
-<li>In the Tools account, which hosts AWS CodePipeline, execute this CloudFormation template. This creates a pipeline, but does not add permissions for the cross accounts (Dev, Test, and Prod).</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name sample-lambda-pipeline \
---template-file ToolsAcct/code-pipeline.yaml \
---parameter-overrides DevAccount=ENTER_DEV_ACCT TestAccount=ENTER_TEST_ACCT \
-ProductionAccount=ENTER_PROD_ACCT CMKARN=FROM_1st_STEP \
-S3Bucket=FROM_1st_STEP--capabilities CAPABILITY_NAMED_IAM</code> 
-<ol start="5"> 
-<li>In the Tools account, execute this CloudFormation template, which give access to the role created in step 4. This role will be assumed by AWS CodeBuild to decrypt artifacts in the S3 bucket. This is the same template that was used in step 1, but with different parameters.</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name pre-reqs \
---template-file ToolsAcct/pre-reqs.yaml \
---parameter-overrides CodeBuildCondition=true</code> 
-<ol start="6"> 
-<li>In the Tools account, execute this CloudFormation template, which will do the following: 
-<ol start="a"> 
-<li>Add the IAM role created in step 2. This role is used by AWS CodePipeline in the Tools account for checking out code from the AWS CodeCommit repository in the Dev account.</li> 
-<li>Add the IAM role created in step 3. This role is used by AWS CodePipeline in the Tools account for deploying the code package to the Test and Prod accounts.</li> 
-</ol> </li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --stack-name sample-lambda-pipeline \
---template-file ToolsAcct/code-pipeline.yaml \
---parameter-overrides CrossAccountCondition=true \
---capabilities CAPABILITY_NAMED_IAM</code> 
-<b>What did we just do?</b> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/details-cross-account-pipeline.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/details-cross-account-pipeline.png" /></a></p> 
-<ol> 
-<li>The pipeline created in step 4 and updated in step 6 checks out code from the AWS CodeCommit repository. It uses the IAM role created in step 2. The IAM role created in step 4 has permissions to assume the role created in step 2. This role will be assumed by AWS CodeBuild to decrypt artifacts in the S3 bucket, as described in step 5.</li> 
-<li>The IAM role created in step 2 has permission to check out code. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/DevAccount/toolsacct-codepipeline-codecommit.yaml#L35">here</a>.</li> 
-<li>The IAM role created in step 2 also has permission to upload the checked-out code to the S3 bucket created in step 1. It uses the KMS keys created in step 1 for server-side encryption.</li> 
-<li>Upon successfully checking out the code, AWS CodePipeline triggers AWS CodeBuild. The AWS CodeBuild project created in step 4 is configured to use the CMK created in step 1 for cryptography operations. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/ToolsAcct/code-pipeline.yaml#L94">here</a>. The AWS CodeBuild role is created later in step 4. In step 5, access is granted to the AWS CodeBuild role to allow the use of the CMK for cryptography.</li> 
-<li>AWS CodeBuild uses <a href="https://pypi.python.org/pypi/pip">pip</a> to install any libraries for the sample Lambda function. It also executes the <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html">aws cloudformation package</a> command to create a Lambda function deployment package, uploads the package to the specified S3 bucket, and adds a reference to the uploaded package to the CloudFormation template. See <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/ToolsAcct/code-pipeline.yaml#L118">here</a>.</li> 
-<li>Using the role created in step 3, AWS CodePipeline executes the transformed CloudFormation template (received as an output from AWS CodeBuild) in the Test account. The AWS CodePipeline role created in step 4 has permissions to assume the IAM role created in step 3, as described in step 5.</li> 
-<li>The IAM role assumed by AWS CodePipeline passes the role to an IAM role that can be assumed by CloudFormation. AWS CloudFormation creates and updates the Lambda function using the code that was built and uploaded by AWS CodeBuild.</li> 
-</ol> 
-<p>This is what the pipeline looks like using the sample code:<br /> <a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/Screen-Shot-2017-04-27-at-10.56.56-AM.png"><img class="aligncenter wp-image-1011 size-medium" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/08/Screen-Shot-2017-04-27-at-10.56.56-AM.png" /></a></p> 
-<b>Conclusion</b> 
-<p>Creating multiple AWS accounts provides the highest degree of isolation and is appropriate for a number of use cases. However, keeping a centralized account to orchestrate continuous delivery and deployment using AWS CodePipeline and AWS CodeBuild eliminates the need to duplicate the delivery pipeline. You can secure the pipeline through the use of cross account IAM roles and the encryption of artifacts using AWS KMS. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_aws-accounts.html">Providing Access to an IAM User in Another AWS Account That You Own in the IAM User Guide</a>.</p> 
-<b>References</b> 
-<li><a href="https://d0.awsstatic.com/aws-answers/AWS_Multi_Account_Security_Strategy.pdf">AWS Multiple Account Security Strategy</a></li> 
-<li><a href="https://d0.awsstatic.com/aws-answers/AWS_Multi_Account_Billing_Strategy.pdf">AWS Multiple Account Billing Strategy</a></li> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

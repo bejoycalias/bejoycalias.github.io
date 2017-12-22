@@ -190,6 +190,162 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Configuring Serverless Applications Using AWS CloudFormation Custom Resources</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Steven Challis</span></span> | on 
+<time property="datePublished" datetime="2017-10-11T10:10:35+00:00">11 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/configuring-serverless-applications-using-aws-cloudformation-custom-resources/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>AWS makes it easy for developers to get started developing applications in the cloud. With the extensive array of services available on AWS, developers might incorporate more than just a few components in their applications. Manually managing the resources needed for an application can become time consuming. In addition, applications usually require more than just infrastructure to function.</p> 
+<p>In this blog post, I’ll show you how to achieve additional configuration tasks such as&nbsp;data loading, compilation of templates, and deployment of static files&nbsp;using&nbsp;a completely serverless architecture and a single AWS CloudFormation template.</p> 
+<p><span id="more-1448"></span></p> 
+<b>Configuration with CloudFormation</b> 
+<p><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html">AWS CloudFormation</a>&nbsp;is a service that helps you model and set up required resources (e.g., Amazon EC2, Amazon DynamoDB, and IAM roles). This frees you to focus on the application rather than on provisioning the infrastructure. With AWS CloudFormation, you can describe the resources you need using a template written in either JSON or YAML. These templates can then be used to create a stack, and AWS CloudFormation will handle the provisioning and even the updates to or deletions from the resources that you describe.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/06/one-click-300x144.png" /> 
+<p class="wp-caption-text">Example 1-click deploy buttons from <a href="https://github.com/awslabs/aws-lambda-zombie-workshop">https://github.com/awslabs/aws-lambda-zombie-workshop</a></p> 
+<p>CloudFormation templates only describe AWS resources. Additional configuration must be done using another method, such as a&nbsp;<a href="https://aws.amazon.com/getting-started/projects/set-up-ci-cd-pipeline/">CI/CD pipeline</a>. It’s common to see developers share templates designed for 1-click deployment on sites such as GitHub. A great example of this is the&nbsp;<a href="https://aws.amazon.com/answers/">AWS Answers</a>&nbsp;site, which contains many ready-to-deploy solutions, each with its own CloudFormation templates to help users get up and running quickly. How do these solutions achieve their configuration? A common solution is to use&nbsp;<a href="https://aws.amazon.com/answers/">EC2 User Data scripts</a>. But how can you&nbsp;do this&nbsp;if your application doesn’t contain any EC2 instances? Let’s look at another way to do additional configuration.</p> 
+<b>What are custom resources?</b> 
+<p>With&nbsp;<a href="https://aws.amazon.com/serverless/">serverless architectures</a>&nbsp;becoming more common, I want to walk you through how to achieve the additional configuration needed to set up your application without using Amazon EC2 or separate scripts running in a CI/CD pipeline. In a serverless architecture, there is no concept of launching an instance. Serverless applications are event driven so we need some other way to trigger and run our setup code. A neat solution to this is to use the&nbsp;custom resources feature of AWS CloudFormation. With custom resources you can write your own logic and have AWS CloudFormation run this logic any time you create, update, or delete stacks.</p> 
+<p>A custom resource is defined using either the <code>AWS::CloudFormation::CustomResource</code> or <code>Custom::&lt;custom_name&gt;</code> type in CloudFormation. There are two methods of invoking your logic. The first method is to associate an Amazon Simple Notification Service (SNS) topic with your custom resource. In this scenario, you use <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources-sns.html">SNS notifications</a> to trigger your custom provisioning logic. After it’s done, your code sends a response (and any output data) that notifies AWS CloudFormation to proceed with the stack operation. The second method is to associate your <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources-lambda.html">custom resource with an AWS Lambda function</a>, which is invoked directly by CloudFormation thus requiring less configuration.</p> 
+<b>Let’s take a look at an example</b> 
+<p>Imagine that you are tasked with writing a CloudFormation template that will deploy a simple three-tier serverless web application. This application includes a static HTML page hosted in S3, an API powered by AWS Lambda and Amazon API Gateway, and an Amazon DynamoDB database. The first configuration task is to deploy the HTML page. Let’s take a look at an example. The following is a Lambda-backed custom resource defined in CloudFormation to deploy an HTML page:</p> 
+<code class="lang-yaml">AppConfigurationLambda:
+Type: AWS::Serverless::Function
+Properties:
+CodeUri: ./frontend
+Environment:
+Variables:
+API_URL: !Join
+- ''
+- - https://
+- !Ref ServerlessRestApi
+- .execute-api.
+- !Ref 'AWS::Region'
+- .amazonaws.com
+- /Stage/
+DEST_BUCKET: !Ref WebsiteBucket
+Handler: handler.configure_application
+MemorySize: 128
+Role: !GetAtt AppConfigurationRole.Arn
+Runtime: python2.7
+Timeout: 300
+DeploymentCustomResource:
+Type: Custom::AppConfiguration
+Properties:
+ServiceToken: !GetAtt AppConfigurationLambda.Arn</code> 
+<p>You can see that I have defined a Lambda function (using <a href="http://docs.aws.amazon.com/lambda/latest/dg/deploying-lambda-apps.html">AWS SAM syntax</a> to simplify the declaration). I then defined a second resource with type <code>Custom::AppConfiguration</code>. The only required property for this resource is <code>ServiceToken</code> which links to either an Amazon SNS topic ARN or a Lambda function ARN. In this case, I have referenced the previously defined Lambda function.</p> 
+<p>The purpose of our Lambda function is to update our frontend HTML page with the URL for our API before pushing it to Amazon S3. You can see that the API URL and S3 bucket are both passed into our function using references to other resources defined in the template (not shown), which allows our template to be entirely self-contained.</p> 
+<p>Now let’s take a look at the corresponding Lambda function:</p> 
+<code class="lang-python">import os
+import json
+import boto3
+import pystache
+import requests
+s3 = boto3.resource('s3')
+s3_client = boto3.client('s3')
+def build_response(event, status):
+&quot;&quot;&quot;A utility function used to build a response to CloudFormation&quot;&quot;&quot;
+response_data = {
+'Status': status,
+'Reason': 'Success',
+'PhysicalResourceId': 'myapp::{}'.format(event['LogicalResourceId']),
+'Data': {},
+'RequestId': event['RequestId'],
+&quot;LogicalResourceId&quot;: event[&quot;LogicalResourceId&quot;],
+&quot;StackId&quot;: event[&quot;StackId&quot;],
+}
+return response_data
+def configure_application(event, context):
+&quot;&quot;&quot;Responsible for app configuration during stack creation/update/deletion&quot;&quot;&quot;
+try:
+request_type = event['RequestType']
+api_url = os.environ.get('API_URL')
+dest_bucket = os.environ.get('DEST_BUCKET')
+if request_type == &quot;Delete&quot;:
+# Delete contents of S3 bucket (else it will not delete)
+bucket = s3.Bucket(dest_bucket)
+for f in bucket.objects.all():
+f.delete()
+else:
+# Retrieve the template needed to generate final HTML
+s3_obj = s3.Object('mysourcebucket', 'index.mustache')
+mustache_template = s3_obj.get()[&quot;Body&quot;].read()
+renderer = pystache.Renderer()
+rendered = renderer.render(mustache_template, {'API_URL': api_url})
+# Write updated static HTML to S3 for consumption
+s3_client.put_object(Bucket=dest_bucket, Key=&quot;index.html&quot;,
+Body=rendered, ACL='public-read', ContentType='text/html')
+response_data = build_response(event, 'SUCCESS')
+except Exception, exc:
+# Catch any exceptions and ensure we always return a response
+response_data = build_response(event, 'FAILED')
+# Respond to Cloudformation to let it know we are done
+response_url = event['ResponseURL']
+result = requests.put(response_url, data=json.dumps(response_data))
+return result</code> 
+<p>The key component here is the <code>configure_application()</code> function, which like any other Lambda function takes event and context as input parameters. I mentioned that custom resources can be triggered on create, update, and delete stack operations. A good template should handle all cases. For example, you don’t want to redeploy your HTML if you have chosen to delete the stack. In the previous snippet, our function first checks which type of operation is happening and responds appropriately. The more operations you can build into your template, the less you have to document as additional manual steps for the user of the template.</p> 
+<p>Notice that we retrieve the API URL and Destination bucket that were passed in from the template and use those to perform our configuration. In the case of stack deletion, you want to remove any objects in the bucket, otherwise the stack operation will fail when it attempts to delete the bucket itself. In all other cases (stack creation and updates) you want to read a template (here stored in S3) and insert your newly defined API URL. I’m using a Mustache template and the Pystache Python library here to do this (which I need to include with my code bundle). The function then writes the newly rendered template to the S3 bucket, completing the configuration.</p> 
+<p>It’s important that your custom resource always makes an explicit call back to the <code>ResponseUrl</code> provided in the event. Simply returning a response from your Lambda function won’t suffice. If you don’t make this call, CloudFormation won’t know that your custom resource has been configured, and it will wait until it times out. In our example, to give our function the best chance of always making this callback, the main logic of the function is wrapped in an exception handler which will build a failure response. ’s still possible for our function to fail (e.g., if imports fail or there are syntax errors elsewhere), however this function is covering common cases such as an invalid template or misconfigured IAM policy.</p> 
+<b>Other common configuration tasks</b> 
+<p>You can define multiple custom resources in a CloudFormation template. You might find it useful to build up a collection of reusable functions. The following example shows a few more functions you can consider integrating into your templates:</p> 
+<h3>Populating a database with data</h3> 
+<p>Sometimes your app will need initial data in order to function. This seed data can easily be inserted using a function such as the one in the following example. In this case, you pass in an environment variable called <code>QUESTIONS_TABLE</code> that references the DynamoDB table created by your table.</p> 
+<code class="lang-python">dynamodb_client = boto3.resource('dynamodb', region_name=&quot;us-east-1&quot;)
+def setup_dynamo(event, context):
+try:
+table_name = os.environ.get('QUESTIONS_TABLE')
+table = dynamodb_client.Table(table_name)
+table.put_item(Item={
+'number': 1,
+'question': 'Which database offering is most suited to NoSQL?',
+'answers': '{
+&quot;A&quot;: &quot;RDS&quot;,
+&quot;B&quot;: &quot;DynamoDB&quot;,
+&quot;C&quot;: &quot;Redshift&quot;}'})
+table.put_item(Item={
+'number': 2,
+'question': 'What is the recommended way of scaling compute resources?',
+'answers': '{
+&quot;A&quot;: &quot;Increase the instance size.&quot;,
+&quot;B&quot;: &quot;Use smaller instances but more of them&quot;,
+&quot;C&quot;: &quot;Not sure&quot;}'})
+response_data = build_response(event, 'SUCCESS')
+except Exception, exc:
+response_data = build_response(event, 'FAILED')
+# Respond to Cloudformation to let it know we are done
+response_url = event['ResponseURL']
+result = requests.put(response_url, data=json.dumps(response_data))
+return result</code> 
+<h3>Cleaning up CloudWatch Logs</h3> 
+<p>Many services automatically generate logs. In our example, whenever any of our Lambda functions is first run, a log group is created in CloudWatch Logs. Some customers want to clean up these log groups when deleting the stack. , To automate the process you could include a custom resource, such as the one in the example that follows, to automatically delete any Lambda logs generated by functions spun up by your stack. This example would take an environment variable called <code>STACK_NAME</code> used to identify the logs we want and could use <code>!Ref AWS::StackName</code> to retrieve this from within the CloudFormation template.</p> 
+<code class="lang-python">logs_client = boto3.client('logs')
+def delete_logs(event, context):
+try:
+delete_logs_with_prefix = '/aws/lambda/{0}'.format(os.environ.get('STACK_NAME'))
+output = client.describe_log_groups(logGroupNamePrefix=delete_logs_with_prefix)
+for record in output['logGroups']:
+client.delete_log_group(logGroupName=record['logGroupName'])
+response_data = build_response(event, 'SUCCESS')
+except Exception, exc:
+response_data = build_response(event, 'FAILED')
+# Respond to Cloudformation to let it know we are done
+response_url = event['ResponseURL']
+result = requests.put(response_url, data=json.dumps(response_data))
+return result</code> 
+<b>Tips</b> 
+<li>Make sure to handle exceptions and timeouts. If your Lambda function doesn’t successfully call back to CloudFormation, then the stack update will hang. You can use CloudWatch Logs to debug your Custom Resource Lambda functions. You might find it useful to disable automatic rollback on stack failure, otherwise the logs might be gone by the time you go to view them.</li> 
+<li>Ensure that your function is idempotent (handles retries etc.). Since updates can run multiple times, avoid unnecessary logic or add explicit handling for operations that might not be idempotent, such as database inserts.</li> 
+<li>You have the ability to return custom properties to be used later in your template. This can be useful for constructing custom resources that look up AMI IDs or custom IP address ranges, for example.</li> 
+<li>Use third-party libraries to assist you in writing your custom resource Lambda functions , for example, <a href="https://github.com/awslabs/aws-cloudformation-templates/tree/master/community/custom_resources/python_custom_resource_helper">crhelper.py by awslabs</a>&nbsp;(or similar) to make logging and event handling easier.</li> 
+<p>&nbsp;</p> 
+<h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/06/challiss-badge.jpg" />About the Author</h3> 
+<p>Steven Challis is a Solutions Architect with AWS in New York and has a background in application development and enterprise software primarily within the media and entertainment sector. Outside of work, Steve&nbsp;has&nbsp;passion for cars, instruments and traveling.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Recover your impaired instances using EC2Rescue and Amazon EC2 Systems Manager Automation</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1219,173 +1375,6 @@ by
 <p>&nbsp;</p> 
 <p>&nbsp;</p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">The Right Way to Store Secrets using Parameter Store</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-08-27T23:00:38+00:00">27 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/the-right-way-to-store-secrets-using-parameter-store/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This guest post was written by Evan Johnson, who works in the Security team at Segment.</em></p> 
-<p>The way companies manage application secrets is critical. Even today, the most high profile security companies can suffer breaches from improper secrets management practices. Having internet facing credentials is like leaving your house key under a doormat that millions of people walk over daily. Even if the secrets are hard to find, it is a game of hide and seek that you eventually lose.</p> 
-<p>At <a href="https://segment.com/">Segment</a>, we centrally and securely manage our secrets with <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager Parameter Store</a>, lots of Terraform code, and <a href="https://github.com/segmentio/chamber">chamber</a>. Parameter store is a great tool for achieving secrets management. If you are running workloads on AWS, then using Parameter Store as a managed secrets store is worth serious consideration. This post has all the information you need to get running with Parameter Store in production.</p> 
-<p><span id="more-1184"></span></p> 
-<h3>Service Identity</h3> 
-<p>At Segment, we run hundreds of services that communicate with one another, AWS APIs, and third-party APIs. The services we run have different needs and should only have access to systems that are strictly necessary. This is called the ‘principle of least privilege’.</p> 
-<p>As an example, our main webserver should never have access to security audit logs for our infrastructure. Without giving containers and services an identity, it is not possible to protect and restrict access to secrets with access control policies. Our services identify themselves using IAM roles. From the AWS docs – “<em>An IAM role … is an AWS identity with permission policies that determine what the identity can and cannot do in AWS</em>.”</p> 
-<p>For example, our IAM roles for instances have write-only access to an Amazon S3 bucket for appending audit logs, but prevent the deletion and reading of those logs.</p> 
-<h4>How do containers get their role securely?</h4> 
-<p>A requirement to using <a href="https://aws.amazon.com/ecs/">Amazon ECS</a> is that all containers must run the <a href="https://github.com/aws/amazon-ecs-agent">Amazon ECS container agent</a> (ecs-agent). The agent runs as a container that orchestrates and provides an API with which other containers can communicate. The agent is the central nervous system of how containers fetch IAM role credentials.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/Diagram1a.png" /></p> 
-<p>One important piece to the agent is that it runs an HTTP API that MUST be accessible to the other containers that are running in the cluster. To make this API available, an iptables rule is set on the host instance. This iptables rule forwards traffic destined for a magic IP address to the ecs-agent container.</p> 
-<code class="lang-bash">iptables -t nat \
--A OUTPUT \
--d 169.254.170.2 \
--p tcp \
--m tcp \
---dport 80 \
--j REDIRECT \
---to-ports 51679</code> 
-<p>Before the agent starts a container, it first fetches credentials for the container’s task role from the AWS credential service. The agent next sets the credentials key ID, a UUID, as the AWS_CONTAINER_CREDENTIALS_RELATIVE_URI environment variable inside the container when it is started.</p> 
-<code class="lang-bash">$ env
-...
-AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/v2/credentials/53875b56-621a-4b07-8ab6-02ea315b5693
-...</code> 
-<p>Using this relative URI and UUID, containers fetch AWS credentials from the agent over HTTP. One container cannot access the authentication credentials to impersonate another container because the UUID is sufficiently difficult to guess.</p> 
-<code class="lang-bash">$ curl 169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq .
-{
-&quot;RoleArn&quot;: &quot;arn:aws:iam::111111111111:role/test-service&quot;,
-&quot;AccessKeyId&quot;: &quot;ASIAIYLSOW5USUQCZAAQ&quot;,
-&quot;SecretAccessKey&quot;: &quot;REDACTRED&quot;,
-&quot;Token&quot;: &quot;REDACTED&quot;,
-&quot;Expiration&quot;: &quot;2017-08-10T02:01:43Z&quot;
-}</code> 
-<h4>Additional security details</h4> 
-<p>As heavy Amazon ECS users, we did find security foot-guns associated with ECS task roles. It’s important to realize that any container that can access the Amazon EC2 metadata service on behalf of its host can become any other task role on the system. This could allow containers to circumvent access control policies and gain access to unauthorized systems.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/Diagram2.png" /></p> 
-<p>The two ways a container can access the metadata service is using host networking and over the docker bridge. When a container is run with <span style="text-decoration: underline">–network=’host’</span>, it is always able to connect to the EC2 metadata service using its host’s network. Setting the <span style="text-decoration: underline">ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST</span> variable to false in the ecs-agent config file prevents containers from running with this permission.</p> 
-<p>Additionally, it’s important to block access to the metadata service IP address over the Docker bridge using iptables. The <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">IAM task role documentation</a> recommends preventing access to the EC2 metadata service with this specific rule.</p> 
-<code class="lang-bash">$ iptables --insert FORWARD 1 --in-interface docker+ --destination 169.254.169.254/32 --jump DROP</code> 
-<p>The principle of least privilege is always important to keep in mind when building a security system. Setting <span style="text-decoration: underline">ECS_DISABLE_PRIVILEGED</span> to true in the host’s ecs-agent config file can prevent privileged Docker containers from being run and causing other more nuanced security problems.</p> 
-<h3>Parameter Store</h3> 
-<p>Parameter Store is an AWS service that stores strings. It can store secret data and non-secret data alike. Secrets stored in Parameter Store are secure strings, encrypted with a customer-specific AWS KMS key.</p> 
-<p>Under the hood, a service that requests secure strings from the Parameter Store has a lot of things happening behind the scenes.</p> 
-<ol> 
-<li>The ECS container agent requests the host instance’s temporary credentials.</li> 
-<li>The agent continuously generates temporary credentials for each ECS task role running on ECS, using an undocumented service called ACS.</li> 
-<li>When the agent starts each task, it sets a secret UUID in the environment of the container.</li> 
-<li>When the task needs its task role credentials, it requests them from the ecs-agent API and authenticates with the secret UUID.</li> 
-<li>The ECS task requests its secrets from Parameter Store using the task role credentials.</li> 
-<li>Parameter Store transparently decrypts these secure strings before returning them to the ECS task.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/diagram3-1.png" /></p> 
-<p>Using roles with Parameter Store is especially nice because it does not require maintaining additional authentication tokens. This would create additional headache and additional secrets to manage!</p> 
-<h4>Parameter Store IAM Policies</h4> 
-<p>Each role that accesses the Parameter Store requires the <span style="text-decoration: underline">ssm:GetParameters</span> permission. “SSM” stands for “Simple System Manager”, the previous name for Systems Manager, and is how <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-access.html">AWS denotes Parameter Store operations</a>.</p> 
-<p>The ssm:GetParameters permission is the policy used to enforce access control and protect one service’s secrets from another. Segment gives all services an IAM role that grants access to secrets that match the format&nbsp; {{service_name}}/*.&nbsp; Parameter Store <a href="https://aws.amazon.com/blogs/mt/organize-parameters-by-hierarchy-tags-or-amazon-cloudwatch-events-with-amazon-ec2-systems-manager-parameter-store/">supports hierarchies natively</a>, so this permission provides each service with its own directory of secrets.</p> 
-<code class="lang-json">{
-&quot;Sid&quot;: &quot;&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: &quot;ssm:GetParameters&quot;,
-&quot;Resource&quot;: [
-&quot;arn:aws:ssm:*:*:parameter/{{service_name}}/*&quot;,
-]
-},</code> 
-<p>In addition to the access control policies, Segment uses a dedicated AWS KMS key to encrypt secure strings within the Parameter Store. Each IAM role is granted a small set of KMS permissions in order to decrypt the secrets they store in Parameter Store.</p> 
-<code class="lang-json">{
-&quot;Sid&quot;: &quot;&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;kms:ListKeys&quot;,
-&quot;kms:ListAliases&quot;,
-&quot;kms:Describe*&quot;,
-&quot;kms:Decrypt&quot;
-],
-&quot;Resource&quot;: &quot;parameter_store_key&quot;
-}</code> 
-<h3>Automating service identity and policies</h3> 
-<p class="hide-language">Segment has a small Terraform module that abstracts away the creation of a unique IAM role, load balancers, DNS records, Auto Scaling, and CloudWatch alarms. Below, I show how our nginx load balancer is defined using our service module.</p> 
-<code class="lang-yaml">module &quot;nginx&quot; {
-source            = &quot;../modules/service&quot;
-name              = &quot;nginx&quot;
-image             = &quot;segment/nginx&quot;
-product_area      = &quot;foudation-security&quot;
-health_check_path = &quot;/healthcheck&quot;
-environment       = &quot;${var.environment}&quot;
-}</code> 
-<p>Under the hood, the task role given to each service has all of the IAM policies we previously listed, restricting access to Parameter Store by the value in the name field. No configuration required.</p> 
-<p>Additionally, developers have the option to override which secrets their service has access to by providing a “secret label”. This secret label replaces their service name in their IAM policy. If NGINX were to need the same secrets as an HAProxy instance, the two services can share credentials by using the same secret label.</p> 
-<code class="lang-yaml"></code><code class="lang-yaml">module &quot;nginx&quot; {
-source            = &quot;../modules/service&quot;
-name              = &quot;nginx&quot;
-image             = &quot;segment/nginx&quot;
-product_area      = &quot;foudation-security&quot;
-health_check_path = &quot;/healthcheck&quot;
-environment       = &quot;${var.environment}&quot;
-# Share secrets with loadbalancers
-<strong>secret_label = &quot;loadbalancers&quot;</strong>
-}</code> 
-<h3>Parameter Store in production</h3> 
-<p>All Segment employees authenticate with AWS using aws-vault, which can securely store AWS credentials in the macOS keychain or in an encrypted file for Linux users. Segment has several AWS accounts. Engineers can interact with each account using aws-vault, and execute commands locally with their AWS credentials populated in their environment.<code class="lang-json"><br /> </code></p> 
-<code class="lang-bash">$ aws-vault exec development -- aws s3 ls s3://segmentio-bucket</code> 
-<h4>Using Chamber with Parameter Store</h4> 
-<p>Chamber is a CLI tool that Segment built to allow developers and code to communicate with Parameter Store in a consistent manner. By allowing developers to use the same tools that run in production, we decrease the number of differences between code running in development with staging and production.</p> 
-<p>Chamber works with aws-vault, and has only a few key subcommands:</p> 
-<li>exec—a command after loading secrets in to the environment.</li> 
-<li>history—of changes made to a secret in parameter store.</li> 
-<li>list—the names of all secrets in a services path.</li> 
-<li>write—a secret to the Parameter Store.</li> 
-<p>Chamber leverages Parameter Store’s built in search and history mechanisms to implement the list and history subcommands. All strings stored in Parameter Store are automatically versioned. The subcommand used to fetch secrets from the Parameter Store is exec. When developers use the exec subcommand, they use it with aws-vault.</p> 
-<p><code class="lang-bash">$ aws-vault exec development -- chamber exec loadbalancers -- nginx</code></p> 
-<p>In the preceding command, chamber is executed with the credentials and permissions of the employee in the development account, and it fetches the secrets associated with loadbalancers from Parameter Store. After chamber populates the environment, it runs the NGINX server.</p> 
-<h4 class="hide-language">Running chamber in production</h4> 
-<p>Chamber is packaged inside our Docker containers as a binary and is the entry point of the container. Chamber passes signals to the program it executes in order to allow the program to gracefully handle them.</p> 
-<p>Here’s a diff of what it required to make our main website chamber ready.</p> 
-<code class="lang-bash">-ENTRYPOINT [&quot;node&quot;, &quot;server/boot.js&quot;] 
-+ENTRYPOINT [&quot;chamber&quot;, &quot;exec&quot;, &quot;app&quot;, &quot;--&quot;, &quot;node&quot;, &quot;server/boot.js&quot;]</code> 
-<p>Non-Docker containers can also use chamber to populate the environment before creating configuration files out of templates, run daemons, etc.</p> 
-<h3>Auditing</h3> 
-<p>All access to Parameter Store is logged with AWS CloudTrail. This makes keeping a full audit trail for all parameters simple and inexpensive. It also makes building custom alerting and audit logging straightforward.</p> 
-<code class="lang-json">...
-&quot;eventTime&quot;: &quot;2017-08-02T18:54:06Z&quot;,
-&quot;eventSource&quot;: &quot;ssm.amazonaws.com&quot;,
-&quot;eventName&quot;: &quot;GetParameters&quot;,
-&quot;awsRegion&quot;: &quot;us-west-2&quot;,
-&quot;sourceIPAddress&quot;: &quot;127.0.0.1&quot;,
-&quot;userAgent&quot;: &quot;aws-sdk-go/1.8.1 (go1.8.3; linux; amd64)&quot;,
-&quot;requestParameters&quot;: {
-&quot;withDecryption&quot;: true,
-&quot;names&quot;: [
-&quot;test-service.secretname&quot;
-]
-},
-&quot;responseElements&quot;: null,
-&quot;requestID&quot;: &quot;88888888-4444-4444-4444-121212121212&quot;,
-&quot;eventID&quot;: &quot;88888888-4444-4444-4444-121212121212&quot;,
-&quot;readOnly&quot;: true,
-...</code> 
-<p>CloudTrail makes it possible to determine exactly what secrets are used and can make discovering unused secrets or unauthorized access to secrets possible.</p> 
-<p>AWS logs all Parameter Store access for free as a CloudTrail management event. Most security information and events management (SIEM) solutions can be configured to watch, and read data from S3.</p> 
-<h3>Summary</h3> 
-<p>Using Parameter Store and IAM, Segment was able to build a small tool that provides all of the properties most important in a secrets management system.</p> 
-<li>Protect the secrets at rest with strong encryption.</li> 
-<li>Enforce strong access control policies.</li> 
-<li>Create audit logs of authentication and access history.</li> 
-<li>Great developer experience.</li> 
-<p>Secrets management is very challenging to get right. Many products have been built to manage secrets, but none fit the use cases needed by Segment better than Parameter Store.</p> 
-<h3>About the Author</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/evan.png">Segment</a>. Segment is the infrastructure for customer data. Businesses use Segment’s API to unlock 200+ tools for every team across their organization. With Segment, developers can stop building tedious and expensive one-off data integrations, turning on their favorite apps right from the Segment dashboard.</p> 
-<p><a href="https://segment.com/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/25/segment.png" /></a></p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<hr /> 
-<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author.</em></p> 
-<p><code class="lang-bash"></code><code class="lang-bash"></code></p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.
