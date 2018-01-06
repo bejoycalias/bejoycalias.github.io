@@ -190,6 +190,226 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Extending AWS CodeBuild with Custom Build Environments</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">John Pignata</span></span> | on 
+<time property="datePublished" datetime="2017-02-17T13:40:26+00:00">17 FEB 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/extending-aws-codebuild-with-custom-build-environments/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-591" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=591&amp;disqus_title=Extending+AWS+CodeBuild+with+Custom+Build+Environments&amp;disqus_url=https://aws.amazon.com/blogs/devops/extending-aws-codebuild-with-custom-build-environments/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-591');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/codebuild/" target="_blank">AWS CodeBuild</a> is a fully managed build service that compiles source code, runs tests, and produces software packages that are ready to deploy. CodeBuild provides curated build environments for programming languages and runtimes such as Java, Ruby, Python, Go, Node.js, Android, and Docker. It can be extended through the use of custom build environments to support many more.</p> 
+<p>Build environments are Docker images that include a complete file system with everything required to build and test your project. To use a custom build environment in a CodeBuild project, you build a container image for your platform that contains your build tools, push it to a Docker container registry such as <a href="https://aws.amazon.com/ecr/" target="_blank">Amazon EC2 Container Registry (ECR)</a>, and reference it in the project configuration. When building your application, CodeBuild will retrieve the Docker image from the container registry specified in the project configuration and use the environment to compile your source code, run your tests, and package your application.</p> 
+<p>In this post, we’ll create a build environment for <a href="http://www.php.net/" target="_blank">PHP</a> applications and walk through the steps to configure CodeBuild to use this environment.</p> 
+<p><span id="more-591"></span></p> 
+<h3>Requirements</h3> 
+<p>In order to follow this tutorial and build the Docker container image, you need to have the <a href="https://www.docker.com/products/overview#/install_the_platform" target="_blank">Docker platform</a>, the <a href="http://aws.amazon.com/cli" target="_blank">AWS Command Line Interface</a>, and <a href="https://git-scm.com/downloads" target="_blank">Git</a> installed.</p> 
+<h3>Create the demo resources</h3> 
+<p>To begin, we’ll clone <a href="https://github.com/awslabs/codebuild-images" target="_blank">codebuild-images</a> from GitHub. It contains an <a href="https://aws.amazon.com/cloudformation/" target="_blank">AWS CloudFormation</a> template that we’ll use to create resources for our demo: a source code repository in <a href="https://aws.amazon.com/codecommit/" target="_blank">AWS CodeCommit</a> and a Docker image repository in Amazon ECR. The repository also includes PHP sample code and tests that we’ll use to demonstrate our custom build environment.</p> 
+<ol> 
+<li>Clone the Git repository: 
+<code class="lang-bash">git clone https://github.com/awslabs/codebuild-images.git
+cd codebuild-images</code> 
+<li>Create the CloudFormation stack using the template.yml file. You can use<a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stack.html" target="_blank"> the CloudFormation console to create the stack</a>&nbsp;or you can use the <a href="https://aws.amazon.com/cli/" target="_blank">AWS Command Line Interface</a>: 
+<code class="lang-bash">aws cloudformation create-stack \
+--stack-name codebuild-php \
+--parameters ParameterKey=EnvName,ParameterValue=php \
+--template-body file://template.yml &gt; /dev/null &amp;&amp; \
+aws cloudformation wait stack-create-complete \
+--stack-name codebuild-php &amp;&amp; \
+aws cloudformation describe-stacks \
+--stack-name codebuild-php \
+--output table \
+--query Stacks[0].Outputs</code> 
+</ol> 
+<p>After the stack has been created, CloudFormation will return two outputs:</p> 
+<li><strong>BuildImageRepositoryUri</strong>: the URI of the Docker repository that will host our build environment image.</li> 
+<li><strong>SourceCodeRepositoryCloneUrl</strong>: the clone URL of the Git repository that will host our sample PHP code.</li> 
+<h3>Build and push the Docker image</h3> 
+<p>Docker images are specified using a <a href="https://docs.docker.com/engine/reference/builder/" target="_blank">Dockerfile</a>, which contains the instructions for assembling the image. The Dockerfile included in the PHP build environment contains these instructions:</p> 
+<code class="lang-docker">FROM php:7
+ARG composer_checksum=55d6ead61b29c7bdee5cccfb50076874187bd9f21f65d8991d46ec5cc90518f447387fb9f76ebae1fbbacf329e583e30
+ARG composer_url=https://raw.githubusercontent.com/composer/getcomposer.org/ba0141a67b9bd1733409b71c28973f7901db201d/web/installer
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV PATH=$PATH:vendor/bin
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends \
+curl \
+git \
+python-dev \
+python-pip \
+zlib1g-dev \
+&amp;&amp; pip install awscli \
+&amp;&amp; docker-php-ext-install zip \
+&amp;&amp; curl -o installer &quot;$composer_url&quot; \
+&amp;&amp; echo &quot;$composer_checksum *installer&quot; | shasum –c –a 384 \
+&amp;&amp; php installer --install-dir=/usr/local/bin --filename=composer \
+&amp;&amp; rm -rf /var/lib/apt/lists/*
+</code> 
+<p>This Dockerfile inherits all of the instructions from the <a href="https://hub.docker.com/_/php/" target="_blank">official PHP Docker image</a>, which installs the PHP runtime. On top of that base image, the build process will install Python, Git, the AWS CLI, and <a href="https://getcomposer.org/" target="_blank">Composer</a>, a dependency management tool for PHP. We’ve installed the AWS CLI and Git as tools we can use during builds. For example, using the AWS CLI, we could trigger a notification from <a href="https://aws.amazon.com/sns/" target="_blank">Amazon Simple Notification Service (SNS)</a> when a build is complete or we could use Git to create a new tag to mark a successful build. Finally, the build process cleans up files created by the packaging tools, as recommended in <a href="https://docs.docker.com/engine/userguide/eng-image/dockerfile_best-practices/" target="_blank">Best practices for writing Dockerfiles</a>.</p> 
+<p>Next, we’ll build and push the custom build environment.</p> 
+<ol> 
+<li>Provide&nbsp;authentication details for our registry to the local Docker engine by executing the output of the <a href="http://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_AWSCLI.html#AWSCLI_get-login" target="_blank">login helper</a> provided by the AWS CLI: 
+<code class="lang-bash">aws ecr get-login
+</code> 
+<li>Build and push the Docker image. We’ll use the repository URI returned in the CloudFormation stack output (<em>BuildImageRepositoryUri</em>) as the image tag: 
+<code class="lang-bash">cd php
+docker build -t [BuildImageRepositoryUri] .
+docker push [BuildImageRepositoryUri]</code> 
+</ol> 
+<p>After running these commands, your Docker image is pushed into Amazon ECR and ready to build your project.</p> 
+<h3>Configure the Git repository</h3> 
+<p>The repository we cloned includes a small PHP sample that we can use to test our PHP build environment. The <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/RomanNumerals.php" target="_blank">sample function</a> converts Roman numerals to Arabic numerals. The repository also includes a <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/tests/RomanNumeralsTest.php" target="_blank">sample test</a> to exercise this function. The sample also includes a YAML file called a <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html" target="_blank">build spec</a> that contains commands and related settings that CodeBuild uses to run a build:</p> 
+<code class="lang-yaml">version: 0.1
+phases:
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - composer install
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - phpunit tests</code> 
+<p>This build spec configures CodeBuild to run two commands during the build:</p> 
+<li><code class="lang-yaml">composer install</code> to install <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/composer.json" target="_blank">configured dependencies</a>, such as <a href="https://phpunit.de/" target="_blank">PHPUnit</a> before the build.</li> 
+<li><code class="lang-yaml">phpunit tests</code> to run the unit tests during the build.</li> 
+<p>We will push the sample application to the CodeCommit repo created by the CloudFormation stack. You’ll need to grant your IAM user the required level of access to the AWS services required for CodeCommit and you’ll need to configure your Git client with the appropriate credentials. See <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html" target="_blank">Setup for HTTPS Users Using Git Credentials</a> in the CodeCommit documentation for detailed steps.</p> 
+<p>We’re going to initialize a Git repository for our sample, configure our origin, and push the sample to the master branch in CodeCommit.</p> 
+<ol> 
+<li>Initialize a new Git repository in the sample directory: 
+<code class="lang-bash">cd sample
+git init</code> 
+<li>Add and commit the sample files to the repository: 
+<code class="lang-bash">git add .
+git commit -m &quot;Initial commit&quot;</code> 
+<li>Configure the git remote and push the sample to it. We’ll use the repository clone URL returned in the CloudFormation stack output (<em>SourceCodeRepositoryCloneUrl</em>) as the remote URL: 
+<code class="lang-bash">git remote add origin [SourceCodeRepositoryCloneUrl]
+git push origin master</code> 
+</ol> 
+<p>Now that our sample application has been pushed into source control and our build environment image has been pushed into our Docker registry, we’re ready to create a CodeBuild project and start our first build.</p> 
+<h3>Configure the CodeBuild project</h3> 
+<p>In this section, we’ll walk through the steps for configuring CodeBuild to use the custom build environment.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/02/16/build-configuration-1012x1024.png" /></p> 
+<ol> 
+<li>In the AWS Management Console, open the AWS CodeBuild console, and then choose <strong>Create project</strong>.</li> 
+<li>In <strong>Project name</strong>, type <strong>php-demo</strong>.</li> 
+<li>From <strong>Source provider</strong>, choose <strong>AWS CodeCommit</strong>. &nbsp;From <strong>Repository</strong>, choose <strong>codebuild-sample-php</strong>.</li> 
+<li>In <strong>Environment image</strong>, select <strong>Specify a Docker image</strong>. From <strong>Custom image type</strong>, choose <strong>Amazon ECR</strong>. From <strong>Amazon ECR Repository</strong>, choose <strong>codebuild/php</strong>. &nbsp;From <strong>Amazon ECR image</strong>, choose <strong>latest</strong>.</li> 
+<li>In <strong>Build specification</strong>, select <strong>Use the buildspec.yml in the source code root directory</strong>.</li> 
+<li>In <strong>Artifacts type</strong>, choose <strong>No artifacts</strong>.</li> 
+<li>Choose <strong>Continue</strong> and then choose <strong>Save and Build</strong>.</li> 
+<li>On the next page, from <strong>Branch</strong>, choose <strong>master</strong> and then choose <strong>Start build</strong>.</li> 
+</ol> 
+<p>CodeBuild will pull the build environment image from Amazon ECR and use it to test our application. CodeBuild will show us the status of each build step, the last 20 lines of log messages generated by the build process, and provide a link to <a href="https://aws.amazon.com/cloudwatch/details/" target="_blank">Amazon CloudWatch Logs</a> for more debugging output.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/02/16/build-succeeded-1024x426.png" /></p> 
+<h3>Summary</h3> 
+<p>CodeBuild supports a number of platforms and languages out of the box. By using custom build environments, it can be extended to other runtimes. In this post, we built a PHP environment and demonstrated how to use it to test PHP applications.</p> 
+<p>We’re excited to see how customers extend and use CodeBuild to enable continuous integration and continuous delivery for their applications. Please leave questions or suggestions in the comments or share what you’ve learned extending CodeBuild for your own projects.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-591');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Run Umbraco CMS with Flexible Load Balancing on AWS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ihab Shaaban</span></span> | on 
+<time property="datePublished" datetime="2017-01-06T14:26:18+00:00">06 JAN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/run-umbraco-cms-with-flexible-load-balancing-on-aws/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-487" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=487&amp;disqus_title=Run+Umbraco+CMS+with+Flexible+Load+Balancing+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/devops/run-umbraco-cms-with-flexible-load-balancing-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-487');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In version 7.3, Umbraco CMS the popular open source CMS introduced the flexible load balancing feature, which makes the setup of load-balanced applications a lot easier. In this blog post, we’ll follow the guidelines in the <a title="undefined" href="https://our.umbraco.org/documentation/Getting-Started/Setup/Server-Setup/load-balancing/" target="_blank">Umbraco documentation</a> to set up a load-balanced Umbraco application on AWS. We’ll let <a title="undefined" href="https://aws.amazon.com/elasticbeanstalk/" target="_blank">AWS Elastic Beanstalk</a> manage the deployments, load balancing, auto scaling, and health monitoring for us.</p> 
+<h3>Application Architecture</h3> 
+<p>When you use the flexible load balancing feature, any updates to Umbraco content will be stored in a queue in the master database. Each server in the load-balanced environment will automatically download, process, and cache the updates from the queue, so no matter which server is selected by the <a title="undefined" href="https://aws.amazon.com/elasticloadbalancing/" target="_blank">Elastic Load Balancing</a> to handle the request, the user will always receive the same content. Umbraco administration doesn’t work correctly if accessed from a load-balanced server. For this reason, we’ll set up a non-balanced environment to be accessed only by the administrators and editors.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-01-Arch-med.png" /></p> 
+<p><span id="more-487"></span></p> 
+<h3>Create Elastic Beanstalk Environments</h3> 
+<p>We’ll start by creating a single instance environment for administrators and editors. This environment will have the master database server as an RDS instance. In the Elastic Beanstalk console, choose <strong>Create New Application</strong>. Type a name for the application, and then choose <strong>Create</strong>. When you see the message “No environments currently exist for this application”, choose <strong>Create one now</strong>. Select <strong>Web server environment</strong> for the environment tier.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-02-Create-med.png" /></p> 
+<p>On the <strong>Create a new environment page</strong>, choose <strong>.NET</strong> for Platform, and then choose <strong>Configure more options</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-03-Create-med.png" /></p> 
+<p>On the next page, under <strong>Capacity</strong>, set the <strong>Environment type</strong> to <strong>Single instance</strong>. Under <strong>Database</strong>, for <strong>Engine</strong>, choose <strong>sqlserver</strong>. Set the <strong>Storage</strong> field to, at minimum, <strong>20 GB</strong>, review the information, and then choose <strong>Create environment</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-04-Create-med.png" /></p> 
+<p>Next, we’ll create a load-balanced environment for the front-end users. Follow the steps you used to create the first Elastic Beanstalk environment. When you reach the configuration page, select <strong>High availability</strong>, and then choose <strong>Create environment</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-05-Create-med.png" /></p> 
+<h3>Configure RDS Database Server Security Groups</h3> 
+<p>When we created the RDS DB instance through the first environment, Elastic Beanstalk automatically configured the security to allow the servers in this environment to access the database. We’ll configure the security for the second environment manually. By following these steps, the front-end servers will be able to connect to the database:</p> 
+<ol> 
+<li>In the Elastic Beanstalk console, copy the name of the security group for the front-end environment. You will need this for step 7 of this procedure.</li> 
+<li>In the admin environment, choose <strong>Configuration</strong>, and then choose <strong>RDS</strong>.</li> 
+<li>Choose the<strong> View in RDS Console</strong> link.</li> 
+<li>On the <strong>Details</strong> tab in the RDS console, in the <strong>Security and Network</strong> section, choose <strong>Security Groups</strong>.</li> 
+<li>Choose the name of the active security group to open it in the EC2 console.</li> 
+<li>In the EC2 console, you should see that Elastic Beanstalk has already added a rule for the admin environment.</li> 
+<li>Choose <strong>Edit</strong>, and then choose <strong>Add Rule</strong>. For <strong>Type</strong>, choose <strong>MS SQL</strong>. For <strong>Source</strong>, paste the name of the security group for the front-end environment.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-06-Configure-med.png" /></p> 
+<h3>Handle Session State in a Load Balanced Environment</h3> 
+<p>By default, ASP.NET stores the user’s session in memory. This means the user will lose session information if the next request goes to a different server. To prevent this from happening while keeping the default session provider, <a title="undefined" href="http://docs.aws.amazon.com/ElasticLoadBalancing/latest/DeveloperGuide/elb-sticky-sessions.html" target="_blank">configure sticky sessions for your load balancer</a>.</p> 
+<p>In the Elastic Beanstalk console, navigate to the front-end environment configuration. You can use the <strong>Sessions</strong> section under the <strong>Load Balancing</strong> settings to specify whether the load balancer for the application will allow session stickiness. Select the <strong>Enable Session Stickiness</strong> check box.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-07-Configure-med.png" /></p> 
+<p>When you enable session stickiness, <a title="undefined" href="https://aws.amazon.com/elasticloadbalancing/" target="_blank">ELB</a> will send all requests for a specific user to the same back-end web server. This can result in an imbalance of requests across all back ends, with some servers having more load than others. When you scale down, the termination of an instance can result in a loss of sessions assigned to it. For this reason, consider storing the sessions in a central location like a SQL Server database and use the <a title="undefined" href="https://msdn.microsoft.com/en-us/library/aa478952.aspx" target="_blank">SqlSessionStateStore</a> provider.</p> 
+<p>AWS offers other options, for example, storing the sessions in a NoSQL database using the <a title="undefined" href="http://docs.aws.amazon.com/AWSSdkDocsNET/V3/DeveloperGuide/net-dg-dynamodb-session.html" target="_blank">DynamoDBSessionStore</a> provider or using the <a title="undefined" href="http://aws.amazon.com/elasticache/" target="_blank">Amazon ElastiCache</a> to store the sessions in the cloud as in-memory cache. For information, see the <a title="undefined" href="https://blogs.aws.amazon.com/net/post/TxMREMF0459SXT/ElastiCache-as-an-ASP-NET-Session-Store" target="_blank">ElastiCache as an ASP.NET Session Store</a> blog post.</p> 
+<h3>A One-Step Alternative: CloudFormation Template</h3> 
+<p>You can download and use this <a title="undefined" href="https://github.com/awslabs/aws-cfn-umbraco-load-balancing-template" target="_blank">CloudFormation template</a> to create resources similar to those created in the preceding steps. If you use the template, you will still have to prepare and publish your own version of Umbraco from a local machine. We’ll do that next.</p> 
+<p>The template is written to create the RDS database as a separate resource from the environments. You’ll see in the previous steps the DB is tied to the admin environment (for example, if you delete the environment, the DB will be deleted, too). This works well during development or testing, but is not ideal for production. If you should accidentally delete your database, by default, Elastic Beanstalk creates a snapshot on environment termination so it can be recovered. For information about how to decouple the DB from your environment, see <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/AWSHowTo.RDS.html" target="_blank">Using Elastic Beanstalk with Amazon RDS</a> in the Elastic Beanstalk Developer Guide.</p> 
+<h3>Prepare the Umbraco CMS Locally</h3> 
+<p>To keep things simple, we’ll download Umbraco from <a title="undefined" href="https://our.umbraco.org/download" target="_blank">our.umbraco.org/download</a>. As of this writing, the current version is v7.5.</p> 
+<p>From IIS on the local machine, add a new website with the following settings:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/30/Umbraco-08-Prepare-med.png" /></p> 
+<h3>File and Folder Permissions</h3> 
+<p>To ensure the Umbraco installation will run smoothly, grant the read and write permissions to the application pool user for Umbraco’s files and folders. In IIS, right-click the UmbracoApp website, and then click <strong>Edit Permissions</strong>. Grant modify or full-control permissions to IIS_IUSRS. For information, see <a title="undefined" href="https://our.umbraco.org/documentation/Getting-Started/Setup/Server-Setup/permissions" target="_blank">File and folder permissions</a> in the Umbraco documentation.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-09-Prepare-med.png" /></p> 
+<p>When we deploy the application to AWS, we need to update the permissions for IIS_IUSRS, too. It isn’t easy to access and grant permissions to each Windows server in the environment. If we create an .ebextension, Elastic Beanstalk can automate the permissions process. It can also allow us to run extra commands during the application deployment:</p> 
+<code class="lang-yaml">commands:
+create_default_website_folder:
+command: if not exist &quot;C:\inetpub\wwwroot&quot; mkdir &quot;C:\inetpub\wwwroot&quot;
+update_iis_user_permissions:
+command: Icacls.exe &quot;C:\inetpub\wwwroot&quot; /grant IIS_IUSRS:(OI)(CI)F
+</code> 
+<p>Here is the .ebextension saved as a .config file:</p> 
+C:\inetpub\wwwroot\UmbracoCms\App_Data\.ebextensions\update_iis_permissions.config 
+<p>Although this one is written in YAML, you can write .ebextensions in JSON, too. You can extend the .ebextension by writing a test to ensure the commands run on the first deployment only and not on redeployments. For more information, see the <a title="undefined" href="https://blogs.aws.amazon.com/net/post/Tx3N7JHP24J1EJ5/Configuring-Advanced-Logging-on-AWS-Elastic-Beanstalk" target="_blank">Configuring Advanced Logging on AWS Elastic Beanstalk</a> blog post or the <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/ebextensions.html" target="_blank">.ebextensions documentation</a>.</p> 
+<h3>Custom Machine Key</h3> 
+<p>By default, ASP.NET generates a unique machine key for each server. In a load-balanced environment, this will cause validation errors and invalid view state. To fix this issue, make sure the machine key is the same on all servers. One of the simplest ways to generate a custom key is from IIS.</p> 
+<p>In IIS, on the <strong>Machine Key</strong> page, click <strong>Generate Keys</strong>. Change the settings as follows, and click <strong>Apply</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-10-Prepare-med.png" /></p> 
+<h3>Create an Empty Database</h3> 
+<p>Before running the CMS installation, we’ll create an empty database in our RDS DB server. Open AWS Explorer in Visual Studio, right-click the DB instance we created in the first step, and then select <strong>Create SQL Server Database</strong>.</p> 
+<p>If you encounter any problems connecting to the RDS server, add the IP address of the development machine to the RDS DB security group. Make sure your Windows Firewall allows outbound access for 1433 port.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-11-Prepare-med.png" /></p> 
+<h3>Run the Umbraco CMS Installation</h3> 
+<p>In IIS, click <strong>Browse</strong>. The Umbraco installation should start. Enter the required information and use the RDS DB information to complete the fields for the database configuration step.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-12-Prepare-med.png" /></p> 
+<h3>Publish Umbraco CMS to AWS</h3> 
+<p>Finally, open the UmbracoApp folder in Visual Studio. From the <strong>File</strong> menu, click <strong>Open</strong>. Click <strong>Web site</strong>, click <strong>File system</strong>, and then navigate to C:\inetpub\wwwroot\UmbracoCms. Right-click the project, and then select <strong>Publish to AWS</strong> to deploy to the admin environment and then deploy again to the front-end environment.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-13-Deploy-med.png" /></p> 
+<p>The <a title="undefined" href="https://aws.amazon.com/ebs/" target="_blank">EBS</a> volumes attached to the instances in the environments are isolated and not shared. When compared to other load-balanced solutions that use shared storage, there is no extra work required to separate Umbraco logging file paths, change XML cache content settings, or update the configuration for Lucene/Examine indexes.</p> 
+<h3>Conclusion</h3> 
+<p>You now have an Umbraco application that is ready to scale up or down on AWS, and you can take this further using Elastic Beanstalk, there are many options to customize your environments, for example, associating a <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/customdomains.html" target="_blank">custom domain</a> name or enabling <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/configuring-https.html" target="_blank">HTTPS</a>.</p> 
+<p>We hope you found the information in this post helpful. If you have questions or other feedback, please leave it in the comments below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-487');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Registering Spot Instances with AWS OpsWorks Stacks</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -834,248 +1054,6 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-374');
 });
 </script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Building a Cross-Region/Cross-Account Code Deployment Solution on AWS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">BK Chaurasiya</span></span> | on 
-<time property="datePublished" datetime="2016-11-01T11:37:07+00:00">01 NOV 2016</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-12" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=12&amp;disqus_title=Building+a+Cross-Region%2FCross-Account+Code+Deployment+Solution+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-12');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="margin-left: -0.0in">Many of our customers have expressed a desire to build an end-to-end release automation workflow solution that can deploy changes across multiple regions or different AWS accounts.</p> 
-<p style="margin-left: -.0in">In this post, I will show you how you can easily build an automated cross-region code deployment solution using <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> (a <a href="https://aws.amazon.com/devops/continuous-delivery/">continuous delivery</a> service), <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> (an automated application deployment service), and <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> (a serverless compute service). In the Taking This Further section, I will also show you how to extend what you’ve learned so that you can create a cross-account deployment solution.</p> 
-<p style="margin-left: -.0in">We will use AWS CodeDeploy and AWS CodePipeline to create a multi-pipeline solution running in two regions (Region A and Region B). Any update to the source code in Region A will trigger validation and deployment of source code changes in the pipeline in Region A. A successful processing of source code in all of its AWS CodePipeline stages will invoke a Lambda function as a custom action, which will copy the source code into an S3 bucket in Region B. After the source code is copied into this bucket, it will trigger a similar chain of processes into the different AWS CodePipeline stages in Region B. See the following diagram.</p> 
-<p style="margin-left: -.0in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram1.png" /></p> 
-<p style="margin-left: -.0in">This architecture follows best practices for multi-region deployments, sequentially deploying code into one region at a time upon successful testing and validation. This architecture lets you place controls to stop the deployment if a problem is identified with release. This prevents a bad version from being propagated to your next environments.</p> 
-<p style="margin-left: -.0in">This post is based on the <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/getting-started-w.html">Simple Pipeline Walkthrough</a> in the AWS CodePipeline User Guide. I have provided an <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> template that automates the steps for you.</p> 
-<p>&nbsp;</p> 
-<p style="margin-left: -0pt"><strong>Prerequisites</strong></p> 
-<p style="margin-left: -0pt">You will need an AWS account with administrator permissions. If you don’t have an account, you can sign up for one <a href="https://portal.aws.amazon.com/gp/aws/developer/registration/index.html">here</a>. You will also need sample application source code that you can download <a href="https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/source/xrcodedeploy_linux.zip">here</a>.</p> 
-<p style="margin-left: -0pt">We will use the CloudFormation template provided in this post to create the following resources:</p> 
-<li style="margin-left: .0in">Amazon S3 buckets to host the source code for the sample application. You can use a GitHub repository if you prefer, but you will need to change the CloudFormation template.</li> 
-<li style="margin-left: .0in">AWS CodeDeploy to deploy the sample application.</li> 
-<li style="margin-left: .0in">AWS CodePipeline with predefined stages for this setup.</li> 
-<li style="margin-left: .0in">AWS Lambda as a custom action in AWS CodePipeline. It invokes a function to copy the source code into another region or account. If you are deploying to multiple accounts, cross-account S3 bucket permissions are required.</li> 
-<p style="margin-left: -.0in"><strong>Note</strong>: The resources created by the CloudFormation template may result in charges to your account. The cost will depend on how long you keep the CloudFormation stack and its resources.</p> 
-<p style="margin-left: -0.5pt"><strong>Let’s Get Started</strong></p> 
-<p style="margin-left: -.0in">Choose your source and destination regions for a continuous delivery of your source code. In this post, we are deploying the source code to two regions: first to <strong>Region A (Oregon) </strong>and then to<strong> Region B (N. Virginia/US Standard)</strong>. You can choose to extend the setup to three or more regions if your business needs require it.</p> 
-<p style="margin-left: -.0in"><strong>Step 1</strong>: Create Amazon S3 buckets for hosting your application source code in your source and destination regions. Make sure versioning is enabled on these buckets. For more information, see <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/getting-started-w.html#getting-started-w-create-source-location">these steps</a> in the AWS CodePipeline User Guide.</p> 
-<p style="margin-left: -.0in">For example:</p> 
-<p style="margin-left: .5in">xrdeployment-sourcecode-us-west-2-&lt;AccountID&gt; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Source code bucket in Region A – Oregon)</p> 
-<p style="margin-left: .5in">xrdeployment-sourcecode-us-east-1-&lt;AccountID&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Source code bucket in Region B – N. Virginia/US Standard)</p> 
-<p style="margin-left: -.0in"><strong>Note</strong>: The source code bucket in Region B is also the destination bucket in Region A. Versioning on the bucket ensures that AWS CodePipeline is executed automatically when source code is changed.</p> 
-<p style="margin-left: -0pt"><strong>Configuration Setup in Source Region A</strong></p> 
-<p style="margin-left: -0pt">Be sure you are in the US West (Oregon) region. You can use the drop-down menu to switch regions.</p> 
-<p style="margin-left: -0pt">&nbsp;<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram2-1.png" /></p> 
-<p style="margin-left: -0pt"><strong>Step 2</strong>: In the AWS CloudFormation console, choose <a href="https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=XRDepDemoStackA&amp;templateURL=https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/template/XregionCodePipeLineCF.template"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png">Simple Pipeline Walkthrough</a> are automated when you use this template.</p> 
-<p style="margin-left: -0pt">This template creates a custom Lambda function and AWS CodePipeline and AWS CodeDeploy resources to deploy a sample application. You can customize any of these components according to your requirements later.</p> 
-<p style="margin-left: -0pt">On the <strong>Specify Details</strong> page, do the following:</p> 
-<ol> 
-<li style="margin-left: -0pt">In <strong>Stack</strong> name, type a name for the stack (for example, <strong>XRDepDemoStackA</strong>).</li> 
-<li style="margin-left: -0pt">In <strong>AppName</strong>, you can leave the default, or you can type a name of up to 40 characters. Use only lowercase letters, numbers, periods, and hyphens.</li> 
-<li style="margin-left: -0pt">In <strong>InstanceCount</strong> and <strong>InstanceType</strong>, leave the default values. You might want to change them when you extend this setup for your use case.</li> 
-<li style="margin-left: -0pt">In <strong>S3SourceCodeBucket</strong>, specify the name of the S3 bucket where source code is placed (<strong>xrdeployment-sourcecode-us-west-2-&lt;AccountID</strong>&gt;). See step 1.</li> 
-<li style="margin-left: -0pt">In <strong>S3SourceCodeObject</strong>, specify the name of the source code zip file. The sample source code, <strong>xrcodedeploy_linux.zip</strong>, is provided for you.</li> 
-<li style="margin-left: -0pt">Choose a destination region from the drop-down list. For the steps in this blog post, choose <strong>us-east-1</strong>.</li> 
-<li style="margin-left: -0pt">In <strong>DestinationBucket</strong>, type the name of the bucket in the destination region where the source code will be copied&nbsp; (<strong>xrdeployment-sourcecode-us-east-1-&lt;AccountID&gt;</strong>). See step 1.</li> 
-<li style="margin-left: -0pt">In <strong>KeyPairName</strong>, choose the name of Amazon EC2 key pair. This enables remote login to your instances. You cannot sign in to your instance without generating a key pair and downloading a private key file. For information about generating a key pair, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html#having-ec2-create-your-key-pair">these steps</a>.</li> 
-<li style="margin-left: -0pt">In <strong>SSHLocation</strong>, type the IP address from which you will access the resources created in this stack. This is a recommended security best practice.</li> 
-<li style="margin-left: -0pt">In <strong>TagValue</strong>, type a value that identifies the deployment stage in the target deployment (for example, Alpha).</li> 
-<li style="margin-left: -0pt">Choose <strong>Next</strong>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram3-1024x689.png" /></p> 
-<p style="margin-left: -0pt">(Optional) On the <strong>Options</strong> page, in <strong>Key</strong>, type Name. In <strong>Value</strong>, type a name that will help you easily identify the resources created in this stack. This name will be used to tag all of the resources created by the template. These tags are helpful if you want to use or modify these resources later on. Choose <strong>Next</strong>.</p> 
-<p style="margin-left: -0pt">On the <strong>Review</strong> page, select the <strong>I acknowledge that this template might cause AWS CloudFormation to create IAM resources </strong>check box. (It will.) Review the other settings, and then choose <strong>Create</strong>.</p> 
-<p style="margin-left: -0pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram4.png" /></p> 
-<p style="margin-left: -0pt">It will take several minutes for CloudFormation to create the resources on your behalf. You can watch the progress messages on the <strong>Events</strong> tab in the console.</p> 
-<p style="margin-left: -0pt">When the stack has been created, you will see a CREATE_COMPLETE message in the <strong>Status</strong> column on the <strong>Overview</strong> tab.</p> 
-<p style="margin-left: -0pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram5.png" /></p> 
-<p style="margin-left: -0pt"><strong>Configuration Setup in Destination Region B</strong></p> 
-<p style="margin-left: -0pt"><strong>Step 3</strong>: We now need to create AWS resources in Region B. Use the drop-down menu to switch to US East (N. Virginia).</p> 
-<p style="margin-left: -0pt"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram6.png" /></p> 
-<p style="margin-left: -0pt">In the AWS CloudFormation console, choose&nbsp;<a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=XRDepDemoStackB&amp;templateURL=https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/template/XregionCodePipeLineCF.template"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png" /></a> to launch the CloudFormation template.</p> 
-<p style="margin-left: -0pt">On the <strong>Specify Details</strong> page, do the following:</p> 
-<ol> 
-<li style="margin-left: -0pt">In <strong>Stack</strong> name, type a name for the stack (for example, <strong>XRDepDemoStackB</strong>).</li> 
-<li style="margin-left: -0pt">In <strong>AppName</strong>, you can leave the default, or you can type a name of up to 40 characters. Use only lowercase letters, numbers, periods, and hyphens.</li> 
-<li style="margin-left: -0pt">In <strong>InstanceCount</strong> and <strong>InstanceType</strong>, leave the default values. You might want to change them when you extend this setup for your use case.</li> 
-<li style="margin-left: -0pt">In <strong>S3SourceCodeBucket</strong>, specify the name of the S3 bucket where the source code is placed (<strong>xrdeployment-sourcecode-us-east-1-&lt;AccountID&gt;</strong>). &nbsp;This is same as the <strong>DestinationBucket</strong> in step 2.</li> 
-<li style="margin-left: -0pt">In <strong>S3SourceCodeObject</strong>, specify the name of the source code zip file. The sample source code (<strong>xrcodedeploy_linux.zip</strong>) is provided for you.</li> 
-<li style="margin-left: -0pt">From the <strong>DestinationRegion</strong> drop-down list, choose <strong>none</strong>.</li> 
-<li style="margin-left: -0pt">In <strong>DestinationBucket</strong>, type <strong>none</strong>. This is our final destination region for this setup.</li> 
-<li style="margin-left: -0pt">In the <strong>KeyPairName</strong>, choose the name of the EC2 key pair.</li> 
-<li style="margin-left: -0pt">In <strong>SSHLocation</strong>, type the IP address from which you will access the resources created in this stack.</li> 
-<li style="margin-left: -0pt">In <strong>TagValue</strong>, type a value that identifies the deployment stage in the target deployment (for example, Beta).</li> 
-</ol> 
-<p style="margin-left: -0pt">Repeat the steps in the Configuration Setup in Source Region A until the CloudFormation stack has been created. You will see a CREATE_COMPLETE message in the <strong>Status</strong> column of the console.</p> 
-<p style="margin-left: -0pt"><strong>So What Just Happened?</strong></p> 
-<p style="margin-left: -0pt">We have created an EC2 instance in both regions. These instances are running a sample web application. We have also configured AWS CodeDeploy deployment groups and created a pipeline where source changes propagate to AWS CodeDeploy groups in both regions. AWS CodeDeploy deploys a web page to each of the Amazon EC2 instances in the deployment groups. See the <a>diagram</a> at the beginning of this post.</p> 
-<p style="margin-left: -0pt">The pipelines in both regions will start automatically as they are created. You can view your pipelines in the AWS CodePipeline console. You’ll find a link to AWS CodePipeline on the <strong>Outputs</strong> section of your CloudFormation stack.</p> 
-<p style="margin-left: -0pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram7.png" /></p> 
-<p style="margin-left: -0pt"><strong>Note</strong>: Your pipeline will fail during its first automatic execution because we haven’t placed source code into the <strong>S3SourceCodeBucket</strong> in the source region (Region A).</p> 
-<p style="margin-left: -0pt"><strong>Step 4</strong>: Download the sample source code file, xrcodedeploy_linux.zip, from this <a href="https://s3-us-west-2.amazonaws.com/aws-xregion-xaccount-sample/source/xrcodedeploy_linux.zip">link</a>&nbsp;and place it in the source code S3 bucket for Region A. This will kick off AWS CodePipeline.</p> 
-<p style="margin-left: -0pt"><strong>Step 5</strong>: Watch the progress of your pipeline in the source region (Region A) as it completes the actions configured for each of its stages and invokes a custom Lambda action that copies the source code into Region B. Then watch the progress of your pipeline in Region B (final destination region) after the pipeline succeeds in the source region (Region A). The pipeline in the destination region (Region B) should kick off automatically as soon as AWS CodePipeline in the source region (Region A) completes execution.</p> 
-<p style="margin-left: -0pt">When each stage is complete, it turns from blue (in progress) to green (success).</p> 
-<p style="margin-left: -0pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram8.png" /></p> 
-<p style="margin-left: -0pt"><strong>Congratulations</strong>! You just created a cross-region deployment solution using AWS CodePipeline, AWS CodeDeploy, and AWS Lambda. You can place a new version of source code in your S3 bucket and watch it progress through AWS CodePipeline in all the regions.</p> 
-<p style="margin-left: -0pt"><strong>Step 6</strong>: Verify your deployment. When <strong>Succeeded</strong> is displayed for the pipeline status in the final destination region, view the deployed application:</p> 
-<ol> 
-<li style="margin-left: 4.5pt">In the status area for <strong>Beta</strong>–<strong>stage </strong>in the final destination region, choose <strong>Details</strong>. The details of the deployment will appear in the AWS CodeDeploy console. You can also pick any other stage in other regions.</li> 
-<li style="margin-left: 4.5pt">In the <strong>Deployment Details</strong> section, in <strong>Instance ID</strong>, choose the instance ID of any of the successfully deployed instance.</li> 
-<li style="margin-left: 4.5pt">In the Amazon EC2 console, on the <strong>Description</strong> tab, in <strong>Public DNS</strong>, copy the address, and then paste it into the address bar of your web browser. The web page opens the sample web application that was built for you</li> 
-</ol> 
-<p style="margin-left: -pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram9.png" /></p> 
-<p style="margin-left: -0pt"><strong>Taking This Further </strong></p> 
-<ol> 
-<li style="margin-left: -0pt">Using the CloudFormation template provided to you in this post, you can extend the setup to three regions.</li> 
-<li style="margin-left: -0pt">So far we have deployed code in two regions within one AWS account. There may be a case where your environments exist in different AWS accounts. For example, assume a scenario in which:</li> 
-</ol> 
-<li style="margin-left: 4.5pt">You have your development environment running in Region A in AWS Account A.</li> 
-<li style="margin-left: 4.5pt">You have your QA environment running in Region B in AWS Account B.</li> 
-<li style="margin-left: 4.5pt">You have a staging or production environment running in Region C in AWS Account C.</li> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/Diagram10.png" /></p> 
-<p style="margin-left: -0pt">You will need to configure cross-account permissions on your destination S3 bucket and delegate these permissions to a role that Lambda assumed in the source account. Without these permissions, the Lambda function in AWS CodePipeline will not be able to copy the source code into the destination S3 bucket. (See the lambdaS3CopyRole in the CloudFormation template provided with this post.)</p> 
-<p style="margin-left: -0pt">Create the following bucket policy on the destination bucket in Account B:</p> 
-<p style="margin-left: .5in">{</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Version”: “2012-10-17”,</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Statement”: [</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Sid”: “DelegateS3Access”,</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Effect”: “Allow”,</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Principal”: {</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “AWS”: “arn:aws:iam::&lt;Account A ID&gt;:root”</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; },</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Action”: “s3:*”,</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Resource”: [</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “arn:aws:s3::: &lt;destination bucket &gt; /*”,</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “arn:aws:s3::: &lt;destination bucket &gt; “</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }</p> 
-<p style="margin-left: .5in">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ]</p> 
-<p style="margin-left: .5in">}</p> 
-<p>&nbsp;</p> 
-<p style="margin-left: -0pt">Repeat this step as you extend the setup to additional accounts.</p> 
-<p style="margin-left: -0pt">Create your CloudFormation stacks in Account B and Account C (follow steps 2 and 3 in these accounts, respectively) and your pipeline will execute sequentially.</p> 
-<p style="margin-left: -0pt">You can use another code repository solution like AWS CodeCommit or Github as your source and target repositories.</p> 
-<p style="margin-left: -0pt"><strong>Wrapping Up</strong></p> 
-<p style="margin-left: -0pt">After you’ve finished exploring your pipeline and its associated resources, you can do the following:</p> 
-<li style="margin-left: 9.0pt">Extend the setup. Add more stages to your pipeline in AWS CodePipeline.</li> 
-<li style="margin-left: 9.0pt"><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-delete-stack.html">Delete the stack</a> in AWS CloudFormation, which deletes the pipeline, its resources, and the stack itself.</li> 
-<p style="margin-left: 9.0pt">This is the option to choose if you no longer want to use the pipeline or any of its resources. Cleaning up resources you’re no longer using is important because you don’t want to continue to be charged.</p> 
-<p style="margin-left: 9.0pt"><strong>To delete the CloudFormation stack:</strong></p> 
-<ol> 
-<li>Delete the Amazon S3 buckets used as the artifact store in AWS CodePipeline in the source and destination regions. Although this bucket was created as part of the CloudFormation stack, Amazon S3 does not allow CloudFormation to delete buckets that contain objects.To delete this bucket, open the <a href="https://console.aws.amazon.com/s3/">Amazon S3 console</a>, select the buckets you created in this setup, and then delete them. For more information, see <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/delete-or-empty-bucket.html">Delete or Empty a Bucket</a>.</li> 
-<li>Follow the steps to <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-delete-stack.html">delete a stack in the AWS CloudFormation User Guide</a>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<p>I would like to thank my colleagues Raul Frias, Asif Khan and Frank Li for their contributions to this post.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-12');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">From ELK Stack to EKK: Aggregating and Analyzing Apache Logs with Amazon Elasticsearch Service, Amazon Kinesis, and Kibana</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Pubali Sen</span></span> | on 
-<time property="datePublished" datetime="2016-11-01T10:20:51+00:00">01 NOV 2016</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/from-elk-stack-to-ekk-aggregating-and-analyzing-apache-logs-with-amazon-elasticsearch-service-amazon-kinesis-and-kibana/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>By&nbsp;Pubali Sen, Shankar Ramachandran</em></p> 
-<p>Log aggregation is critical to your operational infrastructure. A reliable, secure, and scalable log aggregation solution makes all the difference during a crunch-time debugging session.</p> 
-<p>In this post, we&nbsp;explore an alternative to the popular log aggregation solution, the ELK stack (Elasticsearch, Logstash, and Kibana): the EKK stack (Amazon Elasticsearch Service, Amazon Kinesis, and Kibana). The EKK solution eliminates the undifferentiated heavy lifting of deploying, managing, and scaling your log aggregation solution. With the EKK stack, you can focus on analyzing logs and debugging your application, instead of managing and scaling the system that aggregates the logs.</p> 
-<p>In this blog post, we describe how to use an EKK stack to monitor Apache logs. Let’s look at the components of the EKK solution.</p> 
-<p>Amazon Elasticsearch Service is a popular search and analytics engine that provides real-time application monitoring and log and clickstream analytics. For this post, you will store and index Apache logs in Amazon ES. As a managed service, Amazon ES is easy to deploy, operate, and scale in the AWS Cloud. Using a managed service also eliminates administrative overhead, like patch management, failure detection, node replacement, backing up, and monitoring. Because Amazon ES includes built-in integration with Kibana, it eliminates installing and configuring that platform. This simplifies your process further. For more information about Amazon ES, see the <a href="https://aws.amazon.com/elasticsearch-service/" target="_blank">Amazon Elasticsearch Service detail page.</a></p> 
-<p>Amazon Kinesis Agent is an easy-to-install standalone Java software application that collects and sends data. The agent continuously monitors the Apache log file and ships new data to the delivery stream. This agent is also responsible for file rotation, checkpointing, retrying upon failures, and delivering the log data reliably and in a timely manner. For more information, see Writing to <a href="http://docs.aws.amazon.com/firehose/latest/dev/writing-with-agents.html" target="_blank">Amazon Kinesis Firehose Using Amazon Kinesis Agent</a> or <a href="https://github.com/awslabs/amazon-kinesis-agent" target="_blank">Amazon Kinesis Agent</a> in GitHub.</p> 
-<p>Amazon Kinesis Firehose provides the easiest way to load streaming data into AWS. In this post, Firehose helps you capture and automatically load the streaming log data to Amazon ES and back it up in Amazon Simple Storage Service (Amazon S3). For more information, see the <a href="https://aws.amazon.com/kinesis/firehose/" target="_blank">Amazon Kinesis Firehose detail page.</a></p> 
-<p>You’ll provision an EKK stack by using an AWS CloudFormation template. The template provisions an Apache web server and sends the Apache access logs to an Amazon ES cluster using Amazon Kinesis Agent and Firehose. You’ll back up the logs to an S3 bucket. To see the logs, you’ll leverage the Amazon ES Kibana endpoint.</p> 
-<p>By using the template, you can quickly complete the following tasks:</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Provision an Amazon ES cluster.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Provision an Amazon Elastic Compute Cloud (Amazon EC2) instance.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Install Apache HTTP Server version 2.4.23.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Install the Amazon Kinesis Agent on the web server.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Provision an Elastic Load Balancing load balancer.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Create the Amazon ES index and the associated log mappings.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Create an Amazon Kinesis Firehose delivery stream.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Create all AWS Identity and Access Management (IAM) roles and policies. For example, the Firehose delivery stream backs up the Apache logs to an S3 bucket. This requires that the Firehose delivery stream be associated with a role that gives it permission to upload the logs to the correct S3 bucket.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Configure Amazon CloudWatch Logs log streams and log groups for the Firehose delivery stream. This helps you to troubleshoot when the log events don’t reach their destination.</p> 
-<p>EKK Stack Architecture<br /> The following architecture diagram shows how an EKK stack works.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/11/01/Arch8-2-2-2.png" /></p> 
-<p>Prerequisites<br /> To build the EKK stack, you must have the following:</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; An Amazon EC2 key pair in the US West (Oregon) Region. If you don’t have one, create one.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; An S3 bucket in the US West (Oregon) Region. If you don’t have one, create one.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; A default VPC in the US West (Oregon) Region. If you have deleted the default VPC, request one.</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Administrator-level permissions in IAM to enable Amazon ES and Amazon S3 to receive the log data from the EC2 instance through Firehose.</p> 
-<p>Getting Started<br /> Begin by launching the AWS CloudFormation template to create the stack.</p> 
-<p>1.&nbsp;&nbsp;&nbsp;&nbsp; In the AWS CloudFormation console, choose &nbsp;to &nbsp; <a href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=estemplatev4&amp;templateURL=https://s3.amazonaws.com/scriptdepot/es.template" target="_blank"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/24/launch-stack.png" /></a>&nbsp;the AWS CloudFormation template. Make sure that you are in the US West (Oregon) region.</p> 
-<p>Note: If you want to download the template to your computer and then upload it to AWS CloudFormation, you can do so from this Amazon S3 bucket. Save the template to a location on your computer that’s easy to remember.</p> 
-<p>2.&nbsp;&nbsp;&nbsp;&nbsp; Choose Next.</p> 
-<p>3.&nbsp;&nbsp;&nbsp;&nbsp; On the Specify Details page, provide the following:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/11/01/Screen-Shot-2016-11-01-at-9.44.20-AM.png" /></p> 
-<p>a)&nbsp;&nbsp;&nbsp; Stack Name: A name for your stack.</p> 
-<p>b)&nbsp;&nbsp;&nbsp; InstanceType: Select the instance family for the EC2 instance hosting the web server.</p> 
-<p>c)&nbsp;&nbsp;&nbsp;&nbsp; KeyName: Select the Amazon EC2 key pair in the US West (Oregon) Region.</p> 
-<p>d)&nbsp;&nbsp;&nbsp; SSHLocation: The IP address range that can be used to connect to the EC2 instance by using SSH. Accept the default, 0.0.0.0/0.</p> 
-<p>e)&nbsp;&nbsp;&nbsp; WebserverPort: The TCP/IP port of the web server. Accept the default, 80.</p> 
-<p>4.&nbsp;&nbsp;&nbsp;&nbsp; Choose Next.</p> 
-<p>5.&nbsp;&nbsp;&nbsp;&nbsp; On the Options page, optionally specify tags for your AWS CloudFormation template, and then choose Next.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/createStack2.png" /></p> 
-<p>6.&nbsp;&nbsp;&nbsp;&nbsp; On the Review page, review your template details. Select the Acknowledgement checkbox, and then choose Create to create the stack.</p> 
-<p>It takes about 10-15 minutes to create the entire stack.</p> 
-<p>Configure the Amazon Kinesis Agent<br /> After AWS CloudFormation has created the stack, configure the Amazon Kinesis Agent.</p> 
-<p>1.&nbsp;&nbsp;&nbsp;&nbsp; In the AWS CloudFormation console, choose the Resources tab to find the Firehose delivery stream name. You need this to configure the agent. Record this value because you will need it in step 3.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/createStack3.png" /></p> 
-<p>2.&nbsp;&nbsp;&nbsp;&nbsp; On the Outputs tab, find and record the public IP address of the web server. You need it to connect to the web server using SSH to configure the agent. For instructions on how to connect to an EC2 instance using SSH, see <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AccessingInstancesLinux.html" target="_blank">Connecting to Your Linux Instance Using SSH</a>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/outputs.png" /></p> 
-<p>3. On the web server’s command line, run the following command:</p> 
-<p>sudo vi /etc/aws-kinesis/agent.json</p> 
-<p>This command opens the configuration file, agent.json, as follows.</p> 
-<em><code class="lang-json">{ &quot;cloudwatch.emitMetrics&quot;: true, &quot;firehose.endpoint&quot;: &quot;firehose.us-west-2.amazonaws.com&quot;, &quot;awsAccessKeyId&quot;: &quot;&quot;, &quot;awsSecretAccessKey&quot;: &quot;&quot;, &quot;flows&quot;: [ { &quot;filePattern&quot;: &quot;/var/log/httpd/access_log&quot;, &quot;deliveryStream&quot;: &quot;&quot;, &quot;dataProcessingOptions&quot;: [ { &quot;optionName&quot;: &quot;LOGTOJSON&quot;, &quot;logFormat&quot;: &quot;COMMONAPACHELOG&quot; } ] } ] } </code></em> 
-<p>4.&nbsp;&nbsp;&nbsp;&nbsp; For the deliveryStream key, type the value of the KinesisFirehoseDeliveryName that you retrieved from the stack’s Resources tab. After you type the value, save and terminate the agent.json file.</p> 
-<p>5.&nbsp;&nbsp;&nbsp;&nbsp; Run the following command on the CLI:</p> 
-<p>sudo service aws-kinesis-agent restart</p> 
-<p>6. &nbsp; &nbsp; On the AWS CloudFormation console choose the resources tab and note the name of the Amazon ES cluster corresponding to the LogicalID&nbsp;ESDomain.</p> 
-<p>7.&nbsp;&nbsp;&nbsp;&nbsp; Go to AWS Management Console, and choose Amazon Elasticsearch Service. Under My Domains, you can see the Amazon ES domain that the AWS CloudFormation template created.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/createStac5.png" /></p> 
-<p>Configure Kibana and View Your Apache Logs<br /> Amazon ES provides a default installation of Kibana with every Amazon ES domain. You can find the Kibana endpoint on your domain dashboard in the Amazon ES console.</p> 
-<p>1.&nbsp;&nbsp;&nbsp;&nbsp; In the Amazon ES console, choose the Kibana endpoint.</p> 
-<p>2.&nbsp;&nbsp;&nbsp;&nbsp; In Kibana, for Index name or pattern, type logmonitor. logmonitor is the name of the AWS ES index that you created for the web server access logs. The health checks from Amazon Elastic Load Balancing generate access logs on the web server, which flow through the EKK pipeline to Kibana for discovery and visualization.</p> 
-<p>3. &nbsp; &nbsp; In Time-field name, select datetime.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/kibana1.png" /></p> 
-<p>4.&nbsp;&nbsp;&nbsp;&nbsp; On the Kibana console, choose the Discover tab to see the Apache logs.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/kibana3.png" /></p> 
-<p>Use Kibana to visualize the log data by creating bar charts, line and scatter plots, histograms, pie charts, etc.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/Kibana4.png" /></p> 
-<p>Pie chart of IP addresses accessing the web server in the last 30 days</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/Kibana5.png" /></p> 
-<p>Bar chart of IP addresses accessing the web server in the last 5 minutes</p> 
-<p>You can graph information about http response, bytes, or IP address to provide meaningful insights on the Apache logs. Kibana also facilitates making dashboards by combining graphs.</p> 
-<p>Monitor Your Log Aggregator</p> 
-<p>To monitor the Firehose delivery stream, navigate to the Firehose console. Choose the stream, and then choose the Monitoring tab to see the Amazon CloudWatch metrics for the stream.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/monito1.png" /></p> 
-<p>&nbsp;</p> 
-<p>When log delivery fails, the Amazon S3 and Amazon ES logs help you troubleshoot. For example, the following screenshot shows logs when delivery to an Amazon ES destination fails because the date mapping on the index was not in line with the ingest log.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/10/17/monitor2.png" /></p> 
-<p>Conclusion<br /> In this post, we showed how to ship Apache logs to Kibana by using Amazon Kinesis Agent, Amazon ES, and Firehose. It’s worth pointing out that Firehose automatically scales up or down based on the rate at which your application generates logs. To learn more about scaling Amazon ES clusters, see the <a href="http://docs.aws.amazon.com/elasticsearch-service/latest/developerguide/what-is-amazon-elasticsearch-service.html#concepts-scaling" target="_blank">Amazon Elasticsearch Service Developer Guide</a>.</p> 
-<p>Managed services like Amazon ES and Amazon Kinesis Firehose simplify provisioning and managing a log aggregation system. The ability to run SQL queries against your streaming log data using Amazon Kinesis Analytics further strengthens the case for using an EKK stack. <a href="https://s3-us-west-2.amazonaws.com/scriptdepot/es.template" target="_blank">The AWS CloudFormation template</a> used in this post is available to extend and build your own EKK stack.</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

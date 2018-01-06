@@ -190,6 +190,656 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Automate remediation actions for Amazon EC2 notifications and beyond using EC2 Systems Manager Automation and AWS Health</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-09-27T13:40:09+00:00">27 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/automate-remediation-actions-for-amazon-ec2-notifications-and-beyond-using-ec2-systems-manager-automation-and-aws-health/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>You can use EC2 <a href="https://aws.amazon.com/ec2/systems-manager/">Systems Manager Automation</a> to take remediation actions in response to events that may impact your AWS resources. To illustrate this concept, this post guides you through setting up automated remediation actions when an <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> backed <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2</a> instance is scheduled for retirement.</p> 
+<p>An instance is scheduled to be retired when AWS detects irreparable failure of the underlying hardware hosting the instance. If your instance root device is an Amazon EBS volume you can stop and start the instance at any time of your convenience before the retirement.</p> 
+<p>Amazon EC2 Systems Manager (SSM) Automation is an AWS-hosted service that simplifies common instance and system maintenance and deployment tasks at no additional cost.</p> 
+<p><span id="more-1352"></span></p> 
+<p><a href="http://docs.aws.amazon.com/health/latest/ug/what-is-aws-health.html">AWS Health</a> provides ongoing visibility into the state of your AWS resources, services, and accounts. The service gives you awareness and remediation guidance for resource performance or availability issues that may affect your applications that run on AWS.</p> 
+<p>Both services are integrated with <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a>, allowing AWS Health events to trigger SSM Automation documents.</p> 
+<p>SSM Automation also offers an Approval action which temporarily pauses an Automation execution until your designated principals (e.g. IAM user) either approve or reject the action. More information about SSM automated actions is available <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-actions.html">Systems Manager Automation Actions</a>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Ec2InstanceRetirement1-1024x441.png" /></p> 
+<p>&nbsp;</p> 
+<h6>Figure 1: AWS Services feed events into AWS Health which triggers EC2 Systems Manager</h6> 
+<p>&nbsp;</p> 
+<p>This post will walk through the four steps to setup Stop and Start of EC2 instances using SSM Automation in response to EC2 retirement events from AWS Health. To launch the solution in the us-east-1 region using AWS CloudFormation please click <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=StopStartEC2InstancewithApproval&amp;templateURL=https://s3.amazonaws.com/aws-health-tools-assets/cloudformation-templates/AWS-StopStartEC2InstancewithApproval.template">here</a>. Please change the region as required. We recommend reviewing the manual steps below before deploying the CloudFormation stack to have an understanding of the solution.</p> 
+<p><strong>Step 1:</strong> Set up required <a href="https://aws.amazon.com/iam/">AWS IAM</a> role<br /> <strong>Step 2:</strong> Set up the <a href="https://aws.amazon.com/sns/">Amazon SNS</a> Topic if you don’t have one already<br /> <strong>Step 3:</strong> Set up the <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> rule with the Automation document<br /> <strong>Step 4:</strong> Test it out and approve the Automation</p> 
+<h3></h3> 
+<h3>Setup Instructions</h3> 
+<p><strong>Step 1: Set up required IAM role</strong></p> 
+<p>First setup the required IAM permissions for CloudWatch Events to use by creating an IAM policy and associating with an IAM role for CloudWatch. For the purpose of this example we will call the IAM role the AutomationCWRole. Here is an example of an IAM policy that could be used for this purpose:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ec2:StartInstances&quot;,
+&quot;ec2:StopInstances&quot;,
+&quot;ec2:DescribeInstanceStatus&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ssm:*&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;sns:Publish&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:sns:*:*:Automation*&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;iam:PassRole&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:iam::&lt;AccountId&gt;:role/AutomationCWRole&quot;
+}
+]
+}</code> 
+<p>Please make sure to update the role ARN which account Id and role name. You need to ensure that the role has events.amazonaws.com and ssm.amazonaws.com configured as a trusted entity for the IAM role as shown here:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: [
+&quot;ssm.amazonaws.com&quot;,
+&quot;events.amazonaws.com&quot;
+]
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}
+</code> 
+<p>More information about CloudWatch and IAM see <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/auth-and-access-control-cw.html">Authentication and Access Control for Amazon CloudWatch</a>. For more information about Systems Manager and IAM, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html">Configuring Access Using Systems Manager Managed Policies</a>.</p> 
+<p><strong>Step 2: Set up the Amazon SNS Topic if you don’t have one already</strong></p> 
+<p>If you choose to use Automation Approval actions, then you will also need to create an SNS topic that the approval notification will be published to or use an existing one. You will also need to subscribe the approvers to that SNS topic. More information on how to set this up is available <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/US_SetupSNS.html">here</a>.</p> 
+<p>We will use the SNS topic name AutomationStopStart for this example. Please note that the SNS Topic name must start with the Prefix: Automation.</p> 
+<p><strong>Step 3: Set up the Amazon CloudWatch Events rule with the Automation document</strong></p> 
+<p>First create a SSM Automation document named StopStartEC2InstancewithApproval by creating a json file using your preferred editor named “StopStartEC2InstancewithApproval.json”:</p> 
+<code class="lang-json">{
+&quot;description&quot;:&quot;Stop and Start EC2 instances(s) with Approval&quot;,
+&quot;schemaVersion&quot;:&quot;0.3&quot;,
+&quot;assumeRole&quot;:&quot;{{ AutomationAssumeRole }}&quot;,
+&quot;parameters&quot;:{
+&quot;AutomationAssumeRole&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;The ARN of the role that allows Automation to perform the actions on your behalf.&quot;,
+&quot;default&quot;:&quot;arn:aws:iam::{{global:ACCOUNT_ID}}:role/AutomationServiceRole&quot;
+},
+&quot;InstanceIds&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;EC2 Instance(s) to Stop and Start&quot;
+},
+&quot;Approvers&quot;:{
+&quot;type&quot;:&quot;StringList&quot;,
+&quot;description&quot;:&quot;IAM user or user arn of approvers for the automation action&quot;
+},
+&quot;SNSTopicArn&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;The SNS topic ARN that you are using to get notifications on about EC2 retirement notifications. The SNS topic name must start with Automation.&quot;
+}
+},
+&quot;mainSteps&quot;:[
+{
+&quot;name&quot;:&quot;approve&quot;,
+&quot;action&quot;:&quot;aws:approve&quot;,
+&quot;timeoutSeconds&quot;:999999,
+&quot;onFailure&quot;:&quot;Abort&quot;,
+&quot;inputs&quot;:{
+&quot;NotificationArn&quot;:&quot;{{ SNSTopicArn }}&quot;, 
+&quot;Message&quot;: &quot;Your approval is required to proceed with the stop and start of an EC2 instance using the EC2 systems manager automation document that is scheduled for retirement.&quot;,
+&quot;MinRequiredApprovals&quot;:1,
+&quot;Approvers&quot;:[
+&quot;{{Approvers}}&quot;
+]
+}
+},
+{
+&quot;name&quot;:&quot;stopInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:2,
+&quot;timeoutSeconds&quot;:120,
+&quot;onFailure&quot;:&quot;Continue&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[
+&quot;{{ InstanceIds }}&quot;
+],
+&quot;DesiredState&quot;:&quot;stopped&quot;
+}
+},
+{
+&quot;name&quot;:&quot;forceStopInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:1,
+&quot;timeoutSeconds&quot;:60,
+&quot;onFailure&quot;:&quot;Continue&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[
+&quot;{{ InstanceIds }}&quot;
+],
+&quot;Force&quot;:true,
+&quot;DesiredState&quot;:&quot;stopped&quot;
+}
+},
+{
+&quot;name&quot;:&quot;startInstance&quot;,
+&quot;action&quot;:&quot;aws:changeInstanceState&quot;,
+&quot;maxAttempts&quot;:3,
+&quot;timeoutSeconds&quot;:120,
+&quot;onFailure&quot;:&quot;Continue&quot;,
+&quot;inputs&quot;:{
+&quot;InstanceIds&quot;:[
+&quot;{{ InstanceIds }}&quot;
+],
+&quot;DesiredState&quot;:&quot;running&quot;
+}
+}
+]
+}
+</code> 
+<p>Then use the AWS CLI to create the SSM Automation document using the JSON file above:</p> 
+<code class="lang-json">[
+<em>aws ssm create-document --content file://StopStartEC2InstancewithApproval.json --name &quot; StopStartEC2InstancewithApproval&quot; --document-type &quot;Automation&quot;</em>
+]</code> 
+<p>More information about creating creating SSM documents can be found at <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/create-ssm-doc.html">Creating Systems Manager Documents</a>.</p> 
+<p>You can then create the CloudWatch Events rule that will trigger the Automation document each time an EC2 retirement notification occurs. As an example you can use the following command using the AWS CLI:</p> 
+<code class="lang-json">aws events put-rule --name &quot;EC2RetirementNotification&quot; --event-pattern &quot;{\&quot;source\&quot;:[\&quot;aws.health\&quot;],\&quot;detail-type\&quot;:[\&quot;AWS Health Event\&quot;],\&quot;detail\&quot;:{\&quot;service&quot;\&quot;:[\&quot;EC2\&quot;],\&quot;eventTypeCategory&quot;\&quot;:[\&quot;scheduledChange\&quot;],\&quot;eventTypeCode&quot;\&quot;:[\&quot;AWS_EC2_INSTANCE_RETIREMENT_SCHEDULED\&quot;]}&quot;}&quot;</code> 
+<p>To set this up you can create a JSON file named <em>targets.json</em> using your preferred editor and then use that to create the CloudWatch Events target:</p> 
+<code class="lang-json">[
+{
+&quot;Id&quot;:&quot;1&quot;,
+&quot;Arn&quot;:&quot;arn:aws:ssm:&lt;region&gt;:&lt;accountId&gt;:automation-definition/AWS-StopStartEC2InstancewithApproval&quot;,
+&quot;RoleArn&quot;:&quot;arn:aws:iam::&lt;accountId&gt;:role/AutomationCWRole&quot;,
+&quot;InputTransformer&quot;:{
+&quot;InputPathsMap&quot;:{
+&quot;Instances&quot;: &quot;$.resources&quot;
+},
+&quot;InputTemplate&quot;: &quot;{ \&quot;AutomationAssumeRole\&quot;:[\&quot;aws:iam::&lt;accountId&gt;:role/AutomationCWRole\&quot;],\&quot;Approvers\&quot;:[\&quot;&lt;IAMusername&gt;\&quot;],\&quot;SNSTopicArn\&quot;:[\&quot;arn:aws:sns:&lt;region&gt;:&lt;accountId&gt;:AutomationStopStart\&quot;],\&quot;InstanceIds\&quot;: &lt;Instances&gt; }&quot;
+}
+}
+]</code> 
+<p>Please update the region, accountId, SNS topic ARN, IAM role ARN and IAM username in the json file above per your requirements. The target in this case is the Automation document StopStartEC2InstancewithApproval which Stops and Starts the instance(s) provided.</p> 
+<p>Then use the AWS CLI to create the target specifying the json file you created:</p> 
+<p><em> aws events put-targets –rule EC2RetirementNotification –targets file://targets.json</em></p> 
+<p><strong>Step 4: Test it out and approve the Automation</strong></p> 
+<p>You can test against the document using direct inputs as well:</p> 
+<p><em> aws ssm start-automation-execution –document-name AmazonEC2InstanceStopStartwithApproval –parameters AutomationAssumeRole=”aws:iam::&lt;AccountId&gt;:role/AutomationCWRole”,Approvers=&lt;IAMusername&gt;,SNSTopicArn=”arn:aws:sns:us-east-1:&lt;AccountId&gt;:AutomationStopStart”,InstanceIds=&lt;InstanceId&gt;</em></p> 
+<p>You can get the execution status using the AutomationExecutionId returned from the command above: aws ssm&nbsp; get-automation-execution –automation-execution-id &lt;value&gt;</p> 
+<p>Once you get the approval message published to your SNS topic’s subscribers, you can choose to approve or reject the action:</p> 
+<p><em> aws ssm send-automation-signal –automation-execution-id &lt;automation-execution-id&gt; –signal-type Approve –payload Comment=Replace_This_With_Approve_Comment</em></p> 
+<p>The automation can also be approved from the EC2 console in the Automation section:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Ec2InstanceRetirement2.png" /></p> 
+<p>Please note that the approval will trigger the stop and start of the EC2 Instance, regardless of the comments provided.</p> 
+<p>You can also skip the approval step and instead use the AmazonEC2InstanceStopStart SSM Automation document. Please note that in very rare situations EC2 instances might not stop even after a force stop; you should contact AWS support if that happens.</p> 
+<h3>Conclusion</h3> 
+<p>You can use EC2 Systems Manager Automation to take remediation actions on your AWS resources in response to events that may impact. You can take this example and apply it to other EC2 scheduled changes (e.g. system reboot maintenance) or any event with any AWS resource that may suit your needs. You can also use the document provided to Stop and Start EC2 instances in an automated way. We recommend tailoring it and testing for your use-case before deploying in a production environment.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/26/Tipu_Quershi.jpg" /></p> 
+<p>Tipu Qureshi is a principal engineer in the AWS support organization. He works with customers to implement automation, solve problems and setup new workloads on the AWS platform. He has created various architectures and certifications for cost-optimization and agility through DevOps.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Get Disk Utilization of Your Fleet Using EC2 Systems Manager Custom Inventory Types</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tanu Mutreja</span></span> | on 
+<time property="datePublished" datetime="2017-09-20T14:23:32+00:00">20 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/get-disk-utilization-of-your-fleet-using-ec2-systems-manager-custom-inventory-types/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/ec2/systems-manager/inventory/">Amazon EC2 Systems Manager Inventory</a> provides a centralized way to collect and query system, application, and instance metadata. Using the resource data sync feature, you can sync this metadata to Amazon S3. In Amazon S3 you can aggregate the metadata for different AWS Regions and accounts. After you sync this inventory data to Amazon S3, you can create various visuals of the data using Amazon Athena and Amazon QuickSight.</p> 
+<p>The inventory data collection policy is configured using <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">State Manager</a> , which in turn gets executed by <a href="https://github.com/aws/amazon-ssm-agent/tree/master/agent/plugins/inventory">aws:softwareInventory plugin</a> in <a href="https://github.com/aws/amazon-ssm-agent">amazon-ssm-agent</a>.</p> 
+<p>Amazon EC2 Systems Manager Inventory provides two ways to define the types of data that it collects: predefined and custom.</p> 
+<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Predefined data types (with prefix AWS)</strong> are natively supported by the inventory plugin via multiple <a href="https://github.com/aws/amazon-ssm-agent/tree/master/agent/plugins/inventory/gatherers">gatherers</a>. Some examples of predefined inventory types are AWS:Application and AWS:WindowsUpdate.</p> 
+<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Custom data type (with prefix Custom)</strong> is a special inventory data type that can be defined by end users. This data type provides the flexibility of collecting additional inventory data, such as server rack location of a managed instance.</p> 
+<p>In this blog, I’ll walk you through an example that shows how to use the custom inventory data type to collect disk utilization for Windows instances. We’ll use PowerShell scripts to collect disk utilization data in the Inventory. After the data is collected, we’ll use this data to get fleet-level aggregation of disk usage.</p> 
+<p><span id="more-1234"></span></p> 
+<h3>Step1: Create Inventory Policy Document with aws:runPowerShellScript plugin</h3> 
+<p>By default, you can use AWS-GatherSoftwareInventory document to collect Inventory data. However, for this example we’ll create a document with <strong>aws:runPowerShellScript &amp; aws:softwareInventory</strong> plugins to ensure that a PowerShell script is invoked before Inventory collection begins. Since amazon-ssm-agent preserves the order of the plugin’s executions, it ensures that the latest Disk Utilization data is captured before Inventory data is collected.</p> 
+<h4>Option 1: Create Document using the AWS Management Console</h4> 
+<p>You can create the document in the AWS console by going to EC2 -&gt; Systems Manager Shared Resources -&gt; Documents. Here is the document content.</p> 
+<code class="lang-json">{
+&quot;schemaVersion&quot;: &quot;2.2&quot;,
+&quot;description&quot;: &quot;Run first a shell script &amp; then inventory plugin.&quot;,
+&quot;mainSteps&quot;: [
+{
+&quot;action&quot;: &quot;aws:runPowerShellScript&quot;,
+&quot;name&quot;: &quot;runPowerShellScript&quot;,
+&quot;inputs&quot;: {
+&quot;runCommand&quot;: &quot;{{ commands }}&quot;
+}
+},
+{
+&quot;action&quot;: &quot;aws:softwareInventory&quot;,
+&quot;name&quot;: &quot;collectSoftwareInventoryItems&quot;,
+&quot;inputs&quot;: {
+&quot;applications&quot;: &quot;{{ applications }}&quot;,
+&quot;awsComponents&quot;: &quot;{{ awsComponents }}&quot;,
+&quot;networkConfig&quot;: &quot;{{ networkConfig }}&quot;,
+&quot;windowsUpdates&quot;: &quot;{{ windowsUpdates }}&quot;,
+&quot;customInventory&quot;: &quot;{{ customInventory }}&quot;
+}
+}
+],
+&quot;parameters&quot;: {
+&quot;commands&quot;: {
+&quot;type&quot;: &quot;StringList&quot;,
+&quot;description&quot;: &quot;(Required) Specify a shell script or a command to run.&quot;,
+&quot;minItems&quot;: 1,
+&quot;displayType&quot;: &quot;textarea&quot;
+},
+&quot;applications&quot;: {
+&quot;type&quot;: &quot;String&quot;,
+&quot;default&quot;: &quot;Enabled&quot;,
+&quot;description&quot;: &quot;(Optional) Collect data for installed applications.&quot;,
+&quot;allowedValues&quot;: [
+&quot;Enabled&quot;,
+&quot;Disabled&quot;
+]
+},
+&quot;awsComponents&quot;: {
+&quot;type&quot;: &quot;String&quot;,
+&quot;default&quot;: &quot;Enabled&quot;,
+&quot;description&quot;: &quot;(Optional) Collect data for AWSComponents like amazon-ssm-agent.&quot;,
+&quot;allowedValues&quot;: [
+&quot;Enabled&quot;,
+&quot;Disabled&quot;
+]
+},
+&quot;networkConfig&quot;: {
+&quot;type&quot;: &quot;String&quot;,
+&quot;default&quot;: &quot;Enabled&quot;,
+&quot;description&quot;: &quot;(Optional) Collect data for Network configurations.&quot;,
+&quot;allowedValues&quot;: [
+&quot;Enabled&quot;,
+&quot;Disabled&quot;
+]
+},
+&quot;windowsUpdates&quot;: {
+&quot;type&quot;: &quot;String&quot;,
+&quot;default&quot;: &quot;Enabled&quot;,
+&quot;description&quot;: &quot;(Optional) Collect data for all WindowsUpdates.&quot;,
+&quot;allowedValues&quot;: [
+&quot;Enabled&quot;,
+&quot;Disabled&quot;
+]
+},
+&quot;customInventory&quot;: {
+&quot;type&quot;: &quot;String&quot;,
+&quot;default&quot;: &quot;Enabled&quot;,
+&quot;description&quot;: &quot;(Optional) Collect data for custom inventory.&quot;,
+&quot;allowedValues&quot;: [
+&quot;Enabled&quot;,
+&quot;Disabled&quot;
+]
+}
+}
+}</code> 
+<h4>Option 2: Create Document using the AWS command line (aws-cli)</h4> 
+<p>a.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Create the document by running the aws-cli command that creates the document:</p> 
+<code class="lang-bash">aws ssm create-document --content file://<em>path to your file\FileName</em> --name &quot;CustomInventory-Doc&quot; --document-type Command</code> 
+<p>b.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Verify the document’s status by running following command:</p> 
+<p><code class="lang-python">aws ssm list-documents --document-filter-list key=Name,value= CustomInventory-Doc<br /> </code></p> 
+<p>Here is a sample output that you should see:<br /> <em>{</em><br /> <em>&nbsp;&nbsp;&nbsp; “DocumentIdentifiers”: [</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Name”: ” CustomInventory-Doc “, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “PlatformTypes”: [</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Windows”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Linux”</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ], </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “DocumentVersion”: “1”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “DocumentType”: “Command”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “Owner”: “xxx”, </em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; “SchemaVersion”: “2.0”</em><br /> <em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }</em><br /> <em>&nbsp;&nbsp;&nbsp; ]</em><br /> <em>}</em></p> 
+<h3>Step2: Create association using CustomInventory-Doc</h3> 
+<p>Now that the inventory policy document is created, we will “Create Association,” that is we’ll associate this policy document to the targeted instances. To use the EC2 console to Create Association, go to State Manager under Systems Manager Service.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/s1-1.png" /></p> 
+<p>Next, you need to pick instances to which you want to attach this Association. In addition, define a schedule for this inventory collection. After you pick the instances and schedule, you can paste following PowerShell script in the Commands parameter (as shown in the screenshot that follows). This script is executed by the <em><strong>aws:runPowerShellScript</strong></em> plugin before the Inventory plugin is invoked.</p> 
+<p>Script:</p> 
+<code class="lang-powershell">$data = get-wmiobject win32_logicaldisk | Select-Object @{n=&quot;DeviceId&quot;;e={$_.&quot;DeviceID&quot;}}, @{n=&quot;VolumeName&quot;;e={$_.&quot;VolumeName&quot;}}, @{n=&quot;Use%&quot;;e={&quot;{0}&quot; -f [math]::Round(($_.&quot;Size&quot; - $_.&quot;FreeSpace&quot;) * 100 / $_.&quot;Size&quot;,0)}}, @{n=&quot;Size(GB)&quot;;e={&quot;{0}&quot; -f [math]::Round($_.&quot;Size&quot; / 1GB ,0)}} | ConvertTo-Json
+$content = &quot;{`&quot;SchemaVersion`&quot; : `&quot;1.0`&quot;, `&quot;TypeName`&quot;: `&quot;Custom:DiskUtilization`&quot;, `&quot;Content`&quot;: $data}&quot;
+$instanceId = Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/instance-id
+$filepath = &quot;C:\ProgramData\Amazon\SSM\InstanceData\&quot; + $instanceId + &quot;\inventory\custom\CustomDiskUsage.json&quot;
+if (-NOT (Test-Path $filepath)) {
+New-Item $filepath -ItemType file
+}
+Set-Content -Path $filepath -Value $content</code> 
+<p>This script gets disk utilization data using win32_logicaldisk. It uses <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html">Instance-Metadata </a>to get InstanceId, which is required in order to save the content in the path: <em>%SystemDrive%\ProgramData\Amazon\SSM\InstanceData\&lt;instance-id&gt;\inventory\custom</em></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/08/s2.png" /></p> 
+<p>Choose Create Association and that’s it. After the policy runs on the targeted instances, disk utilization data will be collected and become ready for consumption.</p> 
+<p>Let’s go to Managed Instances and check disk utilization for an instance by choosing the Inventory tab. The following screenshot shows the new Custom data for one of my instances.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/20/ss1-1.png" /></p> 
+<p>We can also apply various filters to determine the fleet’s Disk Utilization health.</p> 
+<p>Let’s apply a filter to list all instances with disk utilization of more than 50 percent. The following screenshot shows instances matching the filter.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/s3-1.png" /></p> 
+<h3>Conclusion</h3> 
+<p>This blog shows you how to create a custom document with <em><strong>aws:runPowerShellScript</strong></em> &amp; <em><strong>aws:softwareInventory plugin</strong></em>s. This allows you to collect and then send Custom Inventory data from an instance every time the Inventory policy is run. The data can then be queried at both the fleet and instance level.</p> 
+<p>In this blog, we used a PowerShell script to get the custom data, however the same document can also be used to trigger any third-party application running in the instance to collect custom data.</p> 
+<h4>About the Author</h4> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/13/SaurabhShankar.jpeg" /></p> 
+<p>Saurabh Shankar is a Software Development Engineer with the Amazon EC2 Systems Manager team. He has been with Amazon for four years, working on Inventory and other features of Amazon EC2 Systems Manager. Outside work, he enjoys trekking and taking photographs.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Manage your fleet at scale using EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-09-19T10:28:04+00:00">19 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/manage-your-fleet-at-scale-using-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This guest post was written by Michael Baker, who works as a DevOps Engineer for the Infrastructure Engineering team at Bulletproof</em></p> 
+<h3>Introduction</h3> 
+<p>The Bulletproof Group Limited has spent many years investing in system automation to assist with fleet management at scale. More recently, we have spent a significant amount of time working with <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a>. In this blog post, I describe how we have utilized Amazon EC2 Systems Manager&nbsp;on two recent customer engagements. Much has been written about the rapid change within managed services for the public cloud, but the requirement for patching operating systems is ever present. With an increasing focus on security, patching is arguably higher up our customers’ list of priorities than ever before. Our customers increasingly focus on improving the agility of their businesses. So in addition to understanding the basics, including patching, we are now designing pipelines to be both rugged and as fast as possible.</p> 
+<p><span id="more-1287"></span></p> 
+<h3>Customer One: Extending Amazon Auto Scaling with automated Amazon Machine Image (AMI) patching and deployment</h3> 
+<p>Bulletproof recently has been charged with building a fully automated patching and deployment pipeline as an extension to an existing environment that was built with, among other things,&nbsp;Auto Scaling from AWS. &nbsp;It was important that this pipeline enabled both scheduled and ad hoc operating system and key service patching. &nbsp;During requirements gathering it became clear that owing to governance policy within our customer’s business we were unable to deliver an entirely automated deployment pipeline. A manual approval step was a part of their key requirements.</p> 
+<p>After a quick review of tooling in-place within the customer build process, we took a mixture of Bulletproof’s current best practice recommendations and elected to use the following primary toolkit:</p> 
+<li><a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a></li> 
+<li><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a></li> 
+<li><a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a></li> 
+<li><a href="https://aws.amazon.com/getting-started/projects/setup-jenkins-build-server/">Jenkins (running on Amazon EC2)</a></li> 
+<p>Diving in a little more deeply on the Jenkins configuration, the following key steps occur after our customer initiates the deployment job by logging on to their EC2 instances over VPN:</p> 
+<li>We clone the customer’s GitHub repository (to pick up the most recent changes).</li> 
+<li>Then we execute a Systems Manager Automation to launch an EC2 instance running the up-to-date customer code.</li> 
+<li>Next we send and store the SSM command ID within the <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Systems Manager Parameter Store</a>. (We can now use this command ID to view the state of the SSM execution.)</li> 
+<li>When the Systems Manager job state reaches complete, we wait 60 seconds and then begin a CodeDeploy run. (The delay is to ensure that the instance is available in time for CodeDeploy.)</li> 
+<li>Jenkins queries the parameter store with the command ID of the first job executed and asks Systems Manager for the new AMI ID.</li> 
+<li>We then initiate a stack update in the relevant&nbsp;<a href="https://aws.amazon.com/cloudformation/">CloudFormation </a>stack. This updates the <a href="https://aws.amazon.com/autoscaling/">Auto Scaling</a> group configuration with the new AMI. &nbsp;(This happens in such a way as to reduce the chance of service interruption.)</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/1-1.png" /></p> 
+<p>The final key requirement was to enable rapid deployments. Previously even basic change required multiple stakeholders and a brief service outage. &nbsp;Today our customers create change with confidence, knowing that the integration work is&nbsp;successful and it happens without interruption to service. &nbsp;A side effect of rapid deployment is that both Developer and Operations teams are able to collaborate more closely, without one team being slowed down by the other. Continuous improvement or cloud optimization from both teams now happens on a daily basis.</p> 
+<h3>Customer Two: Migration of internal services onto Amazon EC2 Container Service (ECS)</h3> 
+<p>Bulletproof is currently in the process of migrating a number of internal services from our customer’s environment onto <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>. Because AWS CodeDeploy doesn’t currently support using SSH keys for access to GitHub, we developed a solution to clone data from GitHub into a container. &nbsp;This container contains a deployment for a private GitHub repository.</p> 
+<p>First, we use a webhook from GitHub to Amazon API Gateway to initiate a <a href="https://aws.amazon.com/lambda/">Lambda function</a>. That Lambda function then logs the GitHub pull request information into EC2 Systems Manager Parameter Store and calls Systems Manager to perform the artifact build. Next, the repo is cloned into a container. We then have automation systems in place that will create and push a build artifact into an <a href="https://aws.amazon.com/s3/">Amazon S3</a> bucket. Automated testing ensures the validity of the artifact.</p> 
+<p>After the artifact is built, it’s copied to Amazon S3, and a Systems Manager Automation document is executed. Next, it calls an Amazon SNS topic, which in turn starts an AWS CodeDeploy task via <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a>. AWS CodeDeploy deploys the build artifact onto the underlying EC2 instance onto shared storage currently provided by Amazon EFS. &nbsp;After a successful deployment, the containers will automatically reload the underlying process based on a file change that happens post-deploy.</p> 
+<p>The patching of the underlying EC2 instances is managed with Amazon CloudWatch Events, AWS Lambda, and Systems Manager. &nbsp;On a monthly basis a scheduled CloudWatch Event will trigger an event that calls a Lambda function. This Lambda function then executes a Systems Manager Automation document to to launch an AMI from a pre-baked image&nbsp;because there have been a number of custom changes made to the base AMI. &nbsp;The underlying EC2 instance is then patched with latest updates. After the updates are complete a notification is sent to Bulletproof and the customer via integrations with collaboration software (HipChat/Slack). &nbsp;Lastly, SSM will shut down the server, create the AMI, and update the AWS CloudFormation stack as appropriate.</p> 
+<p>With the release of Systems Manager as a target for CloudWatch Events Bulletproof is in the process of migrating the automation across. The workflow for this automation will be a CloudWatch Event schedule that will trigger a <a href="https://aws.amazon.com/ec2/systems-manager/automation/">Systems Manager Automation </a>document with parameters. These parameters are statically set in the event rule. After each AMI baking process is complete the CloudWatch Events parameters are updated with the new base AMI via a Lambda function that is triggered via Amazon SNS after the Systems Manager Automation has been completed.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/2-1.png" /></p> 
+<h3>Summary</h3> 
+<p>The migration to Amazon ECS has provided Bulletproof Support and our customer with the ability to quickly and automatically or manually deploy updates to services. &nbsp;By leveraging AWS Services such as Systems Manager Automation, CodePipeline, and CloudFormation we have managed to achieve an increase of 40% efficiency over our previous static&nbsp;infrastructure. Bulletproof teams can now work from production-like systems on their local machines both online and offline. Since our teams are global this gives them a solution with minimal latency. The teams know that when they commit changes to production the system will behave in a manner that is identical to their local development environments. If an application terminates while it is running we know that Amazon ECS and Elastic Load Balancing health checks will take care of it and bring up a new one. The same applies to the underlying EC2 instances: if they hit capacity a new EC2 instance will be added to the cluster by Auto Scaling. This reduces operational overhead for our support and operations teams.&nbsp;Development teams are now able to run replicas of production systems within the development environment. This minimizes risk and accelerates change.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/mbaker-150x150.jpg" /></p> 
+<p><a href="https://www.linkedin.com/in/lidder/?ppe=1">Michael Baker</a> works as a DevOps Engineer for the Infrastructure Engineering team at <a href="https://www.bulletproof.net.au/">Bulletproof Group Limited</a>. Bulletproof is an AWS Premium Partner headquartered in Sydney, Australia.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Reducing Configuration Drift with Amazon EC2 Systems Manager State Manager and Amazon CloudWatch Events</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-09-14T12:16:35+00:00">14 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/reducing-configuration-drift-with-amazon-ec2-systems-manager-state-manager-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post was written by Anupam Shrivastava, Software Development Engineer with Amazon Web Services.</em></p> 
+<p>State Manager helps you automate the process of keeping your EC2 instances or virtual machines (VM) in your on-premises data center in a desired state. Some use cases for State Manager include:</p> 
+<li>Ensuring that instances are joined to a Windows domain</li> 
+<li>Ensuring that instances are patched with specific software throughout their lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/configure-amazon-ec2-instances-in-an-auto-scaling-group-using-state-manager/">Configure Amazon EC2 Instances in an Auto Scaling Group</a>.</li> 
+<li>Executing Linux shell scripts or PowerShell scripts at scheduled times during the instances lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/combating-configuration-drift-using-amazon-ec2-systems-manager-and-windows-powershell-dsc/">Combating Configuration Drift Using Amazon EC2 Systems Manager and Windows PowerShell DSC</a>.</li> 
+<li>Using other configuration management tools like Ansible. For more information, see <a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/">Running Ansible Playbooks using EC2 Systems Manager, Run Command and State Manager</a></li> 
+<p>In State Manager, an association is a binding between your expressed configuration in a document, and a set of targets, on a specific schedule, to ensure consistent state. As part of the recent launch, we have made it easy for customers to easily remediate their instances when they drift from a desired configuration, provide you more control on when you can reapply configurations, and also make it easy for you to track changes to State Manager associations.</p> 
+<p>In this post, I demonstrate some new State Manager features such as association names and versions, rate expressions, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> integration. You start by specifying the configuration in a Systems Manager document.</p> 
+<p><span id="more-1243"></span></p> 
+<h3>Walkthrough</h3> 
+<p>Here are the steps that you take to demonstrate these new features of State Manager:</p> 
+<ol> 
+<li>Create an association to install Windows updates on one of the EC2 instances, using the rate expression of every 1 day. Give the association a name as well.</li> 
+<li>Configure CloudWatch Events for this association such that you receive status update notifications on an Amazon SNS topic, which can then be used to send email alerts.</li> 
+<li>Update the association’s schedule to execute every 30 minutes, to be more aggressive with checking and installing Windows updates. Use the association name filter to quickly find the right association to update.</li> 
+<li>View the different association versions after updating.</li> 
+</ol> 
+<h4>Step 1: &nbsp;Create an association</h4> 
+<p>Open the EC2 console and choose <strong>Systems Manager, State Manager.</strong></p> 
+<p>On the State Manager page, create an association with the following settings:</p> 
+<li>For <strong>Association Name</strong>, type ‘CriticalWindowsUpdates’.</li> 
+<li>For <strong>Select Document</strong>, select the AWS-InstallWindowsUpdates document.</li> 
+<li>For <strong>Targets</strong>, select a Windows instance.</li> 
+<li>For <strong>Schedule</strong>, choose <strong>Rate schedule builder</strong> and specify a rate expression of every 1 day.</li> 
+<li>For <strong>Parameters</strong>, select the following: 
+<li>Action: Install</li> 
+<li>Allow Reboot: True</li> 
+<li>Categories: CriticalUpdates</li> 
+</ul> </li> 
+<li>Choose <strong>Create Association</strong>.</li> 
+<p>You can also perform the same operations with the AWS CLI, using the following command:</p> 
+<code class="lang-bash">aws ssm create-association --name AWS-InstallWindowsUpdates --targets &quot;Key=InstanceIds,Values=i-0ca45fddbf4ce950f&quot; --schedule-expression &quot;rate(1 day)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True –-association-name CriticalWindowsUpdates</code> 
+<p>If you have not upgraded the SSM agent on your EC2 instance to the latest version, you might get a failed association error of ‘UnsupportedAgent’. In that case, upgrade the SSM agent to the latest version by executing a command using Run Command and the AWS-UpdateSSMAgent document. After you upgrade the agent, the association should start succeeding.</p> 
+<h4>Step 2: Configure CloudWatch Events to send notifications for a failed association</h4> 
+<p>Because you have created an association to ensure that an instance always has the latest critical Windows updates, you should also configure CloudWatch Events to notify you in case the association failed to check and apply the critical Windows updates.</p> 
+<p>Create an Amazon SNS topic that is configured to send you email. In the example below, I have an SNS topic already created with the topic ‘WindowsCriticalUpdates’.</p> 
+<p>Open the CloudWatch console and choose <strong>Events, Create rule</strong>. Use the following values:</p> 
+<li><strong>Service Name</strong>: EC2 Simple Systems Manager (SSM)</li> 
+<li><strong>Event Type</strong>: State Manager</li> 
+<li><strong>Specific type</strong>: EC2 State Manager Association State Change</li> 
+<li><strong>Specific status</strong>: Failed</li> 
+<li><strong>Edit Event Pattern</strong>:&nbsp; Add the Association Name to track the status for a specific Association</li> 
+<li>Choose <strong>Configure details</strong>.</li> 
+<p>When you’re done, the event pattern should look like the following:</p> 
+<code class="lang-json">{
+&quot;source&quot;: [&quot;aws.ssm&quot;],
+&quot;detail-type&quot;: [&quot;EC2 State Manager Association State Change&quot;],
+&quot;detail&quot;: {
+&quot;status&quot;: [&quot;Failed&quot;],
+&quot;association-name&quot;: [&quot;CriticalWindowsUpdates&quot;]
+}
+}</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/cwe.png" /></p> 
+<p>Bind the rule to the SNS topic ‘WindowsCriticalUpdates’, which is configured to send you emails for notification purposes.</p> 
+<h4>&nbsp;Step 3: Update the association schedule</h4> 
+<p>After a few days, you might realize that you want to have a more aggressive schedule of checking every 30 minutes for critical Windows updates. On the State Manager page, filter the associations by the word ‘Critical’. Select ‘CriticalWindowsUpdates’ and edit it.</p> 
+<p>On the Edit association page, choose Rate schedule builder and specify a rate expression of every 30 minutes. For Parameters, again select the following:</p> 
+<li>Action: Install</li> 
+<li>Allow Reboot: True</li> 
+<li>Categories: CriticalUpdates</li> 
+<p>Choose Edit association. You can also perform the same operations with the AWS CLI, using the following command:</p> 
+<code class="lang-bash">aws ssm update-association --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2 --schedule-expression &quot;rate(30 minutes)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True</code> 
+<p>After the association is edited, it is immediately scheduled for execution on the target instances.</p> 
+<h4>Step 4: Track association changes using versioning</h4> 
+<p>The Versions tab provides an audit trail of all the updates that were made to the association. The attributes that can be updated are:</p> 
+<li>Association name</li> 
+<li>Document name</li> 
+<li>Document version</li> 
+<li>Parameters</li> 
+<li>Targets</li> 
+<li>Schedule expression</li> 
+<p>When you update any of the fields in an association, State Manager creates a new version. You can see all previous versions, along with the various field values. This enables you to track changes across various versions.</p> 
+<p>In the earlier example, you can see two association versions corresponding to the two different rate schedule expressions.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/versioning.png" /></p> 
+<p>You can also perform the same operations with the AWS CLI, using the following command:</p> 
+<code class="lang-bash">aws ssm list-association-versions --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2</code> 
+<h3>Conclusion</h3> 
+<p>In this post, I showed you how to use several new features in State Manager that will ensure your instances are in a desired state and do not drift:</p> 
+<li>Naming associations and filtering by names</li> 
+<li>Granular scheduling by rate expressions</li> 
+<li>Association status notifications through CloudWatch Events</li> 
+<li>Tracking association changes through versions</li> 
+<hr /> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/anupam.jpg">Anupam Shrivastava</a> is a software development engineer on the Amazon EC2 Systems Manager team. He enjoys being part of AWS and building easy-to-use scalable solutions for customers across the globe. Outside of work, he enjoys playing tennis and cricket, swimming, and traveling.</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Introducing the AWS Config Rule Development Kit (RDK)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Henry Huang</span></span> | on 
+<time property="datePublished" datetime="2017-09-12T13:59:42+00:00">12 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config*"><span property="articleSection">AWS Config*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/introducing-the-aws-config-rule-development-kit-rdk/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Recently, <a href="https://aws.amazon.com/config">AWS Config</a> released a Rule Development Kit (RDK) that greatly simplifies your custom rule authoring experience. The RDK is an open-source tool that helps you set up AWS Config, author rules, and then test them using a variety of AWS resource types. This allows you to focus on the development of the rule itself. The AWS Config RDK is now available for download from the <a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub repo. We follow semantic versioning, and are dedicated to maintaining backwards compatibility for each major version.</p> 
+<h3>About AWS Config</h3> 
+<p>AWS Config is a service that enables you to assess, audit, and evaluate the configurations of your AWS resources. AWS Config continuously monitors and records your AWS resource configurations and allows you to automate the evaluation of recorded configurations against desired configurations. Rules enable you to automatically check the configuration of AWS resources recorded by AWS Config. There are 37 managed AWS Config rules by default and 34 custom rules maintained by the community in the <a href="https://github.com/awslabs/aws-config-rules">aws-config-rules</a> GitHub repo.</p> 
+<p><span id="more-1254"></span></p> 
+<b>Getting started</b> 
+<p>You can get started with AWS Config RDK and create a rule named “Hello World” in just a few minutes.</p> 
+<li>Prerequisites</li> 
+<li>Enable AWS Config</li> 
+<li>Create your first rule</li> 
+<li>Test your rule</li> 
+<b>Prerequisites</b> 
+<p>The AWS Config RDK requires the latest version of the <a href="https://aws.amazon.com/cli">AWS CLI</a>. You must also log in to an AWS account. Use the following command to install the AWS CLI (<a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">requires pip to be installed already</a>):</p> 
+<code class="lang-bash">pip install --upgrade --user awscli</code> 
+<p>Use the following command to configure the AWS CLI. For more information, see <a style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">Configuring the AWS CLI</a><span style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif">.</span></p> 
+<code class="lang-bash">aws configure --profile myCLIprofile 
+AWS Access Key ID [None]: AKIAI44QH8DHBEXAMPLE
+AWS Secret Access Key [None]: je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
+Default region name [None]: us-east-1
+Default output format [None]: text</code> 
+<p>Use the following command to clone the AWS Config RDK on macOS, Linux, or Windows platforms:</p> 
+<code class="lang-bash">git clone https://github.com/awslabs/aws-config-rdk.git</code> 
+<p>Choose your platform (MacLinux or Windows).<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-01.png" /></p> 
+<b>Enable AWS Config</b> 
+<p>To begin, enable AWS Config in your AWS account for the region configured in the AWS CLI. For example, on macOS or Linux, use the following command to configure your profile:</p> 
+<code class="lang-bash">cd MacLinux/setup; ./setup myCLIprofile </code> 
+<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-02.png" /><br /> On Windows, use the following command to configure your profile:</p> 
+<code class="lang-bash">cd Windows/setup; ./setup.cmd myCLIprofile </code> 
+<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-03.png" /></p> 
+<p>In this example, AWS Config in the us-east-1 region has been enabled by RDK setup.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-04.png" /></p> 
+<b>Create your first rule</b> 
+<p>Now you can create your first rule. Use the following command to create the EBS_OPTIMIZED_INSTANCE managed rule, which checks whether Amazon EBS optimization is enabled for your EC2 instances that can be EBS-optimized. Create the rule under the folder /aws-config-rdk/MacLinux/rules on macOS or Linux:</p> 
+<code class="lang-bash">cd MacLinux/rules; ./createRule myCLIprofile hello_world AWS::EC2::Instance </code> 
+<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-05.png" /></p> 
+<p>On Windows, use the following command:</p> 
+<code class="lang-bash">cd Windows/rules; ./createRule.cmd myCLIprofile hello_world AWS::EC2::Instance </code> 
+<p>You see the following results:</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-06.png" /></p> 
+<p>The following resources were created:</p> 
+<li>The parameter “APPLICABLE_RESOURCE_TYPES” has the same value as “APPLICABLE_RESOURCES” already defined in the rule code</li> 
+<li>The AWS Lambda function named “hello_world”</li> 
+<li>An AWS Config rule named “hello_world”, which was also associated with the Lambda function</li> 
+<p>The rule has started to evaluate EC2 instances for compliance with EBS optimization.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-07.png" /><br /> Now you can replace the default values with your own code. Make sure that resource types are consistent between the rule_code.py and createRule.cmd script parameters. Otherwise, your rule returns NOT_APPLICABLE. The rules/ruleCode/rule_util.py script handles the boring parts of a rule, and should not need to be modified.</p> 
+<b>Test your rule</b> 
+<p>The AWS Config RDK supports testing your rule by invoking the Lambda function with configuration items (used as test cases) from the /rules/testUtil/compliantCIs and /rules/testUtil/noncompliantCIs directories. The RDK checks that the Lambda function returns the corresponding result.</p> 
+<p>On macOS or Linux, use the following command:</p> 
+<code class="lang-bash">cd MacLinux/rules; ./test myCLIprofile hello_world </code> 
+<p>You see the following results:</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-08.png" /></p> 
+<p>On Windows, use the following command:</p> 
+<code class="lang-bash">cd Windows/rules; ./test.cmd myCLIprofile hello_world </code> 
+<p>You see the following results:</p> 
+<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-09.png" /></p> 
+<p>Besides, we have provided Configuration Item examples in “rules/testUtil/exampleCIs” to help you to write test cases by the modification to make them represent compliant or non-compliant resources.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-10.png" /></p> 
+<b>Summary</b> 
+<p>The AWS Config RDK helps you build rules easily, including the following:</p> 
+<li>Preparing the initial rule development environment, by enabling AWS Config with a variety of automatically created AWS resources.</li> 
+<li>Creating Lambda functions, rules, and the association between them so that you don’t have to.</li> 
+<li>Supporting multiple platforms: &nbsp;macOS, Linux, and Windows.</li> 
+<li>Testing rules just by the code, with no more manual setup in complicated test environments.</li> 
+<p>We would love to hear your feedback. Feel free to leave comments or suggestions on the&nbsp;<a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub page.</p> 
+<h3>About the Author</h3> 
+<p><img class="alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-11.png" /><br /> Henry Huang is a DevOps Consultant for the Professional Services Team&nbsp;at Amazon Web Services in China.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/prof-473x630.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Smart Budgeting Using Lambda and Service Catalog</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tapodipta Ghosh</span></span> | on 
+<time property="datePublished" datetime="2017-09-07T11:42:37+00:00">07 SEP 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/aws-budgets/" title="View all posts in AWS Budgets*"><span property="articleSection">AWS Budgets*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/" title="View all posts in AWS Cost Management*"><span property="articleSection">AWS Cost Management*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/smart-budgeting-using-lambda-and-service-catalog/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>If you have a lot of development activity in your organization, it’s important to keep track of your non-production AWS accounts.</p> 
+<p>If these accounts aren’t monitored closely, you might easily end up exceeding your budget.</p> 
+<p>In this blog post, I demonstrate how you can use the <a href="https://aws.amazon.com/about-aws/whats-new/2015/06/aws-introduces-budgets-a-simple-way-to-manage-your-aws-costs/">AWS Budgets</a> alert in conjunction with<a href="https://aws.amazon.com/lambda/"> AWS Lambda</a> and <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a> to automate management of your IT budget for non-production environments.<span id="more-1163"></span></p> 
+<h3>Workflow</h3> 
+<p>For this example, I have created a billing alarm to notify me when the cost for a sandbox account overshoots the forecast by 30 percent. The billing alarm is tied to an Amazon SNS Topic which is subscribed by a Lambda function. This ensures that when the billing alert occurs, the IT administrator gets notified via SNS about the possibility of an overage. At the same time, the Lambda function calls the AWS Service Catalog API to enforce the template constraint to freeze all EC2 instance creation to only the t2.medium type.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/Screen-Shot-2017-08-07-at-2.00.50-PM-1024x508.png" /></p> 
+<h3>Create the SNS topic and subscription</h3> 
+<p>In the SNS console, choose&nbsp;Create topic&nbsp;and enter appropriate values for the &nbsp;Topic name&nbsp;(such as BudgetAlert) and&nbsp;Display name&nbsp;(Budget-Alert).</p> 
+<p>Choose&nbsp;Create topic. Select the topic and view the details.</p> 
+<p>Next, choose&nbsp;Create subscription.</p> 
+<p>For&nbsp;Protocol, choose&nbsp;Email. Enter the email address where notifications should be sent and choose&nbsp;Create subscription.</p> 
+<p>An email is sent to confirm the SNS topic subscription. In the email, open the&nbsp;SubscribeURL&nbsp;link to complete the subscription. Note the SNS topic Amazon Resource Name (ARN) because it’s used later by the Lambda function.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/07/sns.png" /></p> 
+<p>For more information, see&nbsp;<a href="http://docs.aws.amazon.com/sns/latest/dg/CreateTopic.html">Create a Topic</a>&nbsp;in the Amazon SNS Developer Guide.</p> 
+<h3>Create the Lambda function</h3> 
+<p>In the Lambda console, choose&nbsp;Functions,&nbsp;Create a Lambda function. Choose Blank Function and on the&nbsp;Configure trigger page, choose&nbsp;Next.</p> 
+<p>On the next page, enter the following values:</p> 
+<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Runtime:&nbsp;Python 2.7</p> 
+<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Code entry type:&nbsp;Inline</p> 
+<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Role:&nbsp;Create a custom role (takes you to another page). Call the role service-catalog-lambda-&lt;region&gt;-role</p> 
+<p>For the policy document, enter the following policy:</p> 
+<code class="lang-json">{
+&nbsp;&nbsp;&nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,
+&nbsp;&nbsp;&nbsp; &quot;Statement&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;servicecatalog:*&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;s3:*&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cloudformation:ValidateTemplate&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;iam:GetRole&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;*&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Effect&quot;: &quot;Allow&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; },
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:CreateLogGroup&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:CreateLogStream&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:PutLogEvents&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&quot;Effect&quot;: &quot;Allow&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; ]
+}</code> 
+<p>On the&nbsp;Configure function&nbsp;page, choose&nbsp;Next. Review the configuration settings before choosing&nbsp;Create function.</p> 
+<p>You can also follow the instructions here:</p> 
+<p><a href="https://github.com/awslabs/aws-service-catalog-enforce-template-constraints/">https://github.com/awslabs/aws-service-catalog-enforce-template-constraints/</a></p> 
+<h3>Budget alert</h3> 
+<p>Create the AWS Budgets alert and add the IT administrator’s email to notify the administrator when the forecasted budget is greater than the percentage that you choose (in our example, it’s 30 %). Add the SNS Topic ARN and Verify. You should see “Verified” next to the topic ARN.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/BudgetAlert.png" /></p> 
+<p>For more information on how to create AWS budgets, you can refer the AWS Budgets Update blog post.</p> 
+<p>After the alert condition is met, the IT administrator will receive an email from AWS Budgets similar to the sample that follows:</p> 
+<code class="lang-json">{&nbsp;&quot;Subject&quot; : &quot;Budget&nbsp;Notification: Test is in Alarm State&quot;,
+&nbsp; &quot;Message&quot; : &quot;AWS&nbsp;Budget&nbsp;Notification\n\nDear AWS Customer,\n\nYou requested that we notify you when your Actual Cost for your&nbsp;budget&nbsp;\&quot;BudgetAlert\&quot; is greater than $50000. Your Actual Cost for this&nbsp;budget&nbsp;is now $50393. You can find further details below and by accessing your AWS&nbsp;Budgets&nbsp;dashboard.\n\nBudget
+}</code> 
+<p>The Lambda function also gets triggered. It looks for all portfolios in the Service Catalog, looks for InstanceType template constraints, and it changes the constraint to “t2.medium or small only.” The following example shows how the updated constraint looks after the Lambda function has successfully run.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/post_lambda_run.png" /></p> 
+<h3>Summary</h3> 
+<p>In this post, I’ve demonstrated an easy way to keep track of your non-prod accounts budget, while you are also focused on continuous development.</p> 
+<hr /> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/07/tapo.jpg" /></p> 
+<p>Tapodipta Ghosh is a Solutions Architect focusing on AWS Marketplace.&nbsp;&nbsp;Tapo&nbsp;is passionate about cloud computing and loves helping customers on-board their products into AWS Marketplace.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">The Right Way to Store Secrets using Parameter Store</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -948,1123 +1598,6 @@ return &quot;Snapshots completed.&quot;</code>
 <p>&nbsp;</p> 
 <p>&nbsp;</p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/16/Tracy.jpeg" />Tracy Williams is a Software Development Manager in the EC2 Systems Manager team and is responsible for Maintenance Window Capabilities. In his free time Tracy enjoys hiking, movies and sports cars.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Improving Security through Delegated Administration with Amazon EC2 Systems Manager Automation</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
-<time property="datePublished" datetime="2017-08-15T01:49:20+00:00">15 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/improving-security-through-delegated-administration-with-amazon-ec2-systems-manager-automation/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager/automation/">EC2 Systems Manager Automation</a> simplifies common system maintenance and deployment tasks. You can create workflows to automate repetitive tasks such as systems configuration, deployment and maintenance. Workflows are authored in JSON and saved as <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-createdoc.html">Automation documents</a>.</p> 
-<p>Automation service operates in the context of the user that invokes the execution. Automation documents can be authored with an optional service role (also called an assume Role) with an attached managed policy (<a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html">AmazonSSMAutomationRole</a>).</p> 
-<li><strong>When the service role is specified:</strong> The Automation service executes the document in the context of the role.</li> 
-<li><strong>When the service role is not specified:</strong> The Automation service creates a temporary session in the context of the user and then executes the document.</li> 
-<p>In this blog, we are going to show the two methods for executing Automation. If you are using Automation for the first time or when you would like to automate and execute simple workflows in the context of your Account, the service role is not required. When you would like to control the context in which Automation workflows are executed, and limit permissions needed by a user that executes workflows you will use the service role.</p> 
-<p>Note: For Automation documents that you expect to run longer than 12 hours, you must specify a service role because the temporary session to execute Automation in the user’s context expires 12 hours after starting the execution.</p> 
-<p><span id="more-1116"></span></p> 
-<p>By including a service role in the Automation document, you can achieve higher security and control. Here’s how delegated administration can be accomplished in the context of personas, where the personas could be different users or the same users within the organization.</p> 
-<li><strong>Author</strong> – Creates Automation documents in JSON. For example, a document can take a service role as one parameter, and an AMI ID as another parameter. The document can incorporate <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-actions.html">Automation actions</a> such as aws:runInstances and awscreateTags to launch and tag instances per corporate IT policies. The author <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-sharing.html">shares the document </a>with other users in the organization. Every time someone executes this document, EC2 instances are crated with the specified tags.</li> 
-<li><strong>Administrator</strong> – Manages the infrastructure and ensures that appropriate permissions allow users to perform their IT systems management and configuration tasks. For example, the administrator requires the author to create tags with values that help easily identify the instance, and enforces that a service role is used in the document to perform actions. The administrator determines which users can create and launch EC2 instances, and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-passrole">configures permissions</a> to select roles and users to execute the Automation document.</li> 
-<li><strong>Operator</strong> – Performs IT tasks. In this post, it is a user who needs to launch an EC2 instance. The user does not require permissions to launch EC2 instances as they have permissions to execute the Automation document.</li> 
-<p>In this model, administrators can ensure that only users with permissions to execute the document are able to launch EC2 instances. Thus, you can avoid having to grant permissions directly to operators. The administrator can work with the author to also enforce IT policies on an ongoing basis.</p> 
-<h3>Walkthrough</h3> 
-<p><strong>To view this model in action, follow the steps below:</strong></p> 
-<ol> 
-<li>Create an IAM user and attach the following policy that explicitly denies the user permissions to launch EC2 instances: <code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [{
-&quot;Effect&quot;:&quot;Deny&quot;,
-&quot;Action&quot;: [&quot;ec2:*&quot;],
-&quot;Resource&quot;:&quot;*&quot;
-}]
-}</code> </li> 
-<li>Login as the IAM user and <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html">launch an EC2 instance </a>via the console or AWS CLI. This step fails.</li> 
-<li>Create a service role. Fpr more information see Task4: <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/automation-permissions.html#automation-passpolicy">Attach the iam:PassRole</a> Policy to your Automation Role.</li> 
-<li>Create an Automation document and include the service role that you created in step 4. Allow permissions to execute the document for the IAM user that you created in step 1.</li> 
-<li>Login as the IAM user and execute the Automation document. This step succeeds and you can successfully launch the EC2 instance.</li> 
-</ol> 
-<h3>Summary</h3> 
-<p>Automation documents can be executed by any IAM user in their own context without requiring an additional service role. However, it is a best practice to create a service role and enforce delegated administration via Automation. This ensures higher security and control for resources, in addition to auditing. When you use the service role you can tightly scope user permissions. As an administrator, you should also use this model to perform your own operations, and improve safety when managing resources at scale.</p> 
-<h3>About the author</h3> 
-<p><a href="https://www.linkedin.com/in/venkatkr/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/19/KRVenkt.jpg" />Venkat Krishnamachari</a>&nbsp;is a Product Manager in the Amazon EC2 Systems Manager team. Venkat is excited by the opportunities presented by cloud computing, and loves helping customers benefit from the value of efficient infrastructure and management. In his personal time Venkat volunteers with NGOs and loves producing live theater and music shows.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Example Scenarios for AWS Config Continuous Monitoring of Amazon S3 Bucket Access Controls</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Catherine Dodge</span></span> | on 
-<time property="datePublished" datetime="2017-08-14T10:36:21+00:00">14 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config*"><span property="articleSection">AWS Config*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/example-scenarios-for-aws-config-continuous-monitoring-of-amazon-s3-bucket-access-controls/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/about-aws/whats-new/2017/08/aws-config-supports-new-managed-rules-for-securing-amazon-s3-buckets/">Recently</a>, <a href="https://aws.amazon.com/config/">AWS Config</a> announced two new managed rules to detect Amazon S3 buckets that have overly permissive controls. You can now check your S3 buckets continuously for unrestricted public write access or unrestricted public read access. In addition, you can view compliance of all your S3 buckets against these rules, and receive notifications via Amazon SNS when permissions change. You can also view the permissions history in the Config console.</p> 
-<p>With these new rules, you can view the historical state of bucket Access Control Lists (ACLs) and bucket policies, and you can identify when changes were made. If someone changes a bucket policy or a bucket ACL, the Config rule automatically re-evaluates the new effective access. The rules evaluate the ACL to determine whether any anonymous user or any AWS user is allowed read or write permissions. The bucket polices are evaluated using a semantic-based automated reasoning engine, which returns a compliance decision.</p> 
-<p>“These AWS Config rules are backed by a new formal model of IAM semantics, offering a dramatic improvement over existing tools that rely on simple pattern matching, which often fails to capture the nuances of the IAM policy language,” said Bridgewater Associates engineer Dan Peebles. “For the first time, <span id="more-1092"></span>we can make strong universal statements about our S3 IAM policies and be confident that our assumptions aren’t violated. We’ve been keenly collaborating with AWS on this formal model during its development; it provides the foundation for future tools that will be game changers in our ability to reason about our AWS infrastructure.”</p> 
-<p>Tracking configuration changes to S3 bucket ACLs and policies is valuable from a governance perspective. It tells you how and when a bucket permission was modified. You can use this information to troubleshoot operational issues and outages, and maintain audit compliance. In addition, by turning on CloudTrail Data Events for S3 buckets, you can receive full audit logs around who read or wrote objects to that S3 bucket.</p> 
-<p>Learn more: <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-and-data-events-with-cloudtrail.html#logging-data-events-with-the-cloudtrail-console">Logging Data Events with the CloudTrail Console</a></p> 
-<p>In this post, we present an example scenario in detail.</p> 
-<p>&nbsp;</p> 
-<b>Use case: S3 Public Write Access Rule</b> 
-<p>Granting all AWS users access to write to your S3 bucket is almost never an intended configuration. Ensuring that S3 bucket policies don’t provide unrestricted write access is a security best practice within AWS Security. Misconfigurations of the bucket policy that provide unrestricted write access can allow unauthorized users to add malicious content to a bucket and overwrite content.</p> 
-<p>One scenario where you should be sure these rules are in place is after the acquisition of a new company. Often a large enterprise centrally manages a number of AWS accounts, ensuring consistent centralized controls are in place. When a new business unit joins the organization, with their own AWS assets, it can be difficult for a security team to quickly assess the security posture of the acquired business.</p> 
-<p>As an engineer tasked with assessing the security posture of newly acquired accounts, you can turn on write access detection to quickly see the status across all buckets in a given account. First, log in to the Config console. Choose <strong>Add rule</strong> to see the list of rules. Type ‘write’ in the search bar to see the s3-bucket-public-write-prohibited rule. The following screenshot shows the Add rule page.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/07/Blog1.png" /></p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>Click the rule description, which opens the rule configuration page. The default values are set to trigger rule evaluation on any change to S3 resources. Click <strong>Save</strong> and the rule will be enabled for your account, with the status shown as Evaluating…</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/07/Blog2.png" /></p> 
-<p>&nbsp;</p> 
-<p>In this scenario, rule evaluation is completed and returns a status of Noncompliant. The evaluation identifies one bucket belonging to the newly acquired business that has a resource policy granting public write access.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/07/Blog3.png" /></p> 
-<p>&nbsp;</p> 
-<p>The Annotation field provides information about which access control is Noncompliant: the bucket ACL, the bucket policy, or both. In the example that follows, the Annotation field notes that it is the bucket policy that violates the check.</p> 
-<p>The Config rule marks the bucket resource as Noncompliant if either the bucket ACL or the bucket resource policy allow unrestricted public write access. If the bucket ACL and bucket policy are configured with different write accesses, this means that the controls are in conflict. Providing users visibility into these conflicts allows them to correct the conflict.</p> 
-<p>In our scenario, the startup you have recently acquired attempted to apply a policy to restrict bucket access to their AWS users logged on using multi-factor authentication (MFA). This is the policy that was used:</p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Action&quot;: &quot;s3:PutObject*&quot;,
-&quot;Resource&quot;: &quot;arn:aws:s3:::config-write-test/*&quot;,
-&quot;Condition&quot;: {
-&quot;Bool&quot;: {
-&quot;aws:MultiFactorAuthPresent&quot;: &quot;true&quot;
-}
-}
-}
-]
-}
-</code> 
-<p>Here the condition key aws:MultiFactorAuthPresent isn’t sufficient to restrict public write access. Since the Principal value is set to “*” the net effect of this policy is to restrict S3 write access to any AWS user in any account who is logged on with multi-factor authentication. Since anyone could create an AWS account, and enable login using MFA, this policy effectively grants public write permissions. There is no clause tying the principal to the account where the bucket is hosted. The ability to reason in this way about this net effect of a policy can be quite difficult to do using simple scripts or using human inspection, but it is now possible using the semantic-based automated reasoning tool for policies developed by AWS.</p> 
-<p>An example of an appropriately configured S3 resource policy that only allows access from a given VPC is shown in the following example:</p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;Open access to vpc-01234567&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Action&quot;: &quot;s3:*&quot;,
-&quot;Resource&quot;: [
-&quot;arn:aws:s3:::config-write-test/*&quot;
-],
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;aws:sourceVpc&quot;: &quot;vpc-01234567&quot;
-}
-}
-},
-{
-&quot;Sid&quot;: &quot;Deny access to non vpc-012345667&quot;,
-&quot;Effect&quot;: &quot;Deny&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Action&quot;: &quot;*&quot;,
-&quot;Resource&quot;: [
-&quot;arn:aws:s3:::config-write-test/*&quot;
-],
-&quot;Condition&quot;: {
-&quot;StringNotEqualsIfExists&quot;: {
-&quot;aws:sourceVpc&quot;: &quot;vpc-01234567&quot;
-}
-}
-}
-]
-}
-</code> 
-<p>The semantic-based automated reasoning tool for policies used by the Config rule correctly determines that the policy correctly limits writes to those coming from the selected VPC. By limiting write access to a given VPC, we can now re-evaluate the rule, and we are now Compliant.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/07/Blog4.png" /></p> 
-<p>Enabling these rules in every account owned by a newly acquired company lets the central IT team within an organization quickly identify any misconfigurations that could pose a potential risk to the organization. If there are multiple accounts, the new <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/aws-cloudformation-supports-multiple-account-and-region-provisioning-with-stackset/">StackSet</a> feature can be used to enable the Config rule across multiple accounts. The rule quickly pinpoints the source of the misconfiguration, enabling quick remediation to bring the account in line with best practices.</p> 
-<p>&nbsp;</p> 
-<b>Checking unrestricted public read access</b> 
-<p>&nbsp;</p> 
-<p>You can also check for unrestricted public read access, using a similar new rule. For media or website content, granting public access to read your S3 bucket is the desired configuration. However, if that isn’t your use case, unrestricted read access is likely a misconfiguration. Enabling the s3-bucket-public-read-prohibited rule ensures that you are alerted to any misconfigured buckets that allow public read access today. After any misconfigurations are fixed, the Config rule will continuously re-evaluate any changes made in the future to ensure continued compliance.</p> 
-<p>To enable the rule, follow the steps outlined earlier for the public write rule, instead using ‘read’ as the rule search term. After rule evaluation is enabled and completed, the console will report a Compliant status if no S3 buckets allow unrestricted public write access. If any buckets do allow unrestricted public read access, the status will be reported as Noncompliant, along with the number of Noncompliant buckets. The annotation provided explains which access control is Noncompliant, either the bucket ACL, the bucket resource policy, or both.</p> 
-<p>&nbsp;</p> 
-<b>Summary</b> 
-<p>By enabling these new rules, you can now easily monitor S3 access controls and ensure that access to your data is configured as you expect. These rules can be accessed using the AWS Management Console, as shown here, or evaluated using the <a href="http://aws.amazon.com/cli">AWS CLI</a> or <a href="http://aws.amazon.com/tools">AWS SDKs</a>.</p> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Secure, Scalable, and Efficient Instance Management Using Amazon EC2 Run Command</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-08-08T13:50:03+00:00">08 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/secure-scalable-and-efficient-instance-management-using-amazon-ec2-run-command/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post was written by Miguel Jo&atilde;o, Cloud Software Engineer at OutSystems.</em></p> 
-<p>The OutSystems low-code development platform allows users to create and deliver high-quality web and mobile apps a lot faster, leveraging all the advantages of visual programming with few of the drawbacks. Of course, providing this high productivity, enterprise-grade <a href="https://en.wikipedia.org/wiki/Platform_as_a_service">Platform-as-a-Service</a> (PaaS) solution can be challenging. For us at OutSystems, those challenges ended up inspiring us to build custom solutions to manage large infrastructures.</p> 
-<p>We were working on a custom offer for clients that would enable them to build their tailored apps. That led us to deploy our own orchestration processes.</p> 
-<li>Instead of only using the common configuration management tools, we had to deploy a <strong>custom remote command execution environment</strong>. This resulted in a tight control over all the steps in the deployment and configuration of the infrastructure.</li> 
-<li>We needed to provide an <strong>enterprise-grade PaaS solution with secure access, data integrity, and high availability</strong>.</li> 
-<li>This solution must scale to meet future demand, and for the long run we’re talking about <strong>1M+ instances</strong>.</li> 
-<li>We had to <strong>ensure a path for the solution to evolve</strong> without disrupting the customer service.</li> 
-<p>Sounds complicated, right? Well, it was, especially when you consider that we had to apply our custom environment to an existing underlying infrastructure while keeping the security, isolation, and evolution requirements.</p> 
-<p>The end result was a leaner and more secure solution. <a href="https://aws.amazon.com/ec2/run-command">Amazon EC2 Run Command</a> service improved the stability of our orchestration processes (error ratio reduction of over 80%), and the performance (10–20 times faster).</p> 
-<p><span id="more-1024"></span></p> 
-<h3>Problem: Difficult to manage instance proliferation</h3> 
-<p>We designed with the standardization of the underlying infrastructure that supports our PaaS offer in mind. However, the need to respond to the specific needs of our enterprise customers led to the development of an orchestration process that takes advantage of configuration management tools like Chef for the initial and base configuration. Afterwards, we extended that orchestration to support the customization using on-demand remote command execution.</p> 
-<p>The adoption of these orchestration processes in our cloud services has grown, and it now supports all of our paid and free PaaS offers, and some of our R&amp;D internal development quality assurance requirements.</p> 
-<p>We currently provision <a href="https://aws.amazon.com/ec2/">EC2</a> instances and <a href="https://aws.amazon.com/rds/">Amazon RDS</a> instances to meet our needs in six different AWS Regions, in an automated fashion, 24/7. Our current infrastructure landscape consists of more than a thousand EC2 instances, and hundreds of RDS instances with many different software versions and software configurations. We have Windows and Linux operating systems, and at least two database flavors: Microsoft SQL Server and Oracle. This graphic shows the management nightmare for which we signed up.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/infra_growth-1.png" /></p> 
-<h3>Temporary solution (not scalable): SSH and ESB</h3> 
-<p>Early in the PaaS project, we determined that direct remote commands would control the infrastructure servers, and we designed the orchestration processes to support that.</p> 
-<p>The result was a remote command architecture with an <a href="https://en.wikipedia.org/wiki/Enterprise_service_bus">Enterprise Service Bus (ESB)</a> and <a href="https://en.wikipedia.org/wiki/Secure_Shell">secure shell connections (SSH)</a>. The ESB served as a central point of convergence for all remote connections managing the cloud servers, allowing remote commands to be executed through a synchronous SSH. The orchestration processes invoke the remote command execution via the ESB, and expect a callback from the ESB when the command finishes executing.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/old_arch.png" /></p> 
-<p>However, this solution rapidly began to show its limitations:</p> 
-<li><strong>Performance overhead</strong> due to connection handshake and authentication</li> 
-<li><strong>Increased error rate</strong> due to <strong>instability</strong> in the network and long standing connections</li> 
-<li><strong>Limited parallelism</strong> due to concurrent number of remote long standing connections in the ESB (we started to see instability after 40 concurrent remote executions per ESB node)</li> 
-<li><strong>Security concerns</strong> about having SSH inbound traffic on the instances for orchestration purposes, and all the hassle of managing the SSH authentication best practices (keys vs. passwords)</li> 
-<p>With the growth in demand for our cloud services, we had to consider other options immediately. Before we committed to searching for or developing better alternatives that would scale for 1M+ instances, AWS answered our prayers with the <a href="https://aws.amazon.com/ec2/run-command/">EC2 Run Command</a> feature.</p> 
-<h3>Better solution: Scalable, secure remote commands</h3> 
-<p>After a short assessment of Run Command, we realized that it would allow us to greatly improve our efforts and our custom orchestration systems, increasing both reliability and performance. We started changing our orchestration to use this new feature, and replaced the remote command execution engine with Run Command.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/new_arch.png" /></p> 
-<p>Sending the remote command through Run Command removed the SSH connectivity requirement, eliminating security concerns. The feature also keeps network instability concerns at bay because keeping long-standing connections during the command execution is no longer necessary. It’s all asynchronous.</p> 
-<p>The most significant changes in our orchestration were:</p> 
-<li>Roll out (re-create) EC2 instances with <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">IAM</a> roles</li> 
-<li>Deploy updated EC2Config and SSM Agent services on the EC2 instances</li> 
-<li>Implement the callback after execution end, based on the S3 output files, using an AWS Lambda function that runs when a new output file is created</li> 
-<li>Change our orchestration command execution engine module to invoke Run Command (using SSM API)</li> 
-<p>We were able to evaluate, design, develop, test, and deploy the changes to our orchestration processes in approximately two months. This opened the door to a new growth spurt in our cloud services, mainly because the parallelism limitations were gone.</p> 
-<h3>Replacing the ESB services: Additional details</h3> 
-<p>We had our system architected to be modular, so replacing the ESB services with the Run Command services seemed like it would be straightforward. But as with any new development, we had to deal with some unexpected challenges. No straightforward replacement—after all, where would be the fun in that?</p> 
-<li>To use Run Command, each EC2 instance had to have an associated instance role. Unfortunately, at the time, it was not possible to associate an IAM role with a running instance. Instead, we re-created about 80% of our EC2 instances to activate Run Command. Thankfully, <a href="https://aws.amazon.com/about-aws/whats-new/2017/02/new-attach-an-iam-role-to-your-existing-amazon-ec2-instance/">it is now possible</a> to add an instance role to an existing EC2 instance without having to re-create it</li> 
-<li>Run Command requires agents installed in the EC2 instances. However, the configuration and execution outputs of these agents differ between Windows and Linux systems. At the time, to use Run Command on Windows, we needed to have the EC2Config service running. For Linux, we needed the SSM Agent service. These two different applications require different configurations, and as such, the output log files prefixes in the S3 output bucket were also different. So, we had to make allowances for these differences as part of the process. Nowadays, the <span style="text-decoration: underline">SSM Agent service is available for both Windows and Linux</span>, which simplifies the configurations and eases the setup between different operating systems</li> 
-<li>Managing the S3 bucket access across the few hundred different AWS accounts that require specific permissions is practically impossible. We had to get creative with the S3 bucket management for the Run Command outputs.<br /> Using a single bucket, each output log would be owned by the account hosting the EC2 instance where the log ran. No other user could access it, so we created a secondary S3 bucket and moved the output logs from the original bucket, fixing the object permissions. This way, we could keep the output logs secured in a bucket with restricted accesses, not allowing the instances to access it anymore. In the meantime, <span style="text-decoration: underline">new versions of the SSM Agent support changing the output log ownership in the bucket</span>.</li> 
-<p>After it was all up and running, magic started to happen. Before, with the ESB solution, our average error rate was usually up to 5%, and it increased to over 20% during the second half of 2016. This growing error rate was a reflex of the ESB solution not keeping up with the growing demand. When we started using Run Command, the average error ratio dropped to values below 1%, regardless of the growth in demand. It seriously made our lives better, as you can see in the stability comparison:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/stability-1.png" /></p> 
-<p>Additionally, the Run Command solution improved the remote command execution average time by one order of magnitude: from 10 to 20 times faster. The solution allowed us to remove the bottlenecks in the ESB and the SSH connections, as well as improve stability by reducing the error rate. Here’s the performance comparison so you don’t have to take our word for it:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/01/performance.png" /></p> 
-<p>The new Run Command feature responded as advertised. The end result is a faster, leaner, and more robust remote command execution engine that complies with our on-demand custom configuration orchestration requirements.</p> 
-<h3>About the Author</h3> 
-<p><a href="https://www.linkedin.com/in/migueljoao/">Miguel Jo&atilde;o</a><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/08/miguel.jpg" /> joined OutSystems R&amp;D in 2005, and became a Cloud Software Engineer in 2013. Since then, he’s been working on the Platform-as-a-Service offer of the industry-leading, low-code platform for mobile and web application development. Miguel is a technology enthusiast, and he is passionate about automation.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<hr /> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/08/oustsystems-logo-1.png" /></p> 
-<hr /> 
-<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author. </em></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Supercharge Multi-Account Management with AWS CloudFormation</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Adam McLean</span></span> | on 
-<time property="datePublished" datetime="2017-08-04T10:17:17+00:00">04 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/supercharge-multi-account-management-with-aws-cloudformation/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>As your use of Amazon Web Services evolves, you will probably outgrow your first account, and need to move into a multi-account model.</p> 
-<p>There are plenty of benefits to using more than one AWS account:</p> 
-<li><b>An administrative boundary:</b> I can choose how permissive or restrictive my policies are based on the account type. Separating user authority within an account can be complicated and error prone. Using separate accounts is often the answer.</li> 
-<li><b>A workload boundary:</b> I can choose to peer (or not to peer) various workloads together within accounts, ensuring that my ‘blast radius’ for a poorly behaved application is minimized.</li> 
-<li><b>A billing entity:</b> Detailed bills are generated at an account level. An account has higher ‘resolution’ than is afforded by billing tags, and can be easier to implement.</li> 
-<p>However, management complexities increase using multiple accounts. How do you manage the administrative boundaries? Who can log in and how? How do you manage your baseline infrastructure, such as VPCs and CloudTrail? Is it possible to deploy these by hand and not make potentially critical mistakes?</p> 
-<p>In this blog post I’ll explore ways to manage deployments in your multi-account AWS environment.</p> 
-<p><span id="more-917"></span></p> 
-<p>The broad answer to the questions above is to use infrastructure as code, and tools like <a title="AWS CloudFormation" href="https://aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>. CloudFormation gives you a language to describe your desired state, and have it implemented programmatically. For complex multi-account deployments, this can get difficult to manage quickly, especially for complex subjects such as IAM users, groups, polices, and roles.</p> 
-<p>The recent release of <a title="AWS Orgnizations" href="https://aws.amazon.com/organizations/" target="_blank" rel="noopener noreferrer">AWS Organizations</a> has certainly helped with this complexity. Using policies, you can broadly permit or deny service use within your AWS account organizational structure. Layering these capabilities with consistently deployed IAM elements gets the most value from a multi-account model.</p> 
-<b>A tool to help</b> 
-<p>I’d like to introduce a tool I wrote while working with multiple AWS customers as a Professional Services Consultant. This tool allows you to describe complex multi-account IAM elements using simple YAML, and Jinja2 templates. Running a build produces a CloudFormation template per account that can be deployed in your preferred fashion.</p> 
-<p>Some customers have even built a pipeline so that when the configuration YAML is changed, a build is run and deployed automatically. They’re managing multiple accounts completely hands-off, from a central source of truth!</p> 
-<p>I’ll discuss the tool a bit. First, the tool assumes that you’re using a ‘parent’ account model where everyone logs in, or federates, into a single account. Then, users assume roles in the ‘child’ accounts for which they have permissions. This model was explored in more detail by an AWS customer with hundreds of accounts. For more information, see <a title="SEC315" href="https://youtu.be/CY-xvo8Cc54" target="_blank" rel="noopener noreferrer">(SEC315) AWS Directory Service Deep Dive</a> re:Invent session video.</p> 
-<p>I’ve included a simplification of the model for reference. Your child accounts can be one or many.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/Parent-Child-Account-Model.png" /></p> 
-<b>Tool walk-through</b> 
-<h3>Prerequisites</h3> 
-<p>To go through this walkthrough, you need the following:</p> 
-<li>A bash environment</li> 
-<li>A Python 2.7 interpreter</li> 
-<li>At least two AWS accounts that you can experiment with. You can use AWS Organizations to create them programmatically</li> 
-<li>The <a title="Tropsophere" href="https://github.com/cloudtools/troposphere" target="_blank" rel="noopener noreferrer">troposphere</a> and the <a title="Tropsophere" href="https://github.com/pallets/jinja" target="_blank" rel="noopener noreferrer">jinja2</a> libraries installed</li> 
-<code class="lang-bash">
-sudo pip install troposphere
-sudo pip install jinja2
-</code> 
-<h3>Download the code</h3> 
-<p>Clone or download the project from /awslabs/ on GitHub:</p> 
-<code class="lang-bash">
-git clone git@github.com:awslabs/aws-iam-generator.git
-</code> 
-<h3>Build your configuration file</h3> 
-<p>Start with a simple configuration and grow it over time, as you would naturally evolve your AWS environment.</p> 
-<p>Create a file called config.yaml in the downloaded projects root directory. Cut and paste the example configuration below into the file. <b>Substitute the account IDs with the account IDs that you’re using for this walkthrough.</b></p> 
-<code class="lang-yaml">
----
-accounts:
-central:
-# Change to the ID of your central parent account.
-id: 012345678910
-parent: true
-lab:
-# Change to the ID of a child account for specific roles.
-id: 109876543210
-policies:
-AssumeLabPowerUser:
-description: Allow assumption of the PowerUser Role in the lab account
-assume:
-roles:
-- PowerUser
-accounts:
-# Use the name you've given your account in the 'accounts' section.
-- lab
-in_accounts:
-# Use the keyword 'parent' to match the account that has 'parent: true'
-- parent
-roles:
-PowerUser:
-trusts:
-- parent
-managed_policies:
-- arn:aws:iam::aws:policy/PowerUserAccess
-in_accounts:
-# Use the keyword 'children' to match all accounts except the one marked 'parent: true'
-- children
-groups:
-LabUsers:
-managed_policies:
-- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
-- arn:aws:iam::aws:policy/IAMUserChangePassword
-- arn:aws:iam::aws:policy/IAMUserSSHKeys
-- arn:aws:iam::aws:policy/IAMReadOnlyAccess
-- AssumeLabPowerUser
-in_accounts:
-- parent
-users:
-TestUser:
-groups:
-- LabUsers
-in_accounts:
-- parent
-</code> 
-<h3>What happens now?</h3> 
-<p>Because you have two accounts, expect two CloudFormation templates to be created.</p> 
-<p>The CloudFormation template for your <code>central</code> account should contain:</p> 
-<li>A managed policy called <code>AssumeLabPowerUser</code>. The policy document permits sts::AssumeRole on your child account.</li> 
-<li>A group called <code>LabUsers</code>. This group has built-in AWS policies attached to it to allow self service credential management. It also has the <code>AssumeLabPowerUser</code> policy attached that you created under the <code>policies:</code> section.</li> 
-<li>A user called <code>TestUser</code> who is a member of the <code>LabUser</code> group.</li> 
-<p>The CloudFormation template for your <code>lab</code> account should contain:</p> 
-<li>A role called <code>PowerUser</code>. This role has a trust document that allows it to be assumed from the <code>central</code> account. The roles policy document is modeled from the AWS built-in PowerUserAccess policy document.</li> 
-<h3>Run the build</h3> 
-<p>Executing the build.py script reads the contents of the config.yaml file and creates CloudFormation templates in your output_templates/ directory. If the build is successful, you won’t see any output. When a build fails, the output should produce an meaningful error to help figure out what’s wrong. Most of the time, the problem is in the yaml formatting (usually, indentation).</p> 
-<code class="lang-bash">
-python build.py
-</code> 
-<p>If your build ran, you should see output in the <code>output_templates/</code> directory</p> 
-<code class="lang-bash">
-ls -l output_templates/
--rw-r--r-- 1 user user Users 3367 Apr 10 10:14 central(012345678910)-IAM.template
--rw-r--r-- 1 user user Users 1680 Apr 10 10:14 lab(109876543210)-IAM.template
-</code> 
-<p>You can see both of your CloudFormation templates. They are named so that you can easily identify the account in which they should be run. Also notice that your <code>central</code> template is about double the size of the <code>lab</code> template. This is expected as <code>central</code> contains a lot more information.</p> 
-<h3>Explore the output</h3> 
-<p>View the <code>central</code> template in your favorite viewer.</p> 
-<p>Your managed policy is there, with the sts::AssumeRole correctly formed:</p> 
-<code class="lang-json">
-...
-&quot;AssumeLabPowerUser&quot;: {
-&quot;Properties&quot;: {
-&quot;Description&quot;: &quot;Allow assumption of the PowerUser role in the lab account&quot;,
-&quot;Groups&quot;: [],
-&quot;PolicyDocument&quot;: {
-&quot;Statement&quot;: [
-{
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Resource&quot;: &quot;arn:aws:iam::109876543210:role/PowerUser&quot;
-}
-],
-&quot;Version&quot;: &quot;2012-10-17&quot;
-},
-&quot;Roles&quot;: [],
-&quot;Users&quot;: []
-},
-&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
-},
-...
-</code> 
-<p>You can also see the group that uses this managed policy:</p> 
-<code class="lang-json">
-....
-&quot;LabUsersGroup&quot;: {
-&quot;Properties&quot;: {
-&quot;GroupName&quot;: &quot;LabUsers&quot;,
-&quot;ManagedPolicyArns&quot;: [
-&quot;arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials&quot;,
-&quot;arn:aws:iam::aws:policy/IAMUserChangePassword&quot;,
-&quot;arn:aws:iam::aws:policy/IAMUserSSHKeys&quot;,
-&quot;arn:aws:iam::aws:policy/IAMReadOnlyAccess&quot;,
-{
-&quot;Ref&quot;: &quot;AssumeLabPowerUser&quot;
-}
-],
-&quot;Path&quot;: &quot;/&quot;,
-&quot;Policies&quot;: []
-},
-&quot;Type&quot;: &quot;AWS::IAM::Group&quot;
-}
-...
-</code> 
-<p>Finally, your user is here as a member of the group you’ve created:</p> 
-<code class="lang-json">
-...
-&quot;TestUserUser&quot;: {
-&quot;Properties&quot;: {
-&quot;Groups&quot;: [
-&quot;LabUsers&quot;
-],
-&quot;ManagedPolicyArns&quot;: [],
-&quot;Path&quot;: &quot;/&quot;,
-&quot;Policies&quot;: [],
-&quot;UserName&quot;: &quot;TestUser&quot;
-},
-&quot;Type&quot;: &quot;AWS::IAM::User&quot;
-}
-...
-</code> 
-<p>When you view the <code>lab</code> template, you can see the PowerUser role that you’re permitted to assume, with the trust set correctly to the parent.</p> 
-<code class="lang-json">
-...
-&quot;PowerUserRole&quot;: {
-&quot;Properties&quot;: {
-&quot;AssumeRolePolicyDocument&quot;: {
-&quot;Statement&quot;: [
-{
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::012345678910:root&quot;
-}
-}
-],
-&quot;Version&quot;: &quot;2012-10-17&quot;
-},
-&quot;ManagedPolicyArns&quot;: [
-&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;
-],
-&quot;Path&quot;: &quot;/&quot;,
-&quot;Policies&quot;: [],
-&quot;RoleName&quot;: &quot;PowerUser&quot;
-},
-&quot;Type&quot;: &quot;AWS::IAM::Role&quot;
-}
-...
-</code> 
-<h3>Deploy in your accounts</h3> 
-<p>Deploy the CloudFormation templates in your favorite way, either through the console or the <a title="AWS CLI" href="https://aws.amazon.com/cli" target="_blank" rel="noopener noreferrer">AWS CLI</a>. I’ve included example CLI commands.</p> 
-<p>To use multiple accounts from the AWS CLI, configure profiles. For more information about setting up profiles, see <a title="Configuring the AWS CLI" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html#cli-multiple-profiles" target="_blank" rel="noopener noreferrer">AWS CLI</a>.</p> 
-<p>Deploy in your <code>central</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
-<code class="lang-bash">
-aws cloudformation create-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/central(012345678910)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile central \
---region us-east-2
-</code> 
-<p>Deploy in your <code>lab</code> account. <b>Substitute your –template-body –profile and –region accordingly.</b></p> 
-<code class="lang-bash">
-aws cloudformation create-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile lab \
---region us-east-2
-</code> 
-<h3>Explore the results</h3> 
-<p>Sign into the <code>central</code> account with an existing role or user and <a title="Set the password" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_admin-change-user.html" target="_blank" rel="noopener noreferrer">set the password</a> for the <code>TestUser</code> user. You could have set a password in the CloudFormation template, but then it would be in plaintext!</p> 
-<p>Sign into the <code>central</code> account as <code>TestUser</code>. Verify that you have read-only access. You should be able to self-manage your credentials though (set your own password, etc.).</p> 
-<p>Now, switch roles to the <code>PowerUser</code> role in the <code>lab</code> account. Switching roles can be done through the console. For more information, see <a title="Switching to a Role" href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-console.html" target="_blank" rel="noopener noreferrer">Switching to a Role</a> (AWS Management Console).</p> 
-<p>Confirm that you can now perform expected activities in the <code>lab</code> account. You should be able to create resources, as per the PowerUserAccess reference policy.</p> 
-<b>Add a new account</b> 
-<p>A new line of business has decided to use AWS and has asked for a new lab environment. You used AWS Organizations to create a new account for them. Now, bring their IAM policies up to the central standard.</p> 
-<p>Edit config.yaml and add the new account:</p> 
-<code class="lang-yaml">
----
-accounts:
-central:
-# Change to the ID of the central parent account.
-id: 012345678910
-parent: true
-lab:
-# Change to the ID of the child account.
-id: 109876543210
-newlab:
-# Change to the ID of the new account created using Organizations.
-id: 543210123456
-...
-</code> 
-<p>This automatically creates the <code>PowerUser</code> role definition in the <code>newlab</code> account because you’ve used a keyword of <code>children</code> in the <code>in_accounts</code> section of the <code>PowerUser</code> role definition. This is a great way to assure that roles are kept consistent across all accounts. Only the users who can assume those roles change.</p> 
-<p>You also need to create a managed policy, group, and a test user in the <code>central</code> account to make use of the new account.</p> 
-<p>For reference your config.yaml should now look like this:</p> 
-<code class="lang-yaml">
----
-accounts:
-central:
-# Change to the ID of the central parent account.
-id: 012345678910
-parent: true
-lab:
-# Change to the ID of the child account.
-id: 109876543210
-newlab:
-# Change to the ID of the new account created using Organizations.
-id: 543210123456
-policies:
-AssumeLabPowerUser:
-description: Allow assumption of the PowerUser role in the lab account
-assume:
-roles:
-- PowerUser
-accounts:
-- lab
-in_accounts:
-- parent
-# The new managed policy lets users assume PowerUser in the newlab account.
-AssumeNewLabPowerUser:
-description: Allow assumption of the PowerUser role in the newlab account
-assume:
-roles:
-- PowerUser
-accounts:
-# Here is the new account added in the accounts section
-- newlab
-in_accounts:
-- parent
-roles:
-PowerUser:
-trusts:
-- parent
-managed_policies:
-- arn:aws:iam::aws:policy/PowerUserAccess
-in_accounts:
-# Because you use the keyword 'children' here, the newlab account gets this role
-- children
-groups:
-LabUsers:
-managed_policies:
-- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
-- arn:aws:iam::aws:policy/IAMUserChangePassword
-- arn:aws:iam::aws:policy/IAMUserSSHKeys
-- arn:aws:iam::aws:policy/IAMReadOnlyAccess
-- AssumeLabPowerUser
-in_accounts:
-- parent
-# This group services the newlab account users.
-NewLabUsers:
-managed_policies:
-- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
-- arn:aws:iam::aws:policy/IAMUserChangePassword
-- arn:aws:iam::aws:policy/IAMUserSSHKeys
-- arn:aws:iam::aws:policy/IAMReadOnlyAccess
-# This matches our new policy above.
-- AssumeNewLabPowerUser
-in_accounts:
-- parent
-users:
-TestUser:
-groups:
-- LabUsers
-in_accounts:
-- parent
-NewTestUser:
-groups:
-- NewLabUsers
-in_accounts:
-- parent
-</code> 
-<h3>Build and deploy</h3> 
-<p>Run the build:</p> 
-<code class="lang-bash">
-python build.py
-</code> 
-<p>Now, you see a new set of CloudFormation templates in output_templates/:</p> 
-<code class="lang-bash">
-ls -l output_templates/
--rw-r--r-- 1 user user Users 6307 Apr 10 10:59 central(012345678910)-IAM.template
--rw-r--r-- 1 user user Users 1680 Apr 10 10:59 lab(109876543210)-IAM.template
--rw-r--r-- 1 user user Users 1683 Apr 10 10:59 newlab(543210123456)-IAM.template
-</code> 
-<p>View one of the templates, and notice that the build number has changed:</p> 
-<code class="lang-json">
-...
-&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
-&quot;Description&quot;: &quot;Build 2017-07-25Z19:35:41 - IAM Users, Groups, Roles, and Policies for account central (012345678910)&quot;,
-...
-</code> 
-<p>The build number is the datestamp when the build was executed. It will be the same across all of the templates generated during that build. Use it to assure the environment remtains consistent. You can audit all of your accounts to assure this number is identical to assure deployment conssitency.</p> 
-<p>Again, deploy using your favorite mechanism or use the AWS CLI commands below.</p> 
-<p>In <code>central</code> this is an update which creates the new managed policy, group, and user.</p> 
-<code class="lang-bash">
-aws cloudformation update-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/central(012345678910)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile central \
---region us-east-2
-</code> 
-<p>In <code>lab</code>, this is a simple version increment. Nothing else changes but keeping the version consistent ensures that your environment is consistently deployed.</p> 
-<code class="lang-bash">
-aws cloudformation update-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile lab \
---region us-east-2
-</code> 
-<p>In <code>newlab</code>, this is the first deployment.</p> 
-<code class="lang-bash">
-aws cloudformation create-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile newlab \
---region us-east-2
-</code> 
-<h3>Explore the results</h3> 
-<p>You’ve enabled a new account and brought it in line with centrally managed IAM policies, with a few changes to a configuration yaml file.</p> 
-<p>As before, create a password for <code>NewTestUser</code> and assume the <code>PowerUser</code> Role in the <code>newlab</code> account. As a test step, confirm that you cannot assume the <code>PowerUser</code> role in the <code>lab</code> account from this user because you didn’t permit that in the config.yaml file.</p> 
-<b>Corral users into a specific region</b> 
-<p>As your use of AWS has grown, you’ve noticed that your users are creating EC2 instances in multiple regions. This is becoming difficult to manage, and you’d like to restrict their region use to us-east-2.</p> 
-<p>There is no ‘off the shelf’ managed policy for this, so you need to create one. Going through the <a title="IAM Policy Generator" href="https://awspolicygen.s3.amazonaws.com/policygen.html" target="_blank" rel="noopener noreferrer">IAM Policy Generator</a>, create a policy that looks like the following:</p> 
-<code class="lang-json">
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;DenyAllButOhio&quot;,
-&quot;Action&quot;: &quot;ec2:*&quot;,
-&quot;Effect&quot;: &quot;Deny&quot;,
-&quot;Resource&quot;: &quot;*&quot;,
-&quot;Condition&quot;: {
-&quot;StringNotEquals&quot;: {
-&quot;ec2:Region&quot;: &quot;us-east-2&quot;
-}
-}
-}
-]
-}
-</code> 
-<h3>Update the configuration</h3> 
-<p>To support the region restrictions, create a file called <code>policy/restrictEc2Region.j2</code>, and copy the policy json contents above into it.</p> 
-<p>Edit the config.yaml file and make some changes.</p> 
-<p>Define the new managed policy to restrict regions based on the template in the <code>policy/</code> directory.</p> 
-<code class="lang-yaml">
-...
-policies:
-...
-restrictEc2Region:
-description: Prevent EC2 actions outside of us-east-2
-# Get the policy json content from the file in the policy/ directory
-policy_file: restrictEc2Region.j2
-in_accounts:
-- children
-...
-</code> 
-<p>Modify the <code>PowerUser</code> role to include this region restriction policy:</p> 
-<code class="lang-yaml">
-...
-roles:
-PowerUser:
-trusts:
-- parent
-managed_policies:
-# Add our new managed policy
-- restrictEc2Region
-- arn:aws:iam::aws:policy/PowerUserAccess
-in_accounts:
-- children
-...
-</code> 
-<p>For reference your config.yaml should now look like this:</p> 
-<code class="lang-yaml">
----
-accounts:
-central:
-# Change to the ID of the central parent account.
-id: 012345678910
-parent: true
-lab:
-# Change to the ID of the child account.
-id: 109876543210
-newlab:
-# Change to the ID of the new account created using Organizations.
-id: 543210123456
-policies:
-AssumeLabPowerUser:
-description: Allow assumption of the PowerUser role in the lab account
-assume:
-roles:
-- PowerUser
-accounts:
-- lab
-in_accounts:
-- parent
-# The new managed policy lets users assume PowerUser in the newlab account.
-AssumeNewLabPowerUser:
-description: Allow assumption of the PowerUser role in the newlab account
-assume:
-roles:
-- PowerUser
-accounts:
-# Here is the new account added in the accounts section
-- newlab
-in_accounts:
-- parent
-# A policy document taken from a jinja template
-restrictEc2Region:
-description: Prevent EC2 actions outside of us-east-2
-# Get the policy json content from the file in the policy/ directory
-policy_file: restrictEc2Region.j2
-in_accounts:
-- children
-roles:
-PowerUser:
-trusts:
-- parent
-managed_policies:
-# Add our new managed policy
-- restrictEc2Region
-- arn:aws:iam::aws:policy/PowerUserAccess
-in_accounts:
-# Because you use the keyword 'children' here, the newlab account gets this role
-- children
-groups:
-LabUsers:
-managed_policies:
-- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
-- arn:aws:iam::aws:policy/IAMUserChangePassword
-- arn:aws:iam::aws:policy/IAMUserSSHKeys
-- arn:aws:iam::aws:policy/IAMReadOnlyAccess
-- AssumeLabPowerUser
-in_accounts:
-- parent
-# This group services the newlab account users.
-NewLabUsers:
-managed_policies:
-- arn:aws:iam::aws:policy/IAMSelfManageServiceSpecificCredentials
-- arn:aws:iam::aws:policy/IAMUserChangePassword
-- arn:aws:iam::aws:policy/IAMUserSSHKeys
-- arn:aws:iam::aws:policy/IAMReadOnlyAccess
-# This matches our new policy above.
-- AssumeNewLabPowerUser
-in_accounts:
-- parent
-users:
-TestUser:
-groups:
-- LabUsers
-in_accounts:
-- parent
-NewTestUser:
-groups:
-- NewLabUsers
-in_accounts:
-- parent
-</code> 
-<h3>Build and deploy</h3> 
-<p>Build the CloudFormation templates:</p> 
-<code class="lang-bash">
-python build.py
-</code> 
-<p>View the <code>lab</code> CloudFormation template. You can see the new managed policy:</p> 
-<code class="lang-json">
-...
-&quot;restrictEc2Region&quot;: {
-&quot;Properties&quot;: {
-&quot;Description&quot;: &quot;Prevent EC2 actions outside of us-east-2&quot;,
-&quot;Groups&quot;: [],
-&quot;PolicyDocument&quot;: {
-&quot;Statement&quot;: [
-{
-&quot;Action&quot;: &quot;ec2:*&quot;,
-&quot;Condition&quot;: {
-&quot;StringNotEquals&quot;: {
-&quot;ec2:Region&quot;: &quot;us-east-2&quot;
-}
-},
-&quot;Effect&quot;: &quot;Deny&quot;,
-&quot;Resource&quot;: &quot;*&quot;,
-&quot;Sid&quot;: &quot;DenyAllButOhio&quot;
-}
-],
-&quot;Version&quot;: &quot;2012-10-17&quot;
-},
-&quot;Roles&quot;: [],
-&quot;Users&quot;: []
-},
-&quot;Type&quot;: &quot;AWS::IAM::ManagedPolicy&quot;
-}
-...
-</code> 
-<p>You can also see that <code>PowerUser</code> definition now includes the following:</p> 
-<code class="lang-json">
-...
-&quot;ManagedPolicyArns&quot;: [
-&quot;arn:aws:iam::aws:policy/PowerUserAccess&quot;,
-{
-&quot;Ref&quot;: &quot;restrictEc2Region&quot;
-}
-],
-...
-</code> 
-<p>If you look at <code>newlab</code>, you see the same set of definitions are there too. If you had tens or even hundreds of child accounts, those would all reflect the new policy and updated role definitions as well. This scales very nicely!</p> 
-<p>Now, deploy to your three accounts.</p> 
-<p>In <code>central</code>, nothing actually changes. It’s just a deployment version update.</p> 
-<code class="lang-bash">
-aws cloudformation update-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/central(012345678910)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile central \
---region us-east-2
-</code> 
-<p>In <code>lab</code> and <code>newlab</code>, this deploys the new managed policy, and update the <code>PowerUser</code> role.</p> 
-<code class="lang-bash">
-aws cloudformation update-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/lab(109876543210)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile lab \
---region us-east-2
-</code> 
-<code class="lang-bash">
-aws cloudformation update-stack \
---stack-name CentralIAMPolicies \
---template-body 'file://./output_templates/newlab(543210123456)-IAM.template' \
---capabilities CAPABILITY_NAMED_IAM \
---profile newlab \
---region us-east-2
-</code> 
-<b>Conclusion</b> 
-<p>I hope you find this tool as useful as I have. The tool is capable of much more complex deployments as well, which leverage the power of Jinja2 templating. Explore the contents of <code>sample_configs/config-complex.yaml</code> and the policy examples in the <code>sample_policy/</code> directory in the project.</p> 
-<p>The <a title="README.md" href="https://github.com/awslabs/aws-iam-generator/blob/master/README.md" target="_blank" rel="noopener noreferrer">README.md</a> file has more detailed explanations of functionality and syntax usage.</p> 
-<h4>About the Author</h4> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/apmclean.jpeg">Adam McLean</a> is a Cloud Infrastructure Architect with AWS Professional Services. Adam enjoys helping his Canadian enterprise customers achieve success on their cloud journey. In his spare time, Adam enjoys spending time with his family and three small children.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How Cloudticity Automates Security Patches for Linux and Windows using Amazon EC2 Systems Manager and AWS Step Functions</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-08-02T19:14:49+00:00">02 AUG 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/how-cloudticity-automates-security-patches-for-linux-and-windows-using-amazon-ec2-systems-manager-and-aws-step-functions/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This guest post was written by Uri Katsir, AWS Architect at Cloudticity, and Thomas Zinn, Project Manager at Cloudticity.</em></p> 
-<p>As a provider of HIPAA-compliant solutions using AWS, Cloudticity always has security as the base of everything we do. HIPAA breaches would be an end-of-life event for most of our customers. Having been born in the cloud with automation in our DNA, Cloudticity embeds automation into all levels of infrastructure management including security, monitoring, and continuous compliance. As mandated by the HIPAA Security Rule (45 CFR <a href="http://www.access.gpo.gov/nara/cfr/waisidx_07/45cfr160_07.html">Part 160</a> and Subparts A and C of <a href="http://www.access.gpo.gov/nara/cfr/waisidx_07/45cfr164_07.html">Part 164</a>), patches at the operating system and application level are required to prevent security vulnerabilities. As a result, patches are a major component of infrastructure management.</p> 
-<p><span id="more-988"></span></p> 
-<p>Cloudticity strives to provide consistent and reliable services to all of our customers. As such, we needed to create a custom patching solution that supports both Linux and Windows. The minimum requirements for such a solution were to read from a manifest file that contains instance names and a list of knowledge base articles (KBs) or security packages to apply to each instance. Below is a simplified, high-level process overview.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/flowchart-patching.png" /></p> 
-<p>There were a few guidelines to be considered when designing the solution:</p> 
-<ol> 
-<li>Each customer has a defined maintenance window that patches can be completed within. As such, the solution must be able to perform the updates within the specified maintenance window.</li> 
-<li>The solution must be able to provide patches to one or many instances and finish within the maintenance window.</li> 
-<li>The solution should use as many AWS services as possible to reduce time-to-market and take advantage of the built-in scaling that many AWS services provide.</li> 
-<li>Code reusability is essential.</li> 
-</ol> 
-<p>In this post, we walk through our solution and discuss how combining <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> and <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> is ideal for this particular use case.</p> 
-<h3>Systems Manager for Patch Management</h3> 
-<p>We have been using Systems Manager to remotely manage instances from its inception, so it was natural to consider it as part of the solution. We use Systems Manager in many ways:</p> 
-<ol> 
-<li>Installing New Relic and Trend Micro agents for every new instance that is launched (whether manually or via Auto Scaling).</li> 
-<li>Ensuring that EC2Config and the SSM agents are running the latest versions.</li> 
-<li>Deploying software updates to multiple remote instances.</li> 
-</ol> 
-<p>We began with the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">Systems Manager predefined documents</a> “AWS-InstallWindowsUpdates” for Windows and “AWS-RunShellScript” for Linux. To achieve maximum code reusability, we created several AWS Lambda functions to perform individual tasks, such as identifying operating system type (Linux or Windows) or applying patches using the SSM agents. Each process (rectangle) in the flowchart above is implemented using a single Lambda function. The Systems Manager document is smart enough to apply multiple patches provided by a manifest file stored in Amazon S3 and only perform a single reboot, if a reboot is required to complete the patch process. Below is a code snippet from the Lambda function that runs Linux patches:</p> 
-<code class="lang-clike">if (IncludedKB === '') {	
-// Build the yum command based on the entry in the manifest file
-command = 'sudo yum update -y';
-} else if (IncludedKB.toUpperCase() == 'SECURITY') {
-command = 'yum update --security -y';
-} else {
-command = 'yum --security update ' + IncludedKB + ' -y';
-}
-var commands = [];
-commands.push(command);
-//prepare parameters for the Systems Manager command. Specify the output folder to hold the run //results.
-var params = {
-DocumentName: 'AWS-RunShellScript',
-InstanceIds: [instanceId],
-Comment: 'OS Patch command',
-OutputS3BucketName: bucket,
-OutputS3KeyPrefix: OutputFolder,
-Parameters: {
-commands: commands
-},
-TimeoutSeconds: 60
-};
-console.log('Sending command to InstanceID: ' + instanceId);
-console.log('Command is: ' + command);
-ssm.sendCommand(params, function(err, data) {
-//console.log('err= ' + err);
-if (err) {
-callback(command + ', Error, ' + err.code);
-} else {
-console.log(command + ', ' + data.Command.CommandId + ', ' + data.Command.Status);
-callback(null);
-}
-});
-</code> 
-<h3>Step Functions for workflow orchestration</h3> 
-<p>Given the nature of the solution (microservices that perform unique and distinct tasks), we needed a centralized service to manage and drive the process end-to-end, as well as pass parameters between Lambda functions. In other words, a state machine of Lambda functions. At AWS re:Invent 2016, AWS Step Functions was released. It allowed us to spin up multiple concurrent processes for completing the patches (one for each row in the manifest file) without the need to worry about scale, <a href="https://en.wikipedia.org/wiki/Deadlock">deadlocks</a>, timeouts, or <a href="https://en.wikipedia.org/wiki/Race_condition">race conditions</a>. By running concurrent processes, we can complete the patch process in the minimum time required for the patches to be applied without introducing any overhead to the process.</p> 
-<p>Step Functions provides some additional benefits including visualization of the overall state machine, passing input/output parameters between Lambda functions, and simplified debugging for each step in the process.</p> 
-<p>The image below is a visual preview of the patching process generated by the Step Functions user interface in the AWS Management Console. Notice how the resulting state machine mimics the initial workflow.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/Step-functions-diagram.png" /></p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<code class="lang-json">{
-&quot;Comment&quot;: &quot;Cloudticity-Oxygen-OS-Patch-SF.&quot;,
-&quot;StartAt&quot;: &quot;GetInstancePlatform&quot;,
-&quot;States&quot;: {
-&quot;GetInstancePlatform&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-GetInstancePlatform&quot;,
-&quot;Next&quot;: &quot;ChoiceState&quot;
-},
-&quot;ChoiceState&quot;: {
-&quot;Type&quot;: &quot;Choice&quot;,
-&quot;Choices&quot;: [
-{
-&quot;Variable&quot;: &quot;$.PlatformType&quot;,
-&quot;StringEquals&quot;: &quot;Windows&quot;,
-&quot;Next&quot;: &quot;WindowsMatchState&quot;
-},
-{
-&quot;Variable&quot;: &quot;$.PlatformType&quot;,
-&quot;StringEquals&quot;: &quot;Linux&quot;,
-&quot;Next&quot;: &quot;LinuxMatchState&quot;
-}
-],
-&quot;Default&quot;: &quot;NoMatchFound&quot;
-},
-&quot;WindowsMatchState&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-Windows-OS-Patching&quot;,
-&quot;Retry&quot;: [
-{
-&quot;ErrorEquals&quot;: [
-&quot;States.ALL&quot;
-],
-&quot;IntervalSeconds&quot;: 6,
-&quot;MaxAttempts&quot;: 2,
-&quot;BackoffRate&quot;: 3
-}
-],
-&quot;End&quot;: true
-},
-&quot;LinuxMatchState&quot;: {
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:us-east-1:123456789012:function:Cloudticity-Oxygen-Linux-OS-Patching&quot;,
-&quot;End&quot;: true
-},
-&quot;NoMatchFound&quot;: {
-&quot;Type&quot;: &quot;Fail&quot;,
-&quot;Cause&quot;: &quot;No Matches!&quot;
-}
-}
-}
-</code> 
-<p>The first state (GetInstancePlatform) executes the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/utility/GetInstancePlatform.js">Cloudticity-Oxygen-GetInstancePlatform</a> Lambda function. As you can see in the code snippet below, the Lambda function then invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#describeInstanceInformation-property">ssm.describeInstanceInformation</a> method to retrieve the platform type of the instance (Linux or Windows).</p> 
-<code class="lang-clike">var aws = require('aws-sdk');	
-var getInstancePlatform = function(instanceID, event, IncludeKbs, isReboot, bucket, OutputFolder, callback) {
-var ssm = new aws.SSM();
-//Prepare the parameters for the Systems Manager run. Instance ID is an input parameter in the //manifest file.
-var params = {
-InstanceInformationFilterList: [{
-key: &quot;InstanceIds&quot;,
-valueSet: [
-instanceID
-]
-}]
-};
-ssm.describeInstanceInformation(params, function(err, instanceData) {
-if (err) {
-callback(err);
-} else {
-let instanceInformation = instanceData.InstanceInformationList[0];
-if (instanceInformation) {
-console.log('Running GetInstancePlatform. PlatformType = ' + instanceInformation.PlatformType);
-//return instance information to the next step in the Step Function.
-callback(null, {
-PlatformType: instanceInformation.PlatformType,
-kB: IncludeKbs,
-instanceID: instanceID,
-isReboot: isReboot,
-bucket: bucket,
-OutputFolder: OutputFolder
-}, event);
-} else {
-callback('Unknown instance platform');
-}
-}
-});
-};</code> 
-<p>The platform information is passed on to the built-in <a href="https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html">Choice</a> state (InstancePlatform) that adds branching logic to a state machine. The InstancePlatform state uses the platform information to route traffic via one of three options:</p> 
-<li>PatchWindows</li> 
-<li>PatchLinux</li> 
-<li>NoMatchFound.</li> 
-<p>When patching Windows instances, the state is transferred to the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/lib/Windows_updates-patcher.js">Cloudticity-Oxygen-Windows-OS-Patching</a> Lambda function that invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#sendCommand-property">ssm.sendCommand</a> method with “AWS-InstallWindowsUpdates” as the document name. An input to this document is a <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>, which contains the Windows Knowledge Base (KBs) numbers to be applied to instances.</p> 
-<p>Below is a snippet from the Lambda function that patches Windows instances.</p> 
-<code class="lang-clike">//prepare parameters for the ssm command. Instance ID and included KBs are input from the manifest file.
-var params = {	
-DocumentName: 'AWS-InstallWindowsUpdates',
-Comment: 'OS Patch command',
-InstanceIds: [instanceId],
-OutputS3BucketName: bucket,
-OutputS3KeyPrefix: OutputFolder,
-Parameters: {
-&quot;Action&quot;: [&quot;Install&quot;],
-&quot;IncludeKbs&quot;: [IncludeKbs]
-},
-TimeoutSeconds: 60
-};
-console.log(&quot;Sending InstallWindowsUpdates ssm command with the following InstanceId: &quot; + instanceId + &quot;\n&quot;);
-//Send the ssm command.
-ssm.sendCommand(params, function(err, data) {
-if (err) callback(command + ', Error, ' + err.code + &quot;\n&quot;);
-else {
-callback(null);
-console.log(&quot;Sending InstallWindowsUpdates &quot; + command + ', ' + data.Command.CommandId + ', ' + data.Command.Status + &quot;\n&quot;);
-}
-});</code> 
-<p>When patching a Linux instance, the state is transferred to the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/lib/linux_updates-patcher.js">Cloudticity-Oxygen-Linux-OS-Patching</a> Lambda function that invokes the <a href="https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/SSM.html#sendCommand-property">ssm.sendCommand</a> method with “AWS-RunShellScript” as the document name. Our Linux patching implementation provides two options:</p> 
-<ol> 
-<li>Security packages that need to be applied are entered into a <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>. This file is referenced as an input parameter to the “AWS-RunShellScript” document.</li> 
-<li>In the <a href="https://github.com/Cloudticity/o2-instance-patching/blob/master/events/ManifestFileSample.csv">manifest file</a>, instead of listing packages, “security” is specified in the packages place.</li> 
-</ol> 
-<p>In the latter case, all security-related packages are applied to the specified instance according to the manifest file.</p> 
-<h3>Looking Ahead</h3> 
-<p>Based on our customer feedback and internal reviews, we are planning to add the following features to the above implementation:</p> 
-<li>Add AMI patching as part of the overall process: Replace an AMI in an Auto Scaling Launch Configuration with the patched AMI.</li> 
-<li>Add additional exception handling for process failures and the patching product: If an SSM command successfully sent, but the patch process fails on the instance. A notification or support ticket is created. In some cases, a single patch process can take longer than five minutes to run. Since five minutes is the maximum runtime for Lambda functions, we introduce a polling mechanism to query the patch progress following the guidelines outlined in this <a href="https://aws.amazon.com/blogs/compute/building-high-throughput-genomics-batch-workflows-on-aws-workflow-layer-part-4-of-4/">post</a>.</li> 
-<h3>Summary</h3> 
-<p>Using <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-ssm-docs.html">Systems Manager predefined documents</a> and <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> together allowed this <a href="https://github.com/Cloudticity/o2-instance-patching">solution</a> to be implemented within a short time frame. It also enabled the release of a scalable patching service to multiple customers. Beyond the automation and scalability, our customers see additional benefits like the ability to decrease the length of maintenance windows.</p> 
-<h3>About the Authors</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/uri-2.jpg" />Uri Katsir is an AWS Architect at Cloudticity, where he spends his days building really cool HIPAA-compliant services for the healthcare industry.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/31/thomas.png" />Thomas Zinn is a Project Manager at Cloudticity, where he provides HIPAA-compliant infrastructure solutions using AWS.</p> 
-<h3>About Cloudticity</h3> 
-<p><a href="http://cloudticity.com/">Cloudticity</a> helps healthcare organizations design, build, migrate, and manage HIPAA-compliant systems using AWS. We are an <a href="https://aws.amazon.com/partners/managed-service/">audited AWS Managed Service Provider (MSP)</a>, <a href="https://aws.amazon.com/health/healthcare-partners/">AWS Healthcare Competency Partner</a> and <a href="https://aws.amazon.com/devops/partner-solutions/">AWS DevOps Competency Partner</a>. In addition, as an AWS Service Catalog Partner and Public Sector Partner, Cloudticity is well positioned to help providers, payers, and healthcare services organizations use AWS securely and effectively. For further reading, check out <a href="https://aws.amazon.com/blogs/apn/how-cloudticity-uses-automation-to-scale-healthcare-solutions/">How Cloudticity Uses Automation to Scale Healthcare Solutions</a> and <a href="https://aws.amazon.com/partners/success/cloudticity/">AWS Partner Story: Cloudticity</a>.</p> 
-<hr /> 
-<p><em>AWS is not responsible for the content or accuracy of this post. The content and opinions in this blog are solely those of the third party author. It is each customer’s responsibility to determine whether they are subject to HIPAA, and if so, how best to comply with HIPAA and its implementing regulations. Before using AWS in connection with protected health information, customers must enter an AWS Business Associate Addendum (BAA) and follow its configuration requirements.</em></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/DSC2_statemanager-888x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Combating Configuration Drift Using Amazon EC2 Systems Manager and Windows PowerShell DSC</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Shaun Breen</span></span> | on 
-<time property="datePublished" datetime="2017-07-26T10:12:43+00:00">26 JUL 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/combating-configuration-drift-using-amazon-ec2-systems-manager-and-windows-powershell-dsc/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Configuration drift occurs when a system “drifts” or changes from its intended configuration. It is caused by having inconsistent configuration items (CIs) across environments.</p> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager</a> is a management service that helps you automatically collect a software inventory, apply OS patches, create system images, and configure Windows and Linux operating systems. These capabilities help you define and track system configurations, prevent drift, and maintain software compliance of your EC2 and on-premises configurations.</p> 
-<p>Systems Manager provides a management approach that is designed for the scale and agility of the cloud but extends into your on-premises data center. Systems Manager makes it easier for you to seamlessly bridge your existing infrastructure with AWS.</p> 
-<p>In my last <a href="https://aws.amazon.com/blogs/mt/using-microsoft-powershell-dsc-with-amazon-ec2-systems-manager/">post</a>, I introduced the concept of using Systems Manager <a href="https://aws.amazon.com/ec2/systems-manager/run-command/">Run Command</a> to apply a declarative based model for EC2 instance configuration (configuration as code) via Windows PowerShell Desired State Configuration (DSC). In this post, I show how you can combat configuration drift at scale using PowerShell DSC and a management tool from Systems Manager called <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">State Manager</a>.</p> 
-<p><span id="more-886"></span></p> 
-<b>Configuration drift</b> 
-<p>Configuration drift can happen for a multitude of reasons and can occur in many types of environments such as database systems, network configurations, directory services, web servers, and custom APIs. Some possible reasons that drift can occur include system updates, code pushes, hardware upgrades, or software updates that get applied to some, but not all of your intended systems. I am sure that you have seen this firsthand. &nbsp;We have all heard “but it worked in my dev environment.”</p> 
-<p>Configuration drift can cause problems that can result in unintended system behaviors, system failures, disaster recovery issues, and many other potential problems. Fortunately, there are tools and technologies that help mitigate drift.</p> 
-<li><strong>Configuration as code</strong></li> 
-<p style="padding-left: 30px">Declaratively define a desired state within a configuration file that can be applied to a system to interpret and apply.</p> 
-<li><strong>State Manager</strong></li> 
-<p style="padding-left: 30px">An EC2 tool that helps you apply a configuration to a set of on-premises servers and EC2 instances on a scheduled basis.</p> 
-<li><strong>Configuration management databases (CMDB)</strong></li> 
-<p style="padding-left: 30px">CMDBs help track the state of IT assets (also known as configuration items), allowing IT administrators the ability to check on the current state of CIs at any time. A common issue with CMDBs is stale data, meaning that the current state is not always up-to-date. The inability to reliably detect drift is problematic as mitigation is not performed. While CMDBs are popular, I do not use them as a solution in this post.</p> 
-<b>Configuration as code via PowerShell DSC</b> 
-<p>Before I dive into a solution to help with the ongoing struggles of configuration drift, here are the benefits of using configuration as code via PowerShell DSC:</p> 
-<li><strong>Definition files.</strong></li> 
-<p style="padding-left: 30px">A system “desired state” is defined in declaratively based configuration files. You no longer need to develop custom code and scripts to handle the configuration state that you want for your servers.</p> 
-<li><strong>Idempotency.</strong></li> 
-<p style="padding-left: 30px">You can apply the configuration file repeatedly without adverse side effects.</p> 
-<li><strong>Self-documentation.</strong></li> 
-<p style="padding-left: 30px">The configuration files are human-readable and easily understood.</p> 
-<b>State Manager</b> 
-<p>State Manager allows you to schedule a script to be run against your on-premises servers and EC2 instances on a scheduled basis. If the scripts are idempotent, you can apply them repeatedly. This gives way to a simple and scalable pattern that helps mitigate configuration drift.</p> 
-<ol> 
-<li>Define your set of servers.</li> 
-<li>Create idempotent scripts or use PowerShell DSC to define your desired state configuration.</li> 
-<li>Apply the script on a scheduled basis to mitigate any drift that may have occurred since the last time you ran the script.</li> 
-</ol> 
-<b>State Manager and PowerShell DSC</b> 
-<p>This is a powerful combination! State Manager and PowerShell DSC allow you to define configuration policies that can be applied to your EC2 instances at scale. It ensures that your instances remain in that state by reapplying the policy on a defined schedule. While this does not prevent drift from occurring, it helps you mitigate any drift that may have occurred. Thus, this is an excellent pattern to ensure that both your on-premises servers and EC2 instances stay in your desired state.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/07/25/DSC2_statemanager.png" /></p> 
-<p>In this section, I show you how to use State Manager from the AWS Management Console. You learn to use both State Manager and PowerShell DSC to combat configuration drift.</p> 
-<p>At a high level, this is the walk-through process:</p> 
-<ol> 
-<li>Create EC2 Windows instances.</li> 
-<li>Tag those instances such that they are considered a set of instances that share a common purpose.</li> 
-<li>Create a State Manager association. This association executes a PowerShell DSC script against the tagged instances on a specified schedule. 
-<li>The PowerShell DSC script is contained in a PowerShell module downloaded from a S3 endpoint. It is authored by AWS and its intent is to install IIS on the instance and enable ASP and Tracing features. The module is publicly available and can be <a href="https://s3.amazonaws.com/aws-windows-samples-us-east-1/PSModules/SSMDevOps.zip">downloaded</a>.</li> 
-</ul> </li> 
-</ol> 
-<b>Walk-through</b> 
-<ol> 
-<li>In the EC2 console, <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/EC2_GetStarted.html#ec2-launch-instance_linux">create two or more new Windows Server instances</a>.</li> 
-<li>Choose <strong>Instances</strong>, select the instances that you just created, and choose <strong>Tags</strong>.</li> 
-<li>Choose <strong>Add/Edit Tags</strong> and set the following values: 
-<li><strong>Set Key</strong> = Metadata</li> 
-<li><strong>Set Value</strong> = {“Environment”: “Production”, “Type”: “IIS Web Server”}</li> 
-</ul> </li> 
-<li>In the EC2 console, choose <strong>State Manager</strong>, <strong>Create Association</strong>, and select the document <strong>AWS-InstallPowerShellModule</strong>. Set the following values: 
-<li>Keep the document version as $DEFAULT.</li> 
-<li>For <strong>Specifying a Tag</strong>, select: 
-<li><strong>Tag Name</strong> = Metadata</li> 
-<li><strong>Tag Value</strong> = {“Environment”: “Production”, “Type”: “IIS Web Server”}</li> 
-</ul> </li> 
-<li>For <strong>Schedule</strong>, choose Every <strong>30</strong> Minutes.</li> 
-<li>For the <strong>Source</strong>, enter the following URL: <a href="https://s3.amazonaws.com/aws-windows-samples-us-east-1/PSModules/SSMDevOps.zip">https://s3.amazonaws.com/aws-windows-samples-us-east-1/PSModules/SSMDevOps.zip</a></li> 
-<li>For <strong>Commands</strong>, copy and paste the following:</li> 
-<li> <code class="lang-powershell">Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
-Import-Module SSMDevOps
-Install-SsmDoIIS
-Start-DscConfiguration -Path Install-SsmDoIIS -Wait</code> </li> 
-</ul> </li> 
-<li>Choose <strong>Create Association</strong>.</li> 
-</ol> 
-<b>Conclusion</b> 
-<p>Systems Manager offers a suite of tools to help you manage both your EC2 and on-premises instances. In this post, I discussed some common approaches to mitigate configuration drift at scale. Finally, I provided an example walk-through to try mitigating configuration drift using Systems Manager and PowerShell DSC.</p> 
-<b>About the Author</b> 
-<p><strong><a href="https://www.linkedin.com/in/shaunbreen/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/06/02/shaunbreen.png" /></a>Shaun Breen is a Systems Development Engineer on the Amazon EC2 Windows team</strong>.&nbsp;The EC2 Windows team is responsible for producing Windows Server AMIs and Systems Manager documents. Shaun enjoys developing solutions that make EC2 the best place to run Microsoft Windows Server in the cloud. When not working on EC2 Windows solutions, he enjoys attending sporting events, coaching ice hockey, and spending time with his wife and three children.</p> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.

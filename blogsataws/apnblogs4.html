@@ -190,6 +190,410 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="apnblogs1.html">Page 1</a>|<a href="apnblogs2.html">Page 2</a>|<a href="apnblogs3.html">Page 3</a>|<a href="apnblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/14/Mobile-Sign-Ups_border-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Managing SaaS Identity Through Custom Attributes and Amazon Cognito</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Judah Bernstein</span></span> | on 
+<time property="datePublished" datetime="2017-11-09T15:36:55+00:00">09 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/mobile-services/amazon-cognito/" title="View all posts in Amazon Cognito*"><span property="articleSection">Amazon Cognito*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-network/" title="View all posts in AWS Partner Network*"><span property="articleSection">AWS Partner Network*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/mobile-services/" title="View all posts in Mobile Services*"><span property="articleSection">Mobile Services*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/managing-saas-identity-through-custom-attributes-and-amazon-cognito/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5211" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5211&amp;disqus_title=Managing+SaaS+Identity+Through+Custom+Attributes+and+Amazon+Cognito&amp;disqus_url=https://aws.amazon.com/blogs/apn/managing-saas-identity-through-custom-attributes-and-amazon-cognito/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5211');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><strong><em>By Judah Bernstein, Partner Solutions Architect at AWS focused on SaaS</em></strong></p> 
+<p>Identity is a fundamental design decision that software as a service (SaaS) architects must consider when developing a multi-tenant system. Developers who are building SaaS applications must be able to identify a user, the tenant associated with the user, the user’s permissions, and the relationship a tenant has with the provider, such as usage plan or tier.</p> 
+<p>In this post, I will explore how to architect a multi-tenant system and identify tenant context and role using <a href="https://aws.amazon.com/cognito/">Amazon Cognito</a>, which lets you easily add user sign-up and sign-in to your mobile and web apps.</p> 
+<p>I’ll first describe how to introduce tenant context into a multi-tenant application, and then define custom attributes and claims. Finally, I’ll present a few design considerations and show you how to take advantage of custom attributes within a multi-tenant system.<br /> <br /> </p> 
+<a href="https://aws.amazon.com/cognito/"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Amazon-Cognito-overview.png" /></a> 
+<p class="wp-caption-text"><em>Figure 1 – Amazon Cognito lets you focus on creating great app experiences instead of worrying about building, securing, and scaling a solution to handle user management, authentication, and synchronization across devices.</em></p> 
+<br /> 
+<p></p> 
+<b>Introducing Tenant Context into Amazon Cognito</b> 
+<p>To secure and isolate multiple tenants within a SaaS application, you must inject tenant context into applications or infrastructure. Tenant context may consist of a customer (tenant) identifier, usage plan, user identifier, and application role. This allows an application to programmatically adjust to the agreement with the customer, scope the access of resources to the corresponding customer, and constrain the customer to the permissions defined by the application role.</p> 
+<p>You can inject SaaS applications with tenant context in myriad ways. One approach is to inject it into the token obtained following a sign-in to an identity provider. Amazon Cognito user pools provide you with an identity provider so you can introduce tenant context. This allows you to architect the application to be stateless, scalable, and secure.</p> 
+<p>Amazon Cognito also lets you add user sign-up and sign-in to mobile and web applications with a dedicated login using custom credentials, such as an email address and password. User pools provide a cost-effective, secure, highly available, and durable user directory that stores a collection of user profiles with standard and custom attributes. You can define these attributes by using key-value pairs, and then use these attributes within the application or infrastructure to regulate access control and maintain tenant context.</p> 
+<b>Standard Attributes and Claims</b> 
+<p>Amazon Cognito has a set of built-in standard attributes that match the attributes provided by the <a href="http://openid.net/specs/openid-connect-core-1_0.html#StandardClaims">OpenID Connect (OIDC) specifications</a>, such as <span style="font-family: courier">given_name</span>, <span style="font-family: courier">family_name</span>, <span style="font-family: courier">email</span>, and <span style="font-family: courier">birthdate</span>. These attributes are key-value pairs associated with a user profile.</p> 
+<p>Standard attributes limit the independent software vendor’s (ISV’s) ability to meet the requirements of a multi-tenant system. For example, defining a tenant simply by their email domain may result in challenges if you’re supporting multiple business units within an enterprise organization, or may prohibit a subsidiary of an enterprise from obtaining access to tenant data.</p> 
+<p>To bind tenant context, you should introduce custom attributes within the context of the authentication and authorization mechanism. Defining custom attributes within a user profile allows you to inject key-value pairs into an application, and supports the extensibility and identification of tenant context.</p> 
+<b>JSON Web Token and Authorization Claims</b> 
+<p>You can obtain tenant context by decoding key-value pairs that were injected into a secure authorization token, generated and signed by Amazon Cognito. This <a href="https://tools.ietf.org/html/rfc7519">JSON Web Token</a> (JWT) is issued and signed by a centralized server after a user is authenticated with their user name and password, as shown in <em>Figure 2</em>.</p> 
+<p>The issued token’s key-value pairs are claims obtained from profile attributes, which include details of the issuing provider. This may include details on the identity such as the user’s <span style="font-family: courier">given_name</span>, and custom claims such as the defined key-value pairs.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/JSON-Web-Token-1.png" /> 
+<p class="wp-caption-text"><em>Figure 2 – JSON Web Token authentication and authorization flow.</em></p> 
+<br /> 
+<p></p> 
+<b>Design Considerations for Using Custom Attributes (Claims)</b> 
+<p>Claims let you customize and enrich the authorization and association of an identity within the context of an access token. You can use the <a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/CognitoIdentityServiceProvider.html">AWS Software Development Kit (SDK) for JavaScript</a> and write the required services to automatically provision a tenant, create a user with specific custom attributes, and integrate custom logic within the application to permit or deny requests based on these corresponding claims. <em>Figure&nbsp;3</em> illustrates how you can architect a SaaS application to incorporate claims for scoping tenant access.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Obtaining-and-Verifying-Tenant-Context.png" /> 
+<p class="wp-caption-text"><em>Figure 3 – Obtaining and verifying tenant context.</em></p> 
+<br /> 
+<br /> In a multi-tenant application, a client application generally will pass the obtained ID token to a multi-tenant service. The service is responsible for decoding and parsing the token, and assessing the corresponding claims to verify the user and tenant context, as shown in 
+<em>Figure 4</em>. By tying together multiple claims, you can address varied and often complex requirements for how the user is allowed to access an application or infrastructure. 
+<br /> 
+<br /> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Authentication-and-Authorization-Workflow.png" /> 
+<p class="wp-caption-text"><em>Figure 4 – Steps for authentication and authorization.</em></p> 
+<br /> 
+<p></p> 
+<b>SaaS Examples for Custom Attributes</b> 
+<p>Developers can take various approaches to introducing custom attributes, identifying tenant context, and authorizing users within a SaaS application when using Amazon Cognito. You must understand the business requirements to determine the appropriate choice for your architecture.</p> 
+<p>I’ve put together the following references to describe some of these approaches.</p> 
+<h3>Example 1 – Introduction of Custom Attributes for Tenant Context</h3> 
+<p>One common approach to enforce tenant isolation is to define multiple custom attributes, which, when combined, uniquely identify the entity, its permissions, and its associated tenant. A unique tenant identifier, a role to designate permissions (for a user), and a universally unique alphanumeric string of the identity give the application sufficient context to assess the identity in a multi-tenant environment. This approach may be extended with additional business logic, such as a usage plan that provides hierarchical layers of features or usage.</p> 
+<p>A JWT token obtained following an authentication, as shown in <em>Figure 5</em>, might include four custom claims: tenant identifier (<span style="font-family: courier">tenant_id</span>), role (<span style="font-family: courier">role</span>), usage plan (<span style="font-family: courier">tier</span>) to determine the plan the tenant is subscribed to (free, standard, professional), and a universally unique identifier (<span style="font-family: courier">sub</span>) generated by the authorization server to uniquely identity the entity. In this example, you can integrate the required application code to assess the value within custom attributes, associate or generate the permissions required for the user, and provide the appropriate access.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Amazon-Cognito-ID-Token.png" /> 
+<p class="wp-caption-text"><em>Figure 5 – Structure of the Amazon Cognito ID token with custom attributes.</em></p> 
+<br /> 
+<br /> Another example of this approach is when a user signs in to an application with their user name and password. The user is aware only of the functionality and data they have access to. They’re unaware that their tenant identifier is 
+<span style="font-family: courier">4c7a2b201a57672bb748f821723d52c4</span>, their role is 
+<span style="font-family: courier">TenantAdmin</span>, their tier is 
+<span style="font-family: courier">Professional</span>, and their sub is 
+<span style="font-family: courier">5b6a5bad-f59b-48ad-8f2d-9785d5a455b2</span>. 
+<p></p> 
+<p>Custom attributes provide a transparent approach to providing identity and isolation, which is handled by the application’s identity platform. If the user submits a request to create a product, the service is responsible for verifying the signature of the JWT token, decoding the token to obtain the corresponding claims, and invoking the expected micro-service methods or functions with the corresponding claims.</p> 
+<p>Amazon Cognito user pools, when combined with <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-identity.html">Amazon Cognito Federated Identities</a>, can match a role with a custom attribute, thereby associating a user who has a specific attribute with the AWS Identity and Access Management (IAM) policy. You can combine multiple custom attributes into a hash or map, and then assign this value as the criteria for the claim match. This allows for various permutations that can be used to assess the permissions required for the identity.</p> 
+<h3>Example 2 – Introduction of User Pool Group</h3> 
+<p>Amazon Cognito user pools give an administrator the capability to add groups and associate users with groups via the console, the AWS Command Line Interface (CLI), or programmatically. Doing so introduces specific custom attributes (<span style="font-family: courier">cognito:groups</span> and <span style="font-family: courier">cognito:roles</span>, as described in <em>Figure 6</em>) that are managed and maintained by Amazon Cognito and available within the ID token.<br /> This approach simplifies the administration required for managing the required, mutable, and editable flags provided by the user pool’s custom attributes, by handing off the administration of these attributes to Amazon Cognito. In addition, user pools can associate a role with a group when combined with Amazon Cognito Federated Identities.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Cognito-ID-Token-Group-Attributes.png" /> 
+<p class="wp-caption-text"><em>Figure 6 – Structure of the Amazon Cognito ID token with group attributes.</em></p> 
+<br /> 
+<p></p> 
+<h3>Example 3 – Combination of User Pool Groups with Custom Attributes</h3> 
+<p>In some scenarios, custom attributes might be necessary within an application context, but the manageability of role association to claim match doesn’t meet a developer’s requirements. In this scenario, it might make sense for you to use custom attributes for application context, but leverage the group association for the tenant context, roles, and policies.</p> 
+<p>In <em>Figure 7</em>, John Doe is assigned to a group designated <span style="font-family: courier">GroupName</span>, has an association for the <span style="font-family: courier">ReadOnly</span> role, and has the custom attribute of <span style="font-family: courier">customer:tier : Professional Tier</span>. The role may be associated with the group through the Amazon Cognito association to simplify access management, but the custom attribute for the tenant usage plan may be maintained separately and without the need for additional permissions or a specific group.</p> 
+<p>Amazon Cognito can support thousands of groups per user pool, and this model provides you with much-needed flexibility.</p> 
+<p>By associating tenant-specific users that have shared custom attributes with a user pool group, you can use a hybrid approach to tenant isolation. You can then add custom logic into the application that is responsible for scoping the tenant-level access through the evaluation of the provided custom attributes. This approach to tenant-level security may be further solidified by associating users with tenant-specific groups or corresponding roles. This allows for a re-enforcement of tenant-level isolation for AWS resources by providing fine grained IAM access policies.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Cognito-Token-ID-Custom-Attributes.png" /> 
+<p class="wp-caption-text"><em>Figure 7 – Structure of the Amazon Cognito ID token with groups and custom attributes.</em></p> 
+<br /> 
+<p></p> 
+<h3>Example 4 – Introduction of User Pool Per Tenant</h3> 
+<p>Multiple user pools provide a greater level of isolation between customers. This approach can be combined with the previous examples for additional flexibility. Providing one user pool per tenant is an acceptable approach to multi-tenancy and allows for customization of custom attributes per customer.</p> 
+<p>In this scenario, if you have customers with unique requirements, each requirement can be met with minimal risk to the remaining tenants of the system. Note that the application must be developed with the appropriate programmatic and strategic approach to fit these requirements.</p> 
+<p>There are some scalability considerations to evaluate in this design pattern, including AWS service limits, manageability of multiple user directories, and maintenance of application security. For more information about this model, see the Tenant Isolation Architectures whitepaper from AWS.</p> 
+<h3>Example 5 – Maintaining a Multi-Tenant Identity Platform for SaaS Providers</h3> 
+<p>This example targets ISVs who are interested in becoming multi-tenant (OpenID) identity providers, and allows you to consume the identity platform through customer-maintained Amazon Cognito user directories. As shown in <em>Figure 8</em>, an ISV can architect a solution in which tenants are SaaS providers that have tenants themselves.<br /> <br /> </p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/09/Identify-Platform-Hierarchal-Structure-1.png" /> 
+<p class="wp-caption-text"><em>Figure 8 – Example of a multi-tenant identity platform heirarchal structure.</em></p> 
+<br /> 
+<br /> An ISV can manage and maintain AWS accounts through the 
+<a href="http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/CognitoIdentityServiceProvider.html">AWS SDK for JavaScript APIs</a> and 
+<a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html">roles for cross-account access</a>. You maintain control and administrative privileges to the Amazon Cognito user pools within your own account, but can choose to delegate the responsibility and overhead of identity management to the ISV. 
+<p></p> 
+<b>Considerations: Introducing Custom Attributes</b> 
+<p>While the integration of custom attributes has significant benefits, there are some aspects developers should consider when architecting a multi-tenant system.</p> 
+<p>You should carefully consider the impact of introducing mutable or required attributes into an environment. For example, if a third party is able to manipulate the <span style="font-family: courier">tenant_id</span> attribute, this change could disrupt the consistency and security of the system. Therefore, you should decide which custom attributes are required and configure these as non-mutable.</p> 
+<p>Integrating permissions within the context of a user pool is important as well. If you introduce a custom attribute labeled <span style="font-family: courier">role</span> to maintain the permissions of a user within a tenant, you must define the attribute as mutable. This will be required to constrain the mutability of the attribute to approved users. SaaS architects commonly define a tenant administrator as the appropriate <span style="font-family: courier">role</span> and responsible <span style="font-family: courier">party</span> for maintaining tenant specific users and data.</p> 
+<p>We recommend that you complete a competitive review of potential identity solutions before your development cycle. During this review, it’s important to ensure that solutions allow for the introduction and mutability of custom attributes and claims. This allows for long-term extensibility of the SaaS identity architecture.</p> 
+<b>Next Steps: Identity with a Multi-Tenant Mindset</b> 
+<p>To streamline the move to a secure and agile multi-tenant system, we recommend that developers minimize the complexity required to identify and manage tenant context. Amazon Cognito enables you to simplify, secure, and scale your architecture with custom attributes. Offloading the management of tenant context and user roles to custom attributes allows a business to focus on its product and go-to-market strategy.</p> 
+<p>If you’re interested in understanding the design considerations for integrating custom attributes within a SaaS application, you can evaluate a SaaS reference architecture in real-time by deploying the <a href="https://aws.amazon.com/quickstart/saas/identity-with-cognito/">SaaS Identity and Isolation with Amazon Cognito Quick Start</a> within your AWS account.</p> 
+<p>The Quick Start equips you with a full working solution that digs into the nuances of injecting tenant identity into SaaS applications. It addresses a broad range of identity topics and illustrates how tenant context is introduced via Amazon Cognito and used in combination with IAM to scope access to tenant resources.</p> 
+<p>For more information about the SaaS Identity and Isolation with Amazon Cognito Quick Start, see the <a href="https://s3.amazonaws.com/quickstart-reference/saas/identity/cognito/latest/doc/saas-identity-and-isolation-with-cognito-on-the-aws-cloud.pdfhttps:/aws.amazon.com/quickstart/saas/identity-with-cognito/">deployment guide</a> and <a href="https://github.com/aws-quickstart/saas-identity-cognito">GitHub source repository</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5211');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/22/MSP-Badge_border.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Solving Next-Gen Problems for Next-Gen Cloud Adopters</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Barbara Kessler</span></span> | on 
+<time property="datePublished" datetime="2017-11-07T10:05:25+00:00">07 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-managed-services/" title="View all posts in AWS Managed Services*"><span property="articleSection">AWS Managed Services*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-network/" title="View all posts in AWS Partner Network*"><span property="articleSection">AWS Partner Network*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/solving-next-gen-problems-for-next-gen-cloud-adopters/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5185" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5185&amp;disqus_title=Solving+Next-Gen+Problems+for+Next-Gen+Cloud+Adopters&amp;disqus_url=https://aws.amazon.com/blogs/apn/solving-next-gen-problems-for-next-gen-cloud-adopters/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5185');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><strong><em>By Brett Moss, SVP and General Manager of Hyperscale Cloud at Ensono</em></strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/14/MSP-Badge-300x150.png" />Looking back, October 2008 is as good a time as any to designate as the beginning of the first generation of mass adoption of the cloud.</p> 
+<p>It was during that time that Amazon Web Services (AWS) removed the beta label from Amazon Elastic Compute Cloud (Amazon EC2) and officially provided a world of software developers with virtually unlimited storage and compute capacity, available on-demand and at low-cost. Those developers were off to the races—building more and more applications in the cloud, and taking advantage of the many features and services AWS began to add.</p> 
+<p>That first generation overcame the challenge of thinking of infrastructure as code. They learned to stop thinking of compute instances as precious snowflakes that required extensive recovery plans, and they started thinking of them as disposable resources that could—and should—be shut down at the first sign of trouble, and then automatically rebuilt.</p> 
+<p>The first generation of cloud adopters merged the practices of infrastructure automation and code deployment automation, so that the infrastructure running their apps was actually deployed by the frequent pushes coming from a code repository. They faced many challenges reckoning with the awesome power of AWS and pioneered cloud engineering in the process.</p> 
+<p>If we want to point to the zenith of the first generation of cloud adoption, we could do worse than July 2011, when Netflix announced it had developed a set of tools (the Simian Army) that randomly terminated production compute instances during working hours in order to make sure engineers designed their use of AWS for fault tolerance and rapid, automated recovery. There’s nothing like taking off the training wheels to get the most out of auto scaling groups.</p> 
+<b>The Next Generation</b> 
+<p>The first generation of cloud adopters had a massive advantage over the mid-market and enterprise customers who came after them—their applications were born in the cloud. They did not have years, even decades, of legacy infrastructure running these new apps, so they were largely unencumbered to go “all-in” on AWS.</p> 
+<p>Today, a new generation of companies is navigating a journey to AWS, and those companies have a very different set of challenges to overcome.</p> 
+<p>Mid-market and enterprise customers embraced AWS as a viable execution venue for their workloads sometime around 2015, when Capital One and GE stood on the keynote stage at re:Invent and declared themselves all-in on AWS. Of course, there had been shadow IT and all sorts of testing and tinkering happening prior to then, but the data indicates later adopters only accelerated their movement to the cloud in the past three years or so.</p> 
+<p>This next generation of adoption brings a new generation of challenges. At <a href="https://www.ensono.com/">Ensono</a>, our stock-in-trade is this set of challenges. We are a company built to work with mid-market and enterprise clients that were not born in the cloud and run production applications on myriad computing systems. Our clients simultaneously run bare metal servers, virtualized servers, company data centers, hosted systems, mainframes, and AWS. Our job, working with clients, is to make it all work together to achieve whatever outcomes they define as critical to their businesses.</p> 
+<p>With extensive installed IT—called “technical debt” on a bad day and “legacy” on a good day—our clients cannot simply throw everything away and uproot to AWS overnight. They hold equipment and data centers as assets on their balance sheets; many of their applications are not ready to support the advanced capabilities of AWS; and their entire business depends on SAP estates that took 20 years to get fully tuned. Most do not yet have the in-house skills to stand up to the Simian Army randomly switching off their infrastructure.</p> 
+<p>Let’s look at two examples we frequently encounter working with the new generation of AWS users.</p> 
+<b>Enterprise Applications in the Cloud</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/14/MSP-Lifecycle-Square-300x300.png" />The first challenge we encounter concerns how to use AWS for enterprise applications. For our clients, these apps are the central nervous systems of their companies. The idea of making changes to SAP and Microsoft installations sends chills down the spines, but AWS provides a compelling option for these applications. We work with clients every day to migrate and operate in the cloud, minimizing disruption to their businesses.</p> 
+<p>SAP customers are looking at how to make the transition to HANA after SAP stopped supporting other databases for its newest generation of business applications. Having spent many years honing the people, processes, and technology to make SAP deployments work the way they want, our clients are staring down the barrel of a wholesale database migration, and they have to do it without taking down the operations of their company. These clients are looking for any way to de-risk the process, and Ensono developed a dedicated practice around using AWS technology to assist clients in this transition.</p> 
+<p>Our approach focuses on three outcomes: fast migration, reduced capital expenditures, and reduced operating expenses. To reduce the overall migration time, Ensono works with AWS in a Rapid Migration Methodology, a set of tools and best practices created by SAP and AWS that enables Ensono to help customers rapidly test migrations. Using this methodology, Ensono extracts and refactors database data to HANA format and deploys it into a test environment on AWS. In most cases, this can be done in a matter of days.</p> 
+<p>Once the testing is validated, Ensono’s SAP architects work with our peers at AWS and with the client to deploy an architecture on one of 12 SAP-certified HANA AWS instance types, including the powerful x1e, one of the largest instance types available today. These instances are some of the most unique in the industry for their ability to support the extensive in-memory requirements of the HANA database, and they help save our clients the requirement to procure new and expensive hardware.</p> 
+<p>Finally, once the SAP estate is in steady-state on AWS, we use our own cloud automation tooling to create ongoing economic efficiencies in the environment. For example, this might mean automatically turning on and off lower-level environments outside of business hours in order to reduce the infrastructure costs without compromising the availability of the SAP applications.</p> 
+<p>With Microsoft migrations, we work with clients to use AWS technology to achieve a leaner, lower-cost operation. Taking MS SQL as an example, AWS’s unique approach to providing low-latency connectivity between Availability Zones (AZs) enables Ensono engineers to reduce the required number of compute nodes for a SQL deployment by a factor of up to one-third. Testing has demonstrated a very consistent latency of under 2ms between AZs in any AWS region.</p> 
+<p>This means we can deploy an HA cluster with fewer nodes because we can use a two-node multi-AZ solution and forego the typical third node that would be required for DR. For .net shops, or clients running large SQL-specific apps like Dynamics, Biztalk, ERP, or those building data lakes on SQL, this ongoing cost reduction is considerable and does not come at the cost of compromised availability.</p> 
+<b>Installed IT</b> 
+<p>The final challenge we will discuss in this article is one that comes from clients with extensive and varied infrastructure systems in use. While the next generation of cloud adopters understand the many advantages of operating on AWS, they also understand that applications in their current forms may be most suited to a hybrid architecture.</p> 
+<p>At Ensono, we think about this along two axes: the venue, and the application.</p> 
+<p>To diagnose the most suitable venue for various tiers of an application, we use the paradigm of systems of record and systems of engagement. Because of Ensono’s strong pedigree managing mainframe and midrange infrastructure for large clients, we often work with companies running applications built for this kind of system.</p> 
+<p>Looking carefully at those applications, Ensono engineers make recommendations involving parsing out the tiers of an app in order to achieve the financial, agility, or operational goals of the client. It may be that a system of record can stay on a mainframe until the mainframe keels over (which, we all know, will probably have a long life cycle.) But, the system of engagement—say, a mobile front end—is a prime candidate for the cloud.</p> 
+<p>With architectural decisions in place, the client experience will largely depend on Ensono’s ability to communicate back to them in the language the matters most—that of the application itself. Regardless of the multiple types of infrastructure powering a workload, our job is to maintain the availability, security, and efficiencies of the app. In Ensono’s case, we achieve this using our own systems, collectively called Ensono M.O., that allow us to manage hybrid architectures through a single set of processes, automation, and reporting. For clients using AWS, M.O. connects directly into AWS and tools from APN Technology Partners that provide our clients the application-level view they require.</p> 
+<b>Next Steps</b> 
+<p>As AWS continues to disrupt the enormous base of installed infrastructure around the world, the next generation of adopters will use AWS tools, technology, and APN Partners to address their new challenges. They are not the same challenges faced by the first wave of born-in-the-cloud AWS users, but they are surmountable, and are being continually addressed so that companies can reap the benefits of the cloud.</p> 
+<p><a href="https://aws.amazon.com/partners/find/partnerdetails/?n=Ensono&amp;id=001E000001IPZ92IAH">Learn more about APN Advanced Consulting Partner Ensono &gt;&gt;</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5185');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/14/AWS-Marketplace_border.png" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Marketplace Announces the Availability of Seller Private Offers</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Brad Lyman</span></span> | on 
+<time property="datePublished" datetime="2017-11-03T09:18:02+00:00">03 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/software/aws-marketplace/" title="View all posts in AWS Marketplace*"><span property="articleSection">AWS Marketplace*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-network/" title="View all posts in AWS Partner Network*"><span property="articleSection">AWS Partner Network*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/aws-marketplace-announces-the-availability-of-seller-private-offers/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5161" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5161&amp;disqus_title=AWS+Marketplace+Announces+the+Availability+of+Seller+Private+Offers&amp;disqus_url=https://aws.amazon.com/blogs/apn/aws-marketplace-announces-the-availability-of-seller-private-offers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5161');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Brad Lyman, Principal Product Manager at AWS</em></p> 
+<p><a href="https://aws.amazon.com/marketplace"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/14/AWS-Marketplace_border-300x150.png">AWS Marketplace</a>, which has over 4,000 software listings from more than 1,250 popular software vendors across 35 product categories, announced that customers can now receive specific pricing and end-user license terms with <strong>Seller Private Offers</strong>.</p> 
+<p>With this feature, software sellers participating in the Enhanced Data Sharing (EDS) program can extend to any AWS account a version of their product, enabling volume discounts through AWS Marketplace. This means AWS customers can enjoy all the same benefits of consolidated billing, cost analysis, and subscription management of AWS Marketplace while paying a lower privately negotiated price visible only to that customer and the seller.</p> 
+<p>The following information will help you start supporting customer specific pricing and end-user license terms with Seller Private Offers:</p> 
+<h3>Do you sell Amazon Machine Image (AMI) or SaaS products on AWS Marketplace?</h3> 
+<p>If so, you can now offer customers specific offers through AWS Marketplace. As customers make larger commitments, they often request special pricing or end-user license terms. AWS now makes it possible for customers to receive private offers with pre-negotiated pricing and end-user license terms directly through AWS Marketplace. This new feature&nbsp;is available to any AWS Marketplace software seller participating in the EDS program that compensates their sales team for AWS Marketplace sales.</p> 
+<h3>What&nbsp;about APN Partners who want to increase sales through AWS Marketplace?</h3> 
+<p>As a seller, you will be able to use AWS Marketplace to reach more customers. With Seller Private Offers, you can offer custom pricing and end-user license terms on your customers’ existing AWS bill. You’ll be attracting customers who have chosen AWS Marketplace due to the ease of finding, purchasing, and deploying solutions. Customers can quickly review your end-user license agreement, subscribe through AWS Marketplace, and receive a single bill for all their software purchases through AWS Marketplace.</p> 
+<h3>What does the release of Seller Private Offers mean for customers?</h3> 
+<p>Customers get a simple way to receive specific pricing and end-user license terms through AWS Marketplace. This makes it easier to consolidate more of their purchase on their AWS bill and take advantage of consolidated billing, cost analytics, and renewal management. Customers can lower their software costs while buying through AWS Marketplace. They can also receive a specific end-user licensing agreement to cover any required custom terms.</p> 
+<h3>What is the EDS program and how do I enroll?</h3> 
+<p>The AWS Marketplace Enhanced Data Sharing (EDS) program focuses on delivering “enhanced” buyer information, such as buyer email domain, AWS Account ID, and location, on a daily and monthly basis to select AWS Marketplace Sellers. The goal of delivering buyer information is to provide a framework for sellers to compensate their sales teams for AWS Marketplace subscription revenue.</p> 
+<p>Sharing monthly billed revenue information, usage information, and disbursed funds information by buyer provides a mechanism to help you correctly map deals and opportunities to the appropriate sales representative by company, geography, and AWS Account ID. This program requires that the data only be used to activate and motivate AWS Marketplace Seller field sales via formal sales compensation plans.</p> 
+<p>For more information regarding the program and how to enroll, contact <a href="mailto:aws-marketplace-seller-ops@amazon.com">aws-marketplace-seller-ops@amazon.com</a>.</p> 
+<h3>How do I get started with Seller Private Offers?</h3> 
+<p>We’ve made it easy for you to deliver private offers to your customers. To extend a private offer on one of your existing AWS Marketplace products, you only need to provide your customer’s account numbers (their payer account and any sub-accounts), the product code you’d like to discount, and the new product price. You can also share an offer duration (how long the price is good for) and a new EULA as a PDF. The AWS Marketplace Customer Business Desk will share the private offer’s URL with you and your customers. The URL is only visible after signing in with the provided account, meaning only your customer can see the price and EULA meant for them. They can then subscribe at any time prior to the offer’s expiration.</p> 
+<h3>How do I learn more?</h3> 
+<p>To learn more about using Seller Private Offers on AWS Marketplace, reach out to your AWS Marketplace Category Manager or the AWS Marketplace Managed Catalog Operations team.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5161');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/12/22/Security.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Next-Gen Managed Services Security: Social Engineering</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Thomas Robinson</span></span> | on 
+<time property="datePublished" datetime="2017-11-01T09:45:18+00:00">01 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-managed-services/" title="View all posts in AWS Managed Services*"><span property="articleSection">AWS Managed Services*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-network/" title="View all posts in AWS Partner Network*"><span property="articleSection">AWS Partner Network*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/next-gen-managed-services-security-social-engineering/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5159" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5159&amp;disqus_title=Next-Gen+Managed+Services+Security%3A+Social+Engineering&amp;disqus_url=https://aws.amazon.com/blogs/apn/next-gen-managed-services-security-social-engineering/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5159');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Thomas Robinson, Partner Solutions Architect at AWS</em></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/12/22/Security-300x150.png" />AWS Partner Network (APN) Partners new to managed services often have questions about how to protect their customers from social engineering attacks and how to best test themselves to meet APN Program requirements. In this post, we’ll provide guidance for APN Partners&nbsp;and inform customers on what to expect from their Managed Service Provider (MSP).</p> 
+<p>A large part of an AWS Solutions Architect’s role is helping customers maintain a robust security posture that follows best practices. An entire pillar of our <a href="https://d0.awsstatic.com/whitepapers/architecture/AWS_Well-Architected_Framework.pdf" target="_blank" rel="noopener noreferrer">Well-Architected Framework</a>, which we use to help validate our customer’s critical workloads, is dedicated to security. We work with next-gen <a href="https://aws.amazon.com/partners/msp/" target="_blank" rel="noopener noreferrer">AWS MSP Partners</a> and ensure they maintain secure environments.</p> 
+<p>To join the AWS MSP Program, an APN Partner undergoes a third-party validation audit to demonstrate they are following AWS best practices for securing cloud environments. While part of meeting these controls is technical, the support aspect of a managed services engagement includes a very human element. Items such as 24/7 call centers, helpdesk and escalation e-mails, or chat systems are all an attack surface which a malicious party can use to disrupt a business, or gain additional information useful in another type of attack.</p> 
+<p>To validate that our AWS MSP Partners are protecting these vulnerable areas, they must identify their attack surface, and then test potential attacks, as seen in the AWS MSP Validation Checklist under Control 8.1.9:</p> 
+<blockquote> 
+<p><em>“Partner performs secret shopper testing on vectors vulnerable for social engineering attacks, including call, chat and email systems. User validation should not utilize confidential data like social security numbers, or personal security questions.”</em></p> 
+</blockquote> 
+<p>In the same way a traditional&nbsp;MSP is responsible for the physical security of your datacenter, a next-gen&nbsp;MSP is an AWS customer’s trusted resource for helping maintain their portion of the <a href="https://aws.amazon.com/compliance/shared-responsibility-model/" target="_blank" rel="noopener noreferrer">Shared Responsibility Model</a>. Instead of physical keys, the MSP is their customer’s gatekeepers into the cloud, providing secure access methods and enforcement of change processes.</p> 
+<b>Best Practices and Anti-Patterns for Identifying and Minimizing Attacks</b> 
+<p>Before building a process for testing, APN Partners should identify exactly what vulnerabilities may exist, and follow best practices to reduce or eliminate the impact of a support channel being an attack vector.</p> 
+<h3>Federated Access for the AWS Console</h3> 
+<p>Managing access to the AWS Console via <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) covers the entire lifecycle, including creating, providing credentials for, and disabling users. Alternatively, by using a SAML provider for access to the AWS Console, an MSP can allow their customers or MSP Support Staff to use their own <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_enable-console-saml.html" target="_blank" rel="noopener noreferrer">SAML-based federation IdP for accessing the AWS Console</a>. This eliminates the need for the MSP to create a support process for resetting passwords and MFA devices, and allow the customer to directly manage their own users through existing processes.</p> 
+<h3>Temporary Credentials for Users</h3> 
+<p>To use services such as Amazon Simple Storage Service (<a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon S3</a>) or <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a>, developers and engineers need access keys with the minimum permissions necessary in accounts managed by the MSP. AWS provides options to manually create and destroy access keys for IAM users. Although access keys are still used, we recommend users take advantage of temporary credentials provided by the AWS Security Token Service (AWS STS), which has the capability of automatically rotating credentials.</p> 
+<p>Like console access, developers and engineers can be provided temporary credentials via <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_saml.html#CreatingSAML-configuring" target="_blank" rel="noopener noreferrer">SAML-based federation for API access</a>. This is a common AWS best practice, as automated key rotation reduces the chance your credentials will be exposed and vulnerable in the wild. For MSPs, this eliminates the need for a process to issue and rotate keys for end customers.</p> 
+<h3>Temporary Credentials for Applications</h3> 
+<p>Applications running&nbsp;on AWS also need AWS credentials to use our services. These credentials should be short lived, automatically rotated as they expire, and adhere to the principals of least privilege. By providing <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html" target="_blank" rel="noopener noreferrer">IAM Roles applied to an Instance Profile</a>, developers can create applications on <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon Elastic Compute Cloud</a> (Amazon EC2) using the AWS Software Developer Kit (SDK) without the need to securely store and rotate Access Keys in a configuration file.</p> 
+<h3>Consider Non-AWS Resources</h3> 
+<p>Apart from access to AWS APIs, MSPs should minimize the need for manual interaction with other customer access tasks such as maintaining authentication for SSH or RDP. By using the Amazon EC2 Run Command you can gate routine access to servers by authenticating users via IAM to execute commands instead of accessing them directly with SSH keys or passwords. For secrets management, the MSP should consider the <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/" target="_blank" rel="noopener noreferrer">Parameter Store</a> feature to provide a self-service place for customers to keep their configuration data such as database strings and passwords, which is also gated by IAM authorization.</p> 
+<h3>Security-as-Code</h3> 
+<p>As companies move towards more frequent self-service deployments, the change control process for approving changes shifts away from a manual review towards a pre-approved, well-defined, and frequently reviewed configuration. For example, PCI DSS Requirement 1 includes controls such as environments containing cardholder data should not be allowed access to the public internet or untrusted networks, allowing only necessary traffic. These rules should be included as part of your deployment processes to automatically validate that releases meet defined standards. Maintaining a high security environment and deploying frequently are not mutually exclusive.</p> 
+<b>Testing Considerations</b> 
+<h3>Detecting and Preventing Unauthorized Changes</h3> 
+<p>It is important to identify what changes a user may request from support channels and test the authorization for those changes, as well as ensuring controls around high-impact changes are enforced. Using our previous example of security-as-code, a single requestor should not have authorization to change the definition of acceptable traffic. Testing that appropriate change control review is followed and a requestor cannot bypass this by making an “urgent” support call maintains the integrity of your compliance controls.</p> 
+<h3>Preventing Data Leakage</h3> 
+<p>Even with a support structure where minimal change could be requested over channels such as phone or email, interaction via these methods can be used to extract information about a customer or their environment. Extracting information such as service endpoints, application platforms, or architecture details can help an attacker craft a more intelligent technical attack on customer applications. Always ensure sensitive information is communicated over appropriate channels, such as a support portal secured by multi-factor authentication.</p> 
+<h3>Protecting Against Email and Spear Phishing</h3> 
+<p>Helpdesk emails, specific engineering contact, and known escalation paths are some of the various ways attackers will try and compromise security. Using these paths, an attacker can attempt to enact unauthorized changes, gain additional information, or perform a technical attack by installing malware on an engineer’s device. These support channels should have a technical validation of the requestor, such as directing requests through a password and MFA protected portal, and avoid using personal details such as social security numbers or a challenge question.</p> 
+<h3>Testing Insider Threats</h3> 
+<p>Testing should be tuned to mitigate against insider threats, whether an existing employee exceeding their authority or a disgruntled former employee attempting to regain access. Tests should be crafted to assume an attacker may have a level of insight to processes such as escalation email paths or phone numbers. As such, it’s important to ensure you have safeguards around these paths and are testing them regularly.</p> 
+<b>Building a Testing Process</b> 
+<p>Once attack vectors have been identified and minimized, a robust process for testing can be built. This pairs technology solutions to perform phishing style attacks with human driven testing. Some APN Partners train resources to perform tests internally and dedicate time producing actionable output from those exercises. Other APN Partners engage with consulting firms focused on security to help them build a testing plan as well as provide resources for carrying out those tests.</p> 
+<p>For APN Partners focused on customers in verticals with strict compliance or security requirements, such as financial services or healthcare, this investment in a third-party validation can provide a stronger position when customers are reviewing potential managed services providers.</p> 
+<b>Next Steps</b> 
+<p>If you’re interested in learning more about our AWS Managed Service Provider Program, take a look at the&nbsp;<a href="https://aws.amazon.com/partners/managed-service/" target="_blank" rel="noopener noreferrer">MSP website</a>. It’s full of information about&nbsp;the benefits of being a next-gen&nbsp;MSP as well as the requirements that our third-party audit will validate.</p> 
+<p>If you are a customer looking for a next-gen MSP, you can find a list on the <a href="https://aws.amazon.com/partners/msp/" target="_blank" rel="noopener noreferrer">MSP Partner page</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5159');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/11/17/Build_border.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Testing AWS GameDay with AWS Well-Architected Framework – Remediation</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ian Scofield</span></span> | on 
+<time property="datePublished" datetime="2017-10-19T10:38:54+00:00">19 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-solutions-architect-sa-guest-post/" title="View all posts in AWS Partner Solutions Architect (SA) Guest Post"><span property="articleSection">AWS Partner Solutions Architect (SA) Guest Post</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/gameday/" title="View all posts in GameDay"><span property="articleSection">GameDay</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/testing-aws-gameday-with-the-aws-well-architected-framework-remediation/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5135" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5135&amp;disqus_title=Testing+AWS+GameDay+with+AWS+Well-Architected+Framework+%E2%80%93+Remediation&amp;disqus_url=https://aws.amazon.com/blogs/apn/testing-aws-gameday-with-the-aws-well-architected-framework-remediation/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5135');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Ian Scofield, Juan Villa, and Mike Ruiz, Partner Solutions Architects at AWS</em></p> 
+<p>This is the second post in our series documenting a project to fix issues with the GameDay architecture by using tenets of the <a href="https://aws.amazon.com/architecture/well-architected/" target="_blank" rel="noopener noreferrer">AWS Well-Architected Framework</a>. See <a href="https://aws.amazon.com/blogs/apn/testing-aws-gameday-with-the-aws-well-architected-framework/" target="_blank" rel="noopener noreferrer">Part 1 of the series</a>&nbsp;for an overview of the process, a description of the initial review, and a list of the critical findings identified by the review team.</p> 
+<p>In this post, we’ll cover the steps we took to fix the critical findings identified by the review team. In future posts, we will share our plans to refine our architecture through continuous improvement and collaboration with AWS solutions architects.</p> 
+<b>Findings</b> 
+<p>As noted in Part 1 of the serires, the review team delivered a list of critical findings we needed to prioritize and fix immediately, as well as a list of non-critical ideas that we should consider addressing in our roadmap for the GameDay architecture.</p> 
+<p>Here were the critical items:</p> 
+<li>The legacy administrative scripts for GameDay use AWS access keys and secret access keys that are stored in plain text in an <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a> table.</li> 
+<li>The load generator is a single instance in a single <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html" target="_blank" rel="noopener noreferrer">Availability Zone</a>&nbsp;(AZ) without any recovery options configured.</li> 
+<li>The disaster recovery (DR) plan is not clearly defined, and the recovery point objectives (RPO) and recovery time objectives (RTO) are not set. Also, the disaster recovery plan isn’t periodically tested against the RPO and RTO objectives.</li> 
+<p>The review team noted they would welcome a chance to review plans for remediation before implementation, so we set to work analyzing the deficiencies, documenting our plans, and making a rough estimate of the level of effort required to implement the fixes before making any changes.</p> 
+<p>Here is the high-level remediation plan we came up with to address the critical findings, in order of priority:</p> 
+<li><strong>Implement the use of cross-account roles to eliminate the usage of access and secret keys.&nbsp;</strong><br /> A quick review of the code suggested that we should allocate one day to develop and test cross-account access, and another day to update the instructions and train staff on the new feature. Since this fix seemed relatively simple and provided both security and operational benefits, we decided to set it as the highest priority to be integrated into the new design.</li> 
+<p></p> 
+<li><strong>For the load generator, move from a single instance to a container model that would allow for a clustered deployment.&nbsp;</strong><br /> This change was a little more complicated than the previous access key fix. We needed to modify our application to store state in DynamoDB instead of writing locally, and we needed to package our various applications and binaries into Docker containers. We planned to create an <a href="https://aws.amazon.com/ecs/" target="_blank" rel="noopener noreferrer">Amazon EC2 Container Service</a> (Amazon ECS) task definition and service for each of these components, which would take care of the scheduling and task placement for us. Switching to DynamoDB and containers would enable us to move our hard-coded configuration to an Auto Scaling group launch configuration, remove all hard-coded values in favor of variables set at launch, and use <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> templates for the deployment mechanism.<p></p> <p>These changes would net considerable improvements and have little impact on the overall flow of the game, although we did have to update the load management tool and game setup scripts to use DynamoDB and the Auto Scaling group rather than a static configuration file.We allocated two weeks to develop and test these new features, and one week to update our documentation and train staff on the new operation.</p></li> 
+<li><strong>Create a disaster recovery plan and validate it.<br /> </strong>Automating our infrastructure deployment with Amazon ECS and Auto Scaling groups simplified our disaster recovery plan, but it wasn’t a complete solution. There were still gaps in our recovery process and furthermore, having a solution but not testing it, or, at a minimum, walking through various scenarios, would leave us vulnerable to process gaps when the time came to put the plan into action. We allocated an additional week to create the plan, and an additional day to verify that all contingencies were covered and rehearsed.</li> 
+<p>We shared our plans with the review team before starting this work, to ensure that we were on the right track to meet all the requirements. The review team gave us the thumbs up, and we began putting our plan into action.</p> 
+<b>Initial analysis and rearchitecture</b> 
+<p>Although the list seemed straightforward, we quickly realized that these items pointed to a common underlying problem: our architecture was very simplistic, dated, and did not make good use of the modern features provided by the AWS platform. When we initially built GameDay, we focused on functionality and built an environment based on previous experience. However, the architecture didn’t really embrace modern tools or techniques, like the notion of building for failure, and anticipating the need for better disaster recovery capabilities.</p> 
+<p>With this in mind, we realized that we should attack this core architectural issue, which would, in turn, solve a majority of the critical findings as well as a large number of the non-critical recommendations. To achieve this, we moved from a single instance load generator to Docker containers running in an Amazon ECS cluster (see diagram below). This immediately gave us the benefit of a <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html" target="_blank" rel="noopener noreferrer">Multi-AZ</a> architecture and the ability to scale our infrastructure and handle the loss of components. We also modified additional services from the load generator to be run as <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> functions, which handle scaling and infrastructure management automatically.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/19/WA1.png" /></p> 
+<p style="text-align: center"><em>Updated Amazon ECS architecture</em></p> 
+<p>&nbsp;</p> 
+<p>While pursuing this new architecture, we realized that our previous deployment process involved manual creation of resources and configuration. We took a hard stance from the start to treat our infrastructure as code and used AWS CloudFormation to define our environment. This allowed us to easily version our infrastructure as we progressed through the remediation phase, and also played a critical role in developing our new disaster recovery plan.</p> 
+<b>Remediation</b> 
+<h3>Issue 1: AWS access keys</h3> 
+<p>Surprisingly, this item turned out to be the easiest to address. AWS provides a feature to <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html" target="_blank" rel="noopener noreferrer">enable role-based access between accounts</a>. Since we had already automated the configuration of both the admin and player accounts with AWS CloudFormation, it seemed simple to update the template to create a role rather than an access/secret key pair in the player account.</p> 
+<p>We initially thought it would be a massive undertaking to modify our entire code base to use sts:AssumeRole, but this turned out to be trivial. Because we used the AWS SDKs, and both access keys and IAM roles are part of the default credential provider chain and fully supported by the SDK, the only change we had to make was to remove the access keys and pass in the role ARN to assume.</p> 
+<h3>Issue 2: Load generator</h3> 
+<p>We solved this issue by moving from a single EC2 instance to an Amazon ECS cluster. To do this, we had to modify the application to externally store team and player data. Since we were already using Amazon DynamoDB for other metadata, we chose it for this purpose as well. Moving the state to DynamoDB and polling for configuration was essential, as the load generator containers were now ephemeral, and we didn’t want to create a new service to track members, but just to push updates.</p> 
+<p>Amazon ECS enabled us to operate our load generator as a service within Amazon ECS, so we could scale the application throughout the game without having to manage a complex, distributed, configuration management tool. It also provided us with additional fault tolerance by scheduling and placing tasks across three Availability Zones, and replacing containers in the event of any errors or failures.</p> 
+<h3>Issue 3: Disaster recovery</h3> 
+<p>Disaster recovery was by far the most difficult remediation we attempted. The issues were not solely technical in that we had developed plans to expand the use of tools and techniques to rapidly and reliably deploy the application. However, the harder to solve challenges we encountered were things like definitions (How do we define disaster?), expectations (What is a reasonable recovery time objective?), compliance (How often do we test DR? What can we automate? Is our testing framework robust enough to tell us that our DR plan is still valid after a new release?), and ownership (Who is responsible for declaring a disaster? Who is responsible for ensuring that the process is adequately maintained over time?).</p> 
+<p>Ultimately, we decided on a phased, incremental approach rather than tackling all of these issues at once. We allocated one day to strategize a response to a simulated disaster that focused on a simulated event—loss of control of a production account—and another day to write up our findings.</p> 
+<p>The simulated test involved members of the team sitting in a room with a moderator responsible for presenting a scenario, and then simulating the recovery process with whatever materials we had at hand. The moderator would keep us honest, challenge responses, and add details as the scenario progressed. The recovery team would keep careful notes, identify gaps, lucky breaks, and areas for improvement, and ultimately document our effective RTO and RPO.</p> 
+<p>Given the scenario—total loss of control of our production account—we quickly decided that the only safe response available to us was to abandon ship and simulate recovery in an entirely new account. We happened to have an unused, largely unconfigured account we could use for this purpose, but it was clear that account creation and initial setup would need to be accounted for in our RTO. The deployment of the game assets in the new account was significantly eased by the use of the new CloudFormation templates, which, luckily, were stored in an S3 bucket owned by another AWS account that was unaffected by the breach.</p> 
+<p>Much more problematic was the recovery of the game data stored in DynamoDB. Our current backup plan was manually operated and pushed backups to an S3 bucket in the same account and AWS Region as the source data. Obviously, an attacker that had control of our primary account would also have control of our only backups. Since the backups weren’t automated and were inaccessible in the event we lost control of our account, our RPO could never be clearly defined. Simply put, we could not assure a successful recovery in this scenario.</p> 
+<p>Despite these challenges, we deemed the DR simulation to be very successful. We were able to test recovery, identify what was working (decoupling data, automating deployment with AWS CloudFormation), what needed work (automated DynamoDB backups and audit logging to an S3 bucket in a different account), and what our current, achievable RTOs and RPOs were.</p> 
+<p>Ultimately, we added the recovery and audit work to our immediate roadmap, and agreed on a future cadence of quarterly DR simulations to continue to investigate our real response capability as changes were made and new disasters were contemplated.</p> 
+<b>Conclusion</b> 
+<p>We started this process with an architecture that, now looking back, was very fragile and left us vulnerable both from a security and a disaster recovery standpoint. It was uncomfortable to have our shortcomings identified, but by having knowledgeable AWS solutions architects walk through our architecture and point out areas for improvement, we were able to document and prioritize changes. This allowed us to take a step back and examine where we needed to focus our efforts in order to provide a better experience for our customers by mitigating potential problems down the road. We now are much more confident in our architecture and know that we are better prepared for failure.</p> 
+<p>However, our GameDay application is far from perfect, as we found out in our disaster recovery simulation. Additionally, we still have recommendations on our roadmap from the initial review. As AWS comes out with new features, and best practices are updated, we’ll continue to work with other solutions architects to ensure that we are incorporating these features and practices into our architecture.</p> 
+<p>In the next post, we’ll take a look at what happened six months after we implemented the changes discussed in this post, considering that AWS released new features during that time. We’ll walk through our evaluation process of these new features to see where they can be incorporated. Additionally, we’ll discuss how we continued to work with our review team on the non-critical items.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5135');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Partner SA Roundup – October</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tim Mattison</span></span> | on 
+<time property="datePublished" datetime="2017-10-16T10:14:47+00:00">16 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-partner-highlight/" title="View all posts in APN Partner Highlight"><span property="articleSection">APN Partner Highlight</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/management-tools/aws-cloudtrail/" title="View all posts in AWS CloudTrail*"><span property="articleSection">AWS CloudTrail*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-iot/" title="View all posts in AWS IoT"><span property="articleSection">AWS IoT</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-solutions-architect-sa-guest-post/" title="View all posts in AWS Partner Solutions Architect (SA) Guest Post"><span property="articleSection">AWS Partner Solutions Architect (SA) Guest Post</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/iam/" title="View all posts in IAM"><span property="articleSection">IAM</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/iot/" title="View all posts in IoT"><span property="articleSection">IoT</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/apn/partner-sa-roundup-october/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-5121" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5121&amp;disqus_title=Partner+SA+Roundup+%E2%80%93+October&amp;disqus_url=https://aws.amazon.com/blogs/apn/partner-sa-roundup-october/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5121');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This month, Partner Solutions Architects Tim Mattison, Roy Rodan, and Claudine Morales highlight offerings from AWS Technology Partners Cesanta, GorillaStack, and GuardiCore.</em></p> 
+<p>&nbsp;</p> 
+<h3>Cesanta, by Tim Mattison</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/cesanta.png">they released their own hardware kit based on Espressif’s ESP32 platform</a>, which provides a known-good component for customers to design, develop, and deploy IoT solutions.</p> 
+<p>The ESP32 is the successor to the ESP8266 IoT board, and it comes with several enhancements: &nbsp;520K of RAM, a dual-core 240 MHz processor, new security features, 2.4 GHz Wi-Fi, and Bluetooth support.</p> 
+<p>The faster processor means customers are able to efficiently do more time-sensitive compute operations at the edge. The ESP32 is powerful enough to perform digital signal processing (DSP) operations on input signals, and even decode QR codes in real time from its camera interface.</p> 
+<p>Additional storage allows customers to add more features to their edge devices. This space can also be used to buffer data while the device is offline, store logs for debugging, or store a backup firmware image to allow for more robust over-the-air firmware deployments.</p> 
+<p>Bluetooth v4.2 and Bluetooth Low Energy (BLE) let the ESP32 interact with Bluetooth devices and sensors. With Mongoose OS, the ESP32 can even act as a <a href="https://mongoose-os.com/ble-wifi-gateway/" target="_blank" rel="noopener noreferrer">BLE gateway to AWS IoT</a>.</p> 
+<p>On the security side, the ESP32 supports secure boot, flash encryption, and cryptographic hardware acceleration. Secure boot prevents tampering with the flash contents. Flash encryption protects the flash contents from being read in plaintext. Cryptographic hardware acceleration allows devices to connect to the cloud faster. These features allow customers to build secure IoT devices.</p> 
+<p>If you’re looking to build a new IoT solution, I’d invite you to take a look at the ESP32.&nbsp; For more information, please head on over to Cesanta’s <a href="https://cesanta.com/" target="_blank" rel="noopener noreferrer">website</a> to learn more about their new hardware kit and Mongoose OS.</p> 
+<p>&nbsp;</p> 
+<h3>GorillaStack, by Roy Rodan</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GorillaStack.png">Amazon CloudWatch</a> to help with these tasks. GorillaStack is an AWS Partner that enables DevOps and IT teams to keep track of events in their AWS environments by using simple rules, so they are always up-to-date on the usage and cost of their resources.</p> 
+<p>Configuring rules in GorillaStack involves three simple steps:</p> 
+<ol> 
+<li>Identifying the accounts to manage using cross-account AWS Identity and Access Management (IAM) roles</li> 
+<li>Defining triggers based on time, cost, server, or volume status</li> 
+<li>Specifying the action to be taken</li> 
+</ol> 
+<p>GorillaStack enables customers to apply these rules to resources across all AWS accounts and Regions. For example, the following image shows a rule set up to delete all detached <a href="https://aws.amazon.com/ebs/" target="_blank" rel="noopener noreferrer">Amazon Elastic Block Store</a> (Amazon EBS) volumes in a particular AWS Region:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GorillaStack2.png" /></p> 
+<p>&nbsp;</p> 
+<p>Another helpful GorillaStack feature is its Slack and HipChat integration. This integration makes it even easier to digest events and alerts from CloudTrail and CloudWatch. Instead of having to crawl through CloudTrail or CloudWatch logs for one specific event, you can configure a chatbot to send real-time alerts to a channel or to a specific group of Slack or HipChat users based on any CloudTrail or CloudWatch event. The alert can be expanded to reveal the raw log content, so your DevOps team can take the right actions, as seen here:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GorillaStack3.png" /></p> 
+<p>&nbsp;</p> 
+<p>This Slack and HipChat integration also enables you to receive alerts on scheduled actions before the events take place, so you can delay or cancel these actions. For instance, let’s say you schedule an action to stop development instances from running during the night in order to reduce costs. An alert is sent to a Slack channel to inform you of the upcoming action, and you can then decide if the shutdown process should proceed, snooze, or cancel.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GorillaStack4.png" /></p> 
+<p>&nbsp;</p> 
+<p>If you’d like to learn more about how GorillaStack can help you manage your infrastructure, go to the <a href="http://www.gorillastack.com/" target="_blank" rel="noopener noreferrer">GorillaStack site</a> to sign up for a free 14-day trial and request a <a href="https://www.gorillastack.com/demo/" target="_blank" rel="noopener noreferrer">live demo</a> of their products.</p> 
+<p>&nbsp;</p> 
+<h3>GuardiCore, by Claudine Morales</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GuardiCore.png">AWS Shared Responsibility Model</a>, customers are responsible for their security configuration in the AWS cloud. This responsibility involves determining ways to protect and monitor network traffic, which can include obtaining internal workload visibility, effective east-west traffic policy management, and active breach detection and response. GuardiCore, an AWS Technology Partner, offers the Centra Security Platform to help bridge these gaps.</p> 
+<p>Once Centra agents are installed on Amazon Elastic Compute Cloud (Amazon EC2) instances, the Centra Security Platform performs an application discovery process and collects network traffic data, including layer 7 communication activities among applications running on these instances. The Centra user interface displays a map of all network processes, applications, and traffic flows, giving you the ability to easily visualize everything that is occurring in your network at any given time. &nbsp;This same approach can be applied to your on-premises infrastructure, to give you a centralized view of your entire data center, regardless of location.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/10/13/GuardiCore2.png" /></p> 
+<p>&nbsp;</p> 
+<p>The Centra Security Platform provides micro-segmentation capabilities to give you more granular control over access policies. For instance, it can restrict access to a certain service not only by IP address and port number but also by process name.</p> 
+<p>Centra also helps safeguard environments from potential breaches by using multiple intrusion detection and prevention methods. One of these methods involves reputation analysis, where domain names, IP addresses, and file hashes that have been associated with malicious behavior are detected and eliminated instantaneously. Another method involves real-time dynamic deception, in which an attacker, when detected, is redirected to a GuardiCore-hosted deception environment where they continue to execute their attack, thinking that they have successfully penetrated the customer’s infrastructure.</p> 
+<p>Inside the deception environment, the attacker’s actions are logged, recorded, and even screenshotted, to enable analysis and insight on their motives and techniques. This allows customers to implement changes to prevent further intrusions from the attacker. &nbsp;The information on the attacker’s actions is also added to the GuardiCore Reputation Service database to enable detection of similar breach attempts in the future.</p> 
+<p>To learn more about the GuardiCore Centra Security Platform, visit the GuardiCore website or <a href="https://www.guardicore.com/request-a-demo/" target="_blank" rel="noopener noreferrer">request a demo</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-5121');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">SaaS Quick Start Highlights Identity and Isolation with Amazon Cognito</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -361,362 +765,6 @@ AWS.Blog.commenting('#aws-comment-trigger-5084');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-5084');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How DNAnexus and Edico Genome are Powering Precision Medicine on Amazon Web Services (AWS)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Aaron Friedman</span></span> | on 
-<time property="datePublished" datetime="2017-09-27T11:15:01+00:00">27 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/apn-competency-partner/" title="View all posts in APN Competency Partner"><span property="articleSection">APN Competency Partner</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-partner-solutions-architect-sa-guest-post/" title="View all posts in AWS Partner Solutions Architect (SA) Guest Post"><span property="articleSection">AWS Partner Solutions Architect (SA) Guest Post</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-service-delivery-program/" title="View all posts in AWS Service Delivery Program"><span property="articleSection">AWS Service Delivery Program</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/healthcare/" title="View all posts in Healthcare"><span property="articleSection">Healthcare</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/life-sciences/" title="View all posts in Life Sciences"><span property="articleSection">Life Sciences</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/how-dnanexus-and-edico-genome-are-powering-precision-medicine-on-amazon-web-services-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5074" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5074&amp;disqus_title=How+DNAnexus+and+Edico+Genome+are+Powering+Precision+Medicine+on+Amazon+Web+Services+%28AWS%29&amp;disqus_url=https://aws.amazon.com/blogs/apn/how-dnanexus-and-edico-genome-are-powering-precision-medicine-on-amazon-web-services-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5074');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>Aaron Friedman is a Healthcare and Life Sciences Partner Solutions Architect at AWS</em></p> 
-<p><em>Ujjwal Ratan is a Healthcare and Life Sciences Solutions Architect at AWS</em></p> 
-<p>&nbsp;</p> 
-<p>Diagnosing the medical mysteries behind acutely ill babies can be a race against time, filled with a barrage of tests and misdiagnoses. During the first few days of life, a few hours can save or seal the fate of patients admitted to the neonatal intensive care units (NICUs) and pediatric intensive care units (PICUs). Accelerating the analysis of the medical assays conducted in these hospitals can improve patient outcomes, and, in some cases, save lives.</p> 
-<p>Precision medicine relies on the aggregate of these types of tests (and others) to advance healthcare. Due to decreasing costs and faster turnaround times, genome sequencing is one such test that is gaining adoption throughout healthcare. Understanding a patient’s genetic predisposition to different diseases is fundamental to establishing a medical risk baseline. In certain cases, such as in NICUs, a patient’s genetic profile can unlock the specific cause of a disease and inform the subsequent medical interventions that might work.</p> 
-<p>Today, we’d like to tell you about two of our AWS Partner Network (APN) Partners, DNAnexus and Edico Genome, who are working together to advance the principles of precision medicine, and are already changing lives through genomics.</p> 
-<p>&nbsp;</p> 
-<h3>Introducing DNAnexus</h3> 
-<p><a href="https://www.dnanexus.com/" target="_blank" rel="noopener noreferrer">DNAnexus</a>, an <a href="https://aws.amazon.com/health/life-sciences-partners/" target="_blank" rel="noopener noreferrer">AWS Life Sciences Competency Partner</a>, offers data management, next-generation sequencing data analysis, and secure collaboration for large-scale life sciences enterprises. The DNAnexus platform-as-a-service (PaaS) solution provides a secure and unified system that scales to meet its clients’ unique needs, such as merging de-identified clinical data with genetic data. The API-based DNAnexus platform enables customers (e.g., pharma, researchers, hospitals) to create custom workflows to analyze genomics data as they see fit, such as to develop new drugs or diagnose rare diseases.</p> 
-<p>Naturally, the data generated by these processes is sensitive and its protection is paramount. DNAnexus has architected their platform to align with <a href="https://www.dnanexus.com/product-overview" target="_blank" rel="noopener noreferrer">key security and compliance frameworks</a>, such as HIPAA, 21 CFR Part 11, CLIA, and FedRAMP.</p> 
-<p>&nbsp;</p> 
-<h3>Introducing Edico Genome</h3> 
-<p><a href="http://www.edicogenome.com/" target="_blank" rel="noopener noreferrer">Edico Genome</a>, an APN Standard Tier Partner and <a href="https://aws.amazon.com/ec2/instance-types/f1/partners/" target="_blank" rel="noopener noreferrer">Amazon EC2 F1 Instance Partner</a>, is focused on facilitating the growth of precision medicine. By accelerating one of precision medicine’s central components, genome sequencing analysis, without sacrificing accuracy, Edico Genome enables researchers and clinicians to understand the relationships between genetic variation and disease.</p> 
-<p>Edico Genome accelerates sequencing analysis by using field-programmable gate arrays, or FPGAs, in its Dynamic Read Analysis for GENomics (<a href="http://www.edicogenome.com/dragen-bioit-platform/" target="_blank" rel="noopener noreferrer">DRAGEN</a>) solution. In contrast to conventional CPU-based systems, which must execute lines of software code to perform an algorithmic function, FPGAs use logic circuits to accelerate algorithms and provide outputs almost instantaneously. By replicating these logic circuits thousands of times over, DRAGEN is able to achieve industry-leading speeds by allowing for massive parallelism—unlike CPUs, which are limited to running only one task per core. FPGAs are also fully reconfigurable, allowing users to quickly switch between different functions and pipelines</p> 
-<p>Today, Edico Genome is deployed on our <a href="https://aws.amazon.com/ec2/instance-types/f1/" target="_blank" rel="noopener noreferrer">FPGA-based Amazon EC2 F1 instances</a> and can process a whole genome sequence in about 70 minutes on an f1.2xlarge instance type and about 30 minutes on an f1.16xlarge instance type. These speeds can be over 10 times faster than current state-of-the-art algorithms.</p> 
-<p>&nbsp;</p> 
-<h3>How they’re working together</h3> 
-<p>Recently, DNAnexus and Edico Genome <a href="http://www.edicogenome.com/edico-genome-launches-dragen-dnanexus-platform/" target="_blank" rel="noopener noreferrer">announced a joint partnership</a> to integrate Edico Genome’s DRAGEN solution, deployed on Amazon EC2 F1 instance family, into the DNAnexus platform. This integration gives customers the ability to leverage the speed of DRAGEN to analyze genomes coming from high-throughput sequencers, while also inheriting the security and compliance controls that DNAnexus has implemented. At a high level, here’s what this collaboration looks like:</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/26/DNAnxusEdico1.png" /></p> 
-<p>&nbsp;</p> 
-<p>DNAnexus ingests raw data (called base calls or reads) from genome sequencers such as Illumina’s NovaSeq. These reads are fed into DRAGEN, which is running on an EC2 F1 instance, to speed up the identification of genome variations that can influence disease progression. Results are stored in Amazon Simple Storage Service (<a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon S3</a>) using industry-standard compression algorithms. Depending on the use case, customers can then collaborate across research sites while adhering to the regulatory requirements around sensitive data by using the capabilities built into the DNAnexus platform.</p> 
-<p>&nbsp;</p> 
-<h3>Collaborating to improve clinical care</h3> 
-<p><a href="https://www.rchsd.org/programs-services/rady-childrens-institute-for-genomic-medicine/" target="_blank" rel="noopener noreferrer">Rady Children’s Institute for Genomic Medicine</a> is one of the global leaders in advancing precision medicine. To date, the institute has sequenced the genomes of more than 3,000 children and their family members to diagnose genetic diseases. 40% of these patients are diagnosed with a genetic disease, and 80% of these receive a change in medical management. This is a remarkable rate of change in care, considering that these are rare diseases and often involve genomic variants that have not been previously observed in other individuals.</p> 
-<p>The institute <a href="http://www.businesswire.com/news/home/20170503005939/en/DNAnexus-Powers-Genome-Analysis-Network-Rady-Children%E2%80%99s" target="_blank" rel="noopener noreferrer">adopted the DNAnexus platform</a> to gain a secure, flexible, and scalable environment for local and distributed sequencing and analysis. Using DNAnexus with DRAGEN provides Rady with a highly optimized, end-to-end, whole genome sequencing analysis solution. Edico Genome’s DRAGEN data analysis pipeline is central to Rady’s ultra-rapid genomic data analysis, because it significantly reduces costs and turnaround time while maintaining accuracy. (Edico and Rady also previously worked together to set a <a href="http://www.edicogenome.com/wp-content/uploads/2014/10/Edico-Genome-Rady-Childrens-White-Paper-March-2017.pdf" target="_blank" rel="noopener noreferrer">Guinness World Record for fastest genetic diagnosis</a>.)</p> 
-<blockquote> 
-<p><em>“Our goal is to ensure that genome-powered precision medicine is available to every child who needs it. To do this, we needed a rapid research-to-bedside pipeline and be able to scale it and make it accessible to hospitals around the world,” said Stephen Kingsmore, M.D., D.Sc., president and chief executive officer at Rady Children’s Institute for Genomic Medicine. “DNAnexus has the technology and expertise to facilitate this ambitious project, Edico Genome’s rapid testing capability allows for rapid diagnosis of critically ill newborns.”</em></p> 
-</blockquote> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/26/DNAnexusEdico2.png" /></p> 
-<p>&nbsp;</p> 
-<p>Based on the success of this partnership, Rady Children’s Institute is expanding this integrated solution to their partners nationally, fostering a growing genomic database that healthcare providers can access to quickly diagnose rare diseases in children.</p> 
-<p>&nbsp;</p> 
-<h3>Collaborating to advance precision medicine</h3> 
-<p>One of the most rewarding things about working in Healthcare and Life Sciences at AWS is seeing how our APN Partners can work together to change the lives of people. The DNAnexus and Edico Genome partnership is one such example that is making a lasting impact on the healthcare industry. We look forward to seeing the results of this partnership advance precision medicine, and deliver results like the ones experienced at Rady Children’s Institute across the clinical landscape.</p> 
-<p>To learn more about how DRAGEN on DNAnexus can securely accelerate sequencing analysis, and take advantage of a reduced rate for analysis (valid through October 31, 2017), see the <a href="https://www.dnanexus.com/edico-trial?utm_source=aws&amp;utm_medium=blog&amp;utm_campaign=aws_blog_edico_trial" target="_blank" rel="noopener noreferrer">DRAGEN on DNAnexus promotional offer</a>.</p> 
-<p>To learn more about how customers and APN Partners are using genomics on AWS, check out <a href="http://aws.amazon.com/genomics" target="_blank" rel="noopener noreferrer">Genomics in the Cloud </a>on the AWS website.</p> 
-<p><em>Please leave your feedback and questions in our Comments area.</em></p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5074');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">New Training Courses Available: Introduction to Machine Learning &amp; Deep Learning on AWS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Sara Snedeker</span></span> | on 
-<time property="datePublished" datetime="2017-09-26T09:14:43+00:00">26 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/artificial-intelligence/amazon-machine-learning/" title="View all posts in Amazon Machine Learning*"><span property="articleSection">Amazon Machine Learning*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/artificial-intelligence/aws-deep-learning-amis/" title="View all posts in AWS Deep Learning AMIs*"><span property="articleSection">AWS Deep Learning AMIs*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-training-and-certification/" title="View all posts in AWS Training and Certification"><span property="articleSection">AWS Training and Certification</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/machine-learning/" title="View all posts in Machine Learning"><span property="articleSection">Machine Learning</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/new-training-courses-available-introduction-to-machine-learning-deep-learning-on-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5068" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5068&amp;disqus_title=New+Training+Courses+Available%3A+Introduction+to+Machine+Learning+%26amp%3B+Deep+Learning+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/apn/new-training-courses-available-introduction-to-machine-learning-deep-learning-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5068');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS Training and Certification offers guidance to APN Partners so you can more effectively help customers leverage the AWS Cloud. We have two new courses to help you learn more about artificial intelligence solutions using AWS:<a href="https://aws.amazon.com/training/course-descriptions/machine-learning/" target="_blank" rel="noopener noreferrer"> Introduction to Machine Learning</a> web-based training and <a href="https://aws.amazon.com/training/course-descriptions/deep-learning/" target="_blank" rel="noopener noreferrer">Deep Learning on AWS</a> instructor-led training. If you are looking to learn more about how to put artificial intelligence capabilities to use, start with Introduction to Machine Learning. Developers who are looking to learn more should then then attend the 1-day instructor-led training.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/26/FullHD_campaign.png" /></p> 
-<h3></h3> 
-<h3>Here’s a bit more about each of these new training courses:</h3> 
-<p>&nbsp;</p> 
-<p><a href="https://aws.amazon.com/training/course-descriptions/machine-learning/" target="_blank" rel="noopener noreferrer">Introduction to Machine Learning</a> is a free 40 minute web-based training intended for developers, solution architects, and IT decision makers who already know the foundations of working with AWS. This online course will give an overview of machine learning, walk through an example use case, teach relevant terminology, and walk through the process for incorporating machine learning solutions into a business or product. The course also includes knowledge checks to help validate understanding.</p> 
-<p><a href="https://aws.amazon.com/training/course-descriptions/deep-learning/" target="_blank" rel="noopener noreferrer">Deep Learning on AWS</a> is a one day instructor-led training for developers who are interested in learning more about AWS solutions for deep learning. This course will teach individuals about the deep learning model and give them a roadmap for understanding what challenges deep learning can solve. Solutions related to image recognition, speech recognition, and speech translation are covered.</p> 
-<p>We recommend individuals take Introduction to Machine Learning before attending Deep Learning on AWS, but it is not required. In addition, individuals who are looking to learn more about how to leverage data for Deep Learning should consider taking <a href="https://aws.amazon.com/training/course-descriptions/bigdata-fundamentals/" target="_blank" rel="noopener noreferrer">Big Data Technology Fundamentals</a> and <a href="https://aws.amazon.com/training/course-descriptions/serverless-datalake/" target="_blank" rel="noopener noreferrer">Building a Serverless Data Lake</a>.</p> 
-<p>APN Partners are eligible for 20% off instructor-led training delivered by AWS. <a href="https://partnercentral.awspartner.com/LmsSsoRedirect" target="_blank" rel="noopener noreferrer">Click here to sign in</a> to the AWS Training and Certification Portal using your APN Portal credentials and browse all of our training offerings</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5068');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How Can You Find Top APN Partners on AWS?</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Renata Melnyk</span></span> | on 
-<time property="datePublished" datetime="2017-09-20T09:14:04+00:00">20 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/apn-launches/" title="View all posts in APN Launches"><span property="articleSection">APN Launches</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-competencies/" title="View all posts in AWS Competencies"><span property="articleSection">AWS Competencies</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/how-can-you-find-top-apn-partners-on-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-4990" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4990&amp;disqus_title=How+Can+You+Find+Top+APN+Partners+on+AWS%3F&amp;disqus_url=https://aws.amazon.com/blogs/apn/how-can-you-find-top-apn-partners-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4990');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h3>Explore the AWS Competency Program: Helping Customers Identify Top AWS Partner Network (APN) Partners on AWS across Industries, Verticals, and Solutions</h3> 
-<p>&nbsp;</p> 
-<h5></h5> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/06/13/competency_small-color-300x54.png" />Customers use AWS to meet a wide variety of their IT needs, and many customers leverage the AWS Partner Network (APN) to provide additional value. Are you looking to engage with an AWS Consulting Partner who can help you effectively migrate your applications to AWS? Are you a media firm hoping to identify an AWS Technology Partner solution that can help you render video footage in the cloud? Chances are, whatever you’re looking to do on AWS, there’s an APN Partner whose services or solutions can help you leverage all of the benefits that the AWS Cloud provides.</p> 
-<p>But how do you identify the right APN Partner with whom to engage? And what does it mean to identify the right APN Partner?</p> 
-<p>Here’s where the AWS Competency Program comes in.</p> 
-<p>The <a href="https://aws.amazon.com/partners/competencies/" target="_blank" rel="noopener noreferrer">AWS Competency Program</a> is the global APN Partner program focused on providing our customers and sellers with guidance on the most qualified APN Technology and Consulting Partners who have deep expertise and proven customer success in specific solutions areas, such as Big Data, DevOps, Migration, and IoT; in vertical markets such as Financial Services, Healthcare and Life Sciences, Government, Digital Media; and with enterprise business applications, including Microsoft Workloads and SAP. AWS Competencies help customers find APN Partners who can bring the right expertise for their specific business needs by quickly narrowing the search among the tens of thousands of partners in the APN network.</p> 
-<blockquote> 
-<p>“Our AWS Healthcare Competency partners repeatedly demonstrate expertise in serving the needs of the payer and provider communities to advance human health,” says Dr. Oxana Pickeral, the Global Segment Leader for Healthcare &amp; Life Sciences at AWS. “Healthcare customers routinely leverage their rapid pace of innovation to tackle the entire healthcare spectrum, from security and compliance to population health analytics.”</p> 
-</blockquote> 
-<p>The AWS Competency Program is the vehicle by which the APN Partners with the right solution or industry expertise are identified and validated. This validation, however, does not come easily.</p> 
-<p>AWS Competency Partners go through a rigorous technical assessment and verification of their expertise specific to each AWS Competency. AWS solutions architects perform a thorough technical validation that challenges APN Partners to raise the bar on their AWS Competency-specific solutions and the use of AWS best practices for security and architecture in the AWS Cloud. Additionally, AWS Competency Partners’ case studies go through a review by an independent third-party audit firm before they are accepted into the AWS Competency Program.</p> 
-<p>Each AWS Competency is different and has a&nbsp;distinct&nbsp;set of requirements that can be easily viewed by AWS Customers. This facilitates transparency and helps customers understand the meticulous process that AWS Competency Partners go through. The requirements are designed to evolve and become more stringent&nbsp;over time as&nbsp;industry verticals and solution areas mature in the AWS Cloud,&nbsp;meeting a core goal of continually&nbsp;raising the bar for AWS Competency achievements. Additionally, AWS&nbsp;Competency Partners are&nbsp;re-evaluated every 12-24 months to ensure the program only validates APN Partners who are truly committed to enhancing and refining their expertise and&nbsp;leadership&nbsp;in their space. The AWS Competency Program’s overarching goal&nbsp;is to give AWS Customers the confidence that they are choosing APN Partners that are&nbsp;highly specialized in a specific AWS solution or industry vertical.</p> 
-<h3>Raising the Bar for Customers and APN Partners</h3> 
-<p>&nbsp;</p> 
-<p>The AWS Competency status is attained by mature APN Partners who work closely with AWS business and technical teams and share a common vision and dedication to delivering top notch customer experience and meaningful success.</p> 
-<p>Here’s what some of our AWS Competency Partners are saying about the AWS Competency Program:</p> 
-<li>Scott Udell, Vice President of IoT Solutions at Cloud Technology Partners (CTP), notes that CTP’s Security, IoT, Migration, DevOps, and Financial Services Competency achievements are a “stamp of approval”. “This is a strong recognition of our work around IoT, and it will help us gain traction in the marketplace.”</li> 
-<li>ClearData CEO Darin Brannan says his firm’s AWS Healthcare Competency Partner is “an achievement that affirms our position in healthcare security, compliance, and managed services, while our work on AWS enables healthcare organizations to quickly deploy services and apps in a healthcare-fortified AWS environment.”</li> 
-<li>Aaron Klein, Founder and Chief Operating Officer of CloudCheckr, says, “While AWS holds its APN Partners to high standards, AWS also consistently supports and works with those who meet the standards. AWS’ help through the APN and Competency Program has proven invaluable in helping CloudCheckr thrive and grow as a solution and as a company. We would not be where we are today without the benefits of being an APN Partner.”</li> 
-<li>“The APN takes its Competency designations seriously. This gives credence to the companies that achieve these Competencies and provides a benchmark that differentiates other APN Partners in this space,” explains Robert Groat, EVP, Technology and Strategy, Smartronix. “We want our government clients to know that we are committed to delivering AWS solutions that meet their unique and demanding requirements. As an AWS Premier Partner in the AWS Government Competency Program we have benefited from being able to deliver highly secure, highly available, fault tolerant and innovative solutions that have transformed the way our government customers deliver services to its constituents.”</li> 
-<p>The AWS Competency Program currently has 17 programs under the AWS Competency umbrella, and will continue to expand as solution areas mature in the AWS Cloud. The AWS Competency Program was founded on the philosophy of quality over quantity, which is why each AWS Competency is designed with a high requirements bar.</p> 
-<p>Once the APN Partners have achieved an AWS Competency status, they qualify for a number of benefits in the APN Program designed to enable them to accomplish even greater successes. For example, AWS Competency Partners are invited to upcoming product release information sessions, gain access to AWS private betas, they are the first APN Partners to be given an opportunity to host subject-matter webinars, and gain access to AWS roadmap briefings.</p> 
-<p>AWS Competency Partners are closely engaged with APN teams and have the opportunity to leverage AWS Competency Partner exclusive events to provide feedback to the APN leadership. AWS Competency Partners receive a special designation in the APN Partner Solutions Finder directory and a listing on the AWS segment or solutions web pages, to mention a few of the program benefits.</p> 
-<p>The AWS Competency Program offers an enormous value to AWS Competency Partners who choose to continuously raise the bar together with AWS and share our customer obsession, but for AWS Customers, this value is potentially greater! It gives our customers a high degree of confidence in choosing a company that is aligned with AWS rapid innovation and dedication to deliver the best possible results.</p> 
-<h3>Explore AWS Competency Partners by Solution, Industry Vertical, or Business Applications</h3> 
-<li>All Solution Area Competencies: <a href="https://aws.amazon.com/migration/partner-solutions/" target="_blank" rel="noopener noreferrer">Migration</a>, <a href="https://aws.amazon.com/iot/partner-solutions/" target="_blank" rel="noopener noreferrer">IoT</a>, <a href="https://aws.amazon.com/backup-recovery/partner-solutions/" target="_blank" rel="noopener noreferrer">Storage</a>, <a href="http://aws.amazon.com/security/partner-solutions/" target="_blank" rel="noopener noreferrer">Security</a>, <a href="http://aws.amazon.com/devops/partner-solutions/" target="_blank" rel="noopener noreferrer">DevOps</a>, <a href="http://aws.amazon.com/mobile/partner-solutions/" target="_blank" rel="noopener noreferrer">Mobile</a>, <a href="http://aws.amazon.com/big-data/partner-solutions/" target="_blank" rel="noopener noreferrer">Big Data</a>.</li> 
-<li>Industry Vertical Competencies: <a href="https://aws.amazon.com/financial-services/partner-solutions/" target="_blank" rel="noopener noreferrer">Financial Services</a>, <a href="https://aws.amazon.com/government-education/partner-solutions/" target="_blank" rel="noopener noreferrer">Government</a>, <a href="https://aws.amazon.com/education/partner-solutions/" target="_blank" rel="noopener noreferrer">Education</a>, <a href="http://aws.amazon.com/partners/competencies/healthcare" target="_blank" rel="noopener noreferrer">Healthcare</a>, <a href="http://aws.amazon.com/partners/competencies/life-sciences/" target="_blank" rel="noopener noreferrer">Life Sciences</a>, <a href="http://aws.amazon.com/partners/competencies/digital-media" target="_blank" rel="noopener noreferrer">Digital Media</a>, <a href="http://aws.amazon.com/digital-marketing/partner-solutions/" target="_blank" rel="noopener noreferrer">Marketing &amp; Commerce</a></li> 
-<li>Business Application Competencies: <a href="https://aws.amazon.com/partners/competencies/microsoft/" target="_blank" rel="noopener noreferrer">Microsoft Workloads</a>, <a href="http://aws.amazon.com/partners/competencies/sap/" target="_blank" rel="noopener noreferrer">SAP</a>, <a href="http://aws.amazon.com/partners/competencies/oracle/" target="_blank" rel="noopener noreferrer">Oracle</a>.</li> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4990');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Partner Webinar Series- September and October</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">David Velez</span></span> | on 
-<time property="datePublished" datetime="2017-09-19T10:55:29+00:00">19 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/aws-for-windows/" title="View all posts in AWS for Windows"><span property="articleSection">AWS for Windows</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-webinars/" title="View all posts in AWS Webinars"><span property="articleSection">AWS Webinars</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/big-data-competency/" title="View all posts in Big Data Competency"><span property="articleSection">Big Data Competency</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/healthcare/" title="View all posts in Healthcare"><span property="articleSection">Healthcare</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/life-sciences/" title="View all posts in Life Sciences"><span property="articleSection">Life Sciences</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/sap-on-aws/" title="View all posts in SAP on AWS"><span property="articleSection">SAP on AWS</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/storage/" title="View all posts in Storage*"><span property="articleSection">Storage*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/aws-partner-webinar-series-september-october/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5047" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5047&amp;disqus_title=AWS+Partner+Webinar+Series-+September+and+October&amp;disqus_url=https://aws.amazon.com/blogs/apn/aws-partner-webinar-series-september-october/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5047');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5></h5> 
-<p>The <a href="https://aws.amazon.com/webinars/partner-webinar-series/" target="_blank" rel="noopener noreferrer">AWS Partner Webinar Series</a> is a selection of live and recorded online presentations that cover a broad range of topics at varying technical levels and scale. Each webinar is hosted by an AWS Solutions Architect and an AWS Competency Partner who has successfully helped customers evaluate and implement the tools, techniques, and technologies of AWS.</p> 
-<p>These webinars feature technical sessions with AWS solutions architects and engineers, live demonstrations, customer examples, and expert Q&amp;A sessions.</p> 
-<h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/19/Partner_Webinar_Series_Header.png" /></h3> 
-<p style="text-align: left">See the upcoming webinars below:</p> 
-<p>&nbsp;</p> 
-<h3>Salesforce Webinars</h3> 
-<p><strong>Salesforce IoT:</strong>&nbsp;Monetize your IOT Investment with Salesforce and AWS</p> 
-<p><a href="https://pages.awscloud.com/iot-salesforce-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_sfdc-iot-oct2017_20170823&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001Ibhj&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 3, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Salesforce Heroku: </strong>Build Engaging Applications with Salesforce Heroku and AWS</p> 
-<p><a href="https://pages.awscloud.com/salesforce-heroku-oct2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_sfdc-iot-oct2017_20170823&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001Ibhy&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 10, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<h3>SAP Migration Webinars</h3> 
-<p><strong>Accenture:</strong> Reduce Operating Costs and Accelerate Efficiency by Migrating Your SAP Applications to AWS with Accenture</p> 
-<p><a href="https://pages.awscloud.com/migration-accenture-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_awspartner_ipc_20170802&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001ISMS&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: September 20, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Capgemini:</strong> Accelerate your SAP HANA Migration with Capgemini &amp; AWS FAST</p> 
-<p><a href="https://pages.awscloud.com/migration-capgemini-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_awspartner_ipc_20170802&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001ISNu&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: September 21, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<h3>Windows Migration Webinars</h3> 
-<p><strong>Cascadeo:</strong> How a National Transportation Software Provider Migrated a Mission-Critical Test Infrastructure to AWS with Cascadeo</p> 
-<p><a href="https://pages.awscloud.com/migration-cascadeo-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEBINAR_awspartner_ipc_20170802&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001ISOO&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: September 26, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Datapipe</strong>: Optimize App Performance and Security by Managing Microsoft Workloads on AWS with Datapipe</p> 
-<p><a href="https://pages.awscloud.com/migration-datapipe-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEBINAR_awspartner_ipc_20170802&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001ISOE&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: September 27, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Datavail:</strong> Datavail Accelerates AWS Adoption for Sony DADC New Media Solutions</p> 
-<p><a href="https://pages.awscloud.com/migration-datavail-sept2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEBINAR_awspartner_ipc_20170802&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001ISMc&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: September 28, 2017 | 10am-11am PDT</p> 
-<h3></h3> 
-<p>&nbsp;</p> 
-<h3>Life Sciences Webinars</h3> 
-<p><strong>SAP, Deloitte &amp; Turbot:</strong> Life Sciences Compliance on AWS</p> 
-<p><a href="https://pages.awscloud.com/compliance-lifesciences-oct2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_compliance-lifesciences-oct2017_20170821&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001Ib64&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 4, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<h3>Healthcare Webinars</h3> 
-<p><strong>AWS, ClearData &amp; Cloudticity:</strong>&nbsp;Healthcare Compliance on AWS</p> 
-<p><a href="https://pages.awscloud.com/healthcare-hipaa-apn-oct2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_healthcare-compliance-oct2017_20170814&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001IWlA&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 5, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<h3>Storage Webinars</h3> 
-<p><strong>N2WS:&nbsp;</strong>Learn How Goodwill Industries Ensures 24/7 Data Availability on AWS</p> 
-<p><a href="https://pages.awscloud.com/backup-n2ws-oct2017.html?sc_channel=em&amp;sc_campaign=n2ws&amp;sc_publisher=aws&amp;sc_content=awspartner_wew_partnermkt&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001IWEk&amp;trk=aws_internal_blog_jeffbarr" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 10, 2017 | 8am-9am PDT</p> 
-<p>&nbsp;</p> 
-<h3>Big Data Webinars</h3> 
-<p><strong>Zoomdata:</strong>&nbsp;Build an On-Demand Data Science Workstation with Zoomdata</p> 
-<p><a href="https://pages.awscloud.com/bigdata-zoomdata-october2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_bigdata-oct2017_20170823&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001IWEQ&amp;trk=aws_internal_blog_jeffbarr" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 10, 2017 | 10am-11am PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Attunity:&nbsp;</strong>Cardinal Health: Moving Data to AWS in Real-Time with Attunity</p> 
-<p><a href="https://pages.awscloud.com/bigdata-attunity-oct2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_bigdata-oct2017_20170823&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001IWCt&amp;trk=aws_website_blog" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 11, 2017 | 11am-12pm PDT</p> 
-<p>&nbsp;</p> 
-<p><strong>Splunk:&nbsp;</strong>How TrueCar Gains Actionable Insights with Splunk Cloud</p> 
-<p><a href="https://pages.awscloud.com/bigdata-splunk-oct2017.html?sc_channel=em&amp;sc_campaign=AWS_Partner_namer_WEW_bigdata-oct2017_20170823&amp;sc_publisher=aws&amp;sc_country=us&amp;sc_geo=namer&amp;sc_category=mult&amp;sc_outcome=awspartner&amp;source=em_70138000001IWAn&amp;trk=aws_internal_blog_jeffbarr" target="_blank" rel="noopener noreferrer">Register for Upcoming Webinar</a>: October 18. 2017 | 9am-10am PDT</p> 
-<p>&nbsp;</p> 
-<p><em>To see all upcoming AWS Partner Webinars, <a href="https://aws.amazon.com/webinars/partner-webinar-series/" target="_blank" rel="noopener noreferrer">click here</a>.</em></p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5047');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How an investment firm collaborated with HashiCorp and AWS to enhance their secrets management</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Peter Sideris</span></span> | on 
-<time property="datePublished" datetime="2017-09-18T15:42:26+00:00">18 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/apn-partner-highlight/" title="View all posts in APN Partner Highlight"><span property="articleSection">APN Partner Highlight</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/financial-services/" title="View all posts in Financial Services"><span property="articleSection">Financial Services</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/iam/" title="View all posts in IAM"><span property="articleSection">IAM</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/how-an-investment-firm-collaborated-with-hashicorp-and-aws-to-enhance-their-secrets-management/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-4962" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=4962&amp;disqus_title=How+an+investment+firm+collaborated+with+HashiCorp+and+AWS+to+enhance+their+secrets+management&amp;disqus_url=https://aws.amazon.com/blogs/apn/how-an-investment-firm-collaborated-with-hashicorp-and-aws-to-enhance-their-secrets-management/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4962');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5></h5> 
-<p>Bridgewater Associates, based in Westport, CT, is a major investment management firm with more than $150 billion in assets that it manages for a global customer base of pension funds, endowments, foundations, central banks, and national governments. It is also an Amazon Web Services (AWS) customer that we’ve worked closely with over the past year and half, developing a partnership that helps Bridgewater leverage the tools—and benefits—of the AWS Cloud.</p> 
-<p>Last December, Bridgewater Systems Engineer Joel Thompson approached us with questions around the features and future roadmap of the GetCallerIdentity API call. He also mentioned work that he was doing with APN Technology Partner HashiCorp to solve the challenge of <a href="https://www.vaultproject.io/" target="_blank" rel="noopener noreferrer">HashiCorp Vault</a> authentication in scalable and serverless environments.</p> 
-<p>In their own words, here’s how Joel and HashiCorp Product Manager Andy Manoske describe what happened next.</p> 
-<h3>Joel Thompson, Bridgewater Systems Engineer</h3> 
-<blockquote> 
-<p>Our business requires us to be highly focused on security. For that reason, we’ve been big fans of HashiCorp’s Vault since it was first released. However, we faced the challenge of how to securely authenticate to Vault from various AWS services, such as from Amazon Elastic Compute Cloud (Amazon EC2) instances in an autoscaling group, code running in AWS Lambda (Lambda), and other environments. We were not alone in this either. Many in the financial services industry have long been asking for a solution to this problem.</p> 
-<p>&nbsp;</p> 
-<p>One of my coworkers proposed a&nbsp;<a href="https://github.com/hashicorp/vault/issues/948" target="_blank" rel="noopener noreferrer">solution</a>&nbsp;that, to work properly, required AWS to add a new API method – the WhoAmI method that is a feature we requested from our AWS Enterprise Support team. Last year, AWS added what was needed — <a href="http://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html" target="_blank" rel="noopener noreferrer">sts:GetCallerIdentity</a>. So, collaborating with the Vault engineering team and consulting with AWS support, the&nbsp;<a href="https://www.vaultproject.io/docs/auth/aws.html" target="_blank" rel="noopener noreferrer">AWS authentication backend</a>&nbsp;in Vault was born, making it easier for AWS customers to secure their cloud-native applications.</p> 
-</blockquote> 
-<h3>Andy Manoske, HashiCorp Product Manager</h3> 
-<blockquote> 
-<p>HashiCorp&nbsp;has created six open-source projects to enable organizations to provision, secure, connect, and run any infrastructure for any application. This is particularly important for organizations that are migrating their workloads to cloud services such as AWS. HashiCorp Vault is one of those projects, providing a focus on securing any infrastructure for any application. Vault provides secrets management, encryption as a service, and a way to enforce privilege and access management.</p> 
-<p>Vault is an open-source project, with a growing community of contributors, users, and HashiCorp employees collaborating on the features that go into Vault. One example of this was a major enhancement in Vault 0.7.1 to the AWS-Amazon EC2 authentication backend. The enhancement now makes it easy for many different AWS resource types to securely authenticate with Vault.&nbsp; Given the broadened scope of what this backend can now do it has been &nbsp;renamed to the AWS authentication backend. &nbsp;This backend solved a series of challenges we were seeing within the open-source community and our customer base around securely enabling access to secrets from an AWS-based infrastructure. AWS resources can then access and use the secrets managed by Vault. This includes resources such as Lambda functions, Amazon EC2 Container Services jobs, Amazon EC2 instances, or any other client with access to AWS Identity and Access Management credentials can use those credentials to securely authenticate to Vault to retrieve their secrets.</p> 
-<p>&nbsp;</p> 
-<p>The AWS authentication backend is an enhancement that was contributed and collaborated on by Joel Thompson at Bridgewater. Through Bridgewater’s use of Vault, Joel recognized a more specific enhancement to the authentication backend and then worked with the HashiCorp Vault engineers to make it a reality.</p> 
-<p>&nbsp;</p> 
-</blockquote> 
-<p>Through this engagement, which included assistance from AWS Enterprise Support to help them plan and build the solution using best practices and guidance from the AWS Identity service team, Bridgewater and HashiCorp were able to quickly and confidently collaborate on an important Vault feature.</p> 
-<p><em>To learn more about the collaboration, read Joel’s post on the <a href="https://www.hashicorp.com/blog/bridgewater-securing-their-aws-infrastructure-with-vault/" target="_blank" rel="noopener noreferrer">HashiCorp blog</a>. And <a href="https://aws.amazon.com/premiumsupport/enterprise-support/" target="_blank" rel="noopener noreferrer">go here to learn more about how AWS Enterprise Support can help your organization</a>.</em></p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-4962');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Enabling Amazon Connect with Salesforce Service Cloud and Sales Cloud</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Marc Rudkowski</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T09:23:35+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/apn/category/apn-partner-highlight/" title="View all posts in APN Partner Highlight"><span property="articleSection">APN Partner Highlight</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/aws-product-launch/" title="View all posts in AWS Product Launch"><span property="articleSection">AWS Product Launch</span></a>, <a href="https://aws.amazon.com/blogs/apn/category/contact-center/" title="View all posts in Contact Center*"><span property="articleSection">Contact Center*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/apn/enabling-amazon-connect-with-salesforce-service-and-sales-cloud/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5004" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-apn-blog&amp;disqus_identifier=5004&amp;disqus_title=Enabling+Amazon+Connect+with+Salesforce+Service+Cloud+and+Sales+Cloud&amp;disqus_url=https://aws.amazon.com/blogs/apn/enabling-amazon-connect-with-salesforce-service-and-sales-cloud/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5004');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Building on the strategic alliance between Amazon Web Services and Salesforce, we are excited to announce the first release of the <strong>Amazon Connect Computer Telephony Integration (CTI) Adapter for Salesforce</strong>.</p> 
-<p>Amazon Connect is designed as a highly scalable, self-service, cloud-based contact center service that makes it easy for any business to deliver better customer service at lower cost. Salesforce Service Cloud empowers agents on the path to customer success with smarter and faster service tools. Now, the Amazon Connect contact center service and Salesforce’s customer relationship management (CRM) work together to provide the essential foundation for your organization’s customer service experience. This helps support integrated customer workflows between interactive voice response (IVR), automatic call distributor (ACD), and CRM – all critical to contact center strategies.</p> 
-<p>The Amazon Connect CTI Adapter is the first release of the package that is designed to provide complete cloud-based integration and workflow capabilities between Amazon Connect, Salesforce Service Cloud and Sales Cloud.</p> 
-<p>The Amazon Connect CTI Adapter provides a WebRTC browser-based contact control panel (CCP) within the Salesforce Lightning, Console, and Classic CRM experience. This CTI integration gives your agents the ability to leverage both inbound caller ID screen pop-ups and outbound click to call/transfer/conferencing.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect1.png" /></p> 
-<h5 style="text-align: center"></h5> 
-<h5 style="text-align: center">Agent logging a screen pop call from the Amazon Connect Contact Control Panel (CCP) within the Salesforce Service Cloud Lightning experience</h5> 
-<h5></h5> 
-<b>Getting Started</b> 
-<p>If you have not spun up an Amazon Connect instance, take a look at our <a href="http://docs.aws.amazon.com/connect/latest/adminguide/gettingstarted.html" target="_blank" rel="noopener noreferrer">Getting Started Guide</a>. The Amazon Connect CTI Adapter integration leverages both the <a href="https://github.com/aws/amazon-connect-streams" target="_blank" rel="noopener noreferrer">Amazon Connect Streams API</a> and the <a href="https://developer.salesforce.com/docs/atlas.en-us.api_cti.meta/api_cti/sforce_api_cti_intro.htm" target="_blank" rel="noopener noreferrer">Salesforce Open CTI API</a>. In this blog post, we’re going to focus on setting up the Amazon Connect CTI Adapter for Lightning experience. You can follow the <a href="http://docs.aws.amazon.com/connect/latest/adminguide/salesforce-integration.html" target="_blank" rel="noopener noreferrer">setup instructions</a> for enabling the CTI Adapter for the Salesforce Classic and Console experience.</p> 
-<h3>Step 1: Install the Amazon Connect CTI Adapter</h3> 
-<p>Once you have your Amazon Connect and Salesforce CRM instances running, the first step will be to install the <strong>Amazon Connect CTI Adapter</strong> from the <a href="https://appexchange.salesforce.com/listingDetail?listingId=a0N3A00000EJH4yUAH" target="_blank" rel="noopener noreferrer">Salesforce AppExchange</a>:</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect2.png" /></p> 
-<p>&nbsp;</p> 
-<p>We recommend you initially install the package into your Salesforce sandbox.</p> 
-<h3>Step 2: Configure your Salesforce Call Center</h3> 
-<p>After the package has been installed, the next step is to set up your Salesforce call center configuration. This configuration is a XML file you import into your call center, which provides all the details required to enable the Amazon Connect CTI Adapter. First, <a href="http://amazonconnect-sfdc-installation.s3-website-us-east-1.amazonaws.com/resources/24AC4F3F034E447BE9CEAEE5CA37BFC3.xml" target="_blank" rel="noopener noreferrer">download</a> the call center XML configuration and import it into your Lightning call center configuration:</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect3.png" /></p> 
-<p>&nbsp;</p> 
-<p>Edit the call center configuration and verify the following:</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect4.png" /></p> 
-<p>&nbsp;</p> 
-<ol> 
-<li>The suffix for the Amazon Connect CTI Adapter URL is set to Lightning. If you were configuring the Amazon Connect CTI Adapter for Classic or Console, those suffixes would be used instead.</li> 
-<li>Salesforce Compatibility Mode is set for Lightning. This would be set to Classic if you were configuring for Classic or Console.</li> 
-<li>The Amazon Connect CCP URL is set to your Amazon Connect instance name. (replace YOURINSTANCENAME with your Amazon Connect instance name).</li> 
-<li>If you are using this in another country (i.e. Great Britain), set the appropriate two digit ISO country code.</li> 
-<li>Provide access to users (i.e. admins, supervisors, agents) who will be using the CCP.</li> 
-</ol> 
-<h3>Step 3: Whitelist Your Salesforce’s Visualforce Domain</h3> 
-<p>At this point, you have properly configured your Salesforce instance. The next step is to whitelist your Salesforce Visualforce domain within your Amazon Connect’s Application integration. This is required from a security perspective to ensure you are allowing cross-domain access to your Amazon Connect instance. More information about whitelisting can be found on the <a href="https://github.com/aws/amazon-connect-streams" target="_blank" rel="noopener noreferrer">Amazon Connect Streams documentation</a>.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect5.png" /></p> 
-<p>&nbsp;</p> 
-<p>If you’re unsure of the Salesforce Visualforce domain, or if it is getting blocked by Amazon Connect, you can find it by previewing the URL of the Amazon Connect Visualforce page within your Salesforce instance.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect6.png" /></p> 
-<p>&nbsp;</p> 
-<b>Testing the Amazon Connect CTI Adapter</b> 
-<p>Now that you have everything configured, let’s give this a go. Open your Chrome or Firefox browser and login to your Amazon Connect instance (https://YOURINSTANCENAME.awsapps.com/connect/login). Open another tab and log into your Salesforce CRM instance and go to your Sales or Service Console Lightning application.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect7.png" /></p> 
-<p>&nbsp;</p> 
-<p>If you are not seeing the phone icon or an empty pop-up, take a look at our troubleshooting guide in the <a href="http://docs.aws.amazon.com/connect/latest/adminguide/salesforce-integration.html" target="_blank" rel="noopener noreferrer">setup instructions</a>. You should notice that all numbers have a phone icon next to them. At this point, you can leverage the click-to-call capability when you press the icon or number.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect8.png" /></p> 
-<p>&nbsp;</p> 
-<p>It will make an outbound call via the Amazon Connect CCP and connect to the customer when they answer the call.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect9.png" /></p> 
-<p>&nbsp;</p> 
-<p>Once you complete the call, the Amazon Connect CCP will go into AfterCallWork status where the agent can perform any follow up activities (e.g. logging a call). After these activities are completed, they can make themselves available to take more calls.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect10.png" /></p> 
-<p>&nbsp;</p> 
-<p>If the agent is in an available state and they receive a call, the inbound call will screen pop the Amazon Connect CCP and any matching records for the caller ID.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect11.png" /></p> 
-<p>&nbsp;</p> 
-<p>You can also configure the screen pop behavior in the Softphone layouts under your Salesforce call center configuration.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/77de68daecd823babbb58edb1c8e14d7106e83bb/2017/09/06/Connect12.png" /></p> 
-<p>&nbsp;</p> 
-<b>What’s next</b> 
-<p>This is the first release of the Amazon Connect CTI Adapter for Salesforce. More features are coming soon as AWS determines how to best provide more integrated capabilities with Salesforce Service and Sales Cloud. Please try out the Amazon Connect CTI Adapter and open a case with your feedback. We value your input because it will help us define our next set of features.</p> 
-<p>For more information also refer to last March <a href="https://www.salesforce.com/company/news-press/press-releases/2017/03/170328-3.jsp" target="_blank" rel="noopener noreferrer">press release</a>.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5004');
 });
 </script> 
 </article> 

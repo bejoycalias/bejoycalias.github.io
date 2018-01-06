@@ -190,6 +190,126 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/budget_lambda_iam_ver7.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Serverless Automated Cost Controls, Part1</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Shankar Ramachandran</span></span> | on 
+<time property="datePublished" datetime="2017-11-22T09:34:50+00:00">22 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/" title="View all posts in Application Services*"><span property="articleSection">Application Services*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/aws-cost-management/aws-budgets/" title="View all posts in AWS Budgets*"><span property="articleSection">AWS Budgets*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/aws-cost-management/" title="View all posts in AWS Cost Management*"><span property="articleSection">AWS Cost Management*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/serverless-automated-cost-controls-part1/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3299" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3299&amp;disqus_title=Serverless+Automated+Cost+Controls%2C+Part1&amp;disqus_url=https://aws.amazon.com/blogs/compute/serverless-automated-cost-controls-part1/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3299');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of Shankar Ramachandran, Pubali Sen, and George Mao</em></p> 
+<p>In line with AWS’s continual efforts to reduce costs for customers, this series focuses on how customers can build serverless automated cost controls. This post provides an architecture blueprint and a sample implementation to prevent budget overruns.</p> 
+<p>This solution uses the following AWS products:</p> 
+<li><a href="https://aws.amazon.com/aws-cost-management/aws-budgets/">AWS Budgets</a> – An AWS Cost Management tool that helps customers define and track budgets for AWS costs, and forecast for up to three months.</li> 
+<li><a href="https://aws.amazon.com/sns/">Amazon SNS</a> – An AWS service that makes it easy to set up, operate, and send notifications from&nbsp;the cloud.</li> 
+<li><a href="https://aws.amazon.com/lambda/">AWS Lambda</a> – An AWS service that lets you run code without provisioning or managing servers.</li> 
+<p>You can fine-tune a budget for various parameters, for example filtering by service or tag. The Budgets tool lets you post notifications on an SNS topic. A Lambda function that subscribes to the SNS topic can act on the notification. Any programmatically implementable action can be taken.</p> 
+<p>The diagram below describes the architecture blueprint.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/using_lambda_for_cost_control_ver4.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/using_lambda_for_cost_control_ver4.jpg" /></a></p> 
+<p>In this post, we describe how to use this blueprint with AWS Step Functions and IAM to effectively revoke the ability of a user to start new Amazon EC2 instances, after a budget amount is exceeded.</p> 
+<b>Freedom with guardrails</b> 
+<p>AWS lets you quickly spin up resources as you need them, deploying hundreds or even thousands of servers in minutes.&nbsp;This means you can quickly develop and roll out new applications. Teams can experiment and innovate more quickly and frequently. If an experiment fails, you can always de-provision those servers without risk.</p> 
+<p>This improved agility also brings in the need for effective cost controls. Your Finance and Accounting department must budget, monitor, and control the AWS spend. For example, this could be a budget per project. Further, Finance and Accounting must take appropriate actions if the budget for the project has been exceeded, for example. Call it “freedom with guardrails” – where Finance wants to give developers freedom, but with financial constraints.</p> 
+<b>Architecture</b> 
+<p>This section describes how to use the blueprint introduced earlier to implement a “freedom with guardrails” solution.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/budget_lambda_iam_ver7.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/budget_lambda_iam_ver7.jpg" /></a></p> 
+<ol> 
+<li>The budget for “Project Beta” is set up in Budgets. In this example, we focus on EC2 usage and identify the instances that belong to this project by filtering on the tag Project with the value Beta. For more information, see <a href="http://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/budgets-create.html">Creating a Budget</a>.</li> 
+<li>The budget configuration also includes settings to send a notification on an SNS topic when the usage exceeds 100% of the budgeted amount. For more information, see <a href="http://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/budgets-sns-policy.html">Creating an Amazon SNS Topic for Budget Notifications</a>.</li> 
+<li>The master Lambda function receives the SNS notification.</li> 
+<li>It triggers execution of a Step Functions state machine with the parameters for completing the configured action.</li> 
+<li>The action Lambda function is triggered as a task in the state machine. The function interacts with IAM to effectively remove the user’s permissions to create an EC2 instance.</li> 
+</ol> 
+<p>This decoupled modular design allows for extensibility.&nbsp; New actions (serially or in parallel) can be added by simply adding new steps.</p> 
+<b>Implementing the solution</b> 
+<p>All the instructions and code needed to implement the architecture have been posted on the <a href="https://github.com/aws-samples/serverless-automated-cost-controls">Serverless Automated Cost Controls</a> GitHub repo. We recommend that you try this first in a Dev/Test environment.</p> 
+<p>This implementation description can be broken down into two parts:</p> 
+<ol> 
+<li>Create a solution stack for serverless automated cost controls.</li> 
+<li>Verify the solution by testing the EC2 fleet.</li> 
+</ol> 
+<p>To tie this back to the “freedom with guardrails” scenario, the Finance department performs a one-time implementation of the solution stack. To simulate resources for Project Beta, the developers spin up the test EC2 fleet.</p> 
+<b>Prerequisites</b> 
+<p>There are two prerequisites:</p> 
+<li>Make sure that you have the necessary IAM permissions. For more information, see the section titled “Required IAM permissions” in the <a href="https://github.com/aws-samples/serverless-automated-cost-controls/blob/master/README.md">README</a>.</li> 
+<li>Define and activate a cost allocation tag with the key Project. For more information, see <a href="http://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html">Using Cost Allocation Tags</a>. It can take up to 12 hours for the tags to propagate to Budgets.</li> 
+<b>Create resources</b> 
+<p>The solution stack includes creating the following resources:</p> 
+<li>Three Lambda functions</li> 
+<li>One Step Functions state machine</li> 
+<li>One SNS topic</li> 
+<li>One IAM group</li> 
+<li>One IAM user</li> 
+<li>IAM policies as needed</li> 
+<li>One budget</li> 
+<p>Two of the Lambda functions were described in the previous section, to a) receive the SNS notification and b) trigger the Step Functions state machine. Another Lambda function is used to create the budget, as a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html">custom AWS CloudFormation resource</a>. The SNS topic connects Budgets with Lambda function A. Lambda function B is configured as a task in Step Functions. A budget for $2 is created which is filtered by Service: EC2 and Tag: Project, Beta. A test IAM group and user is created to enable you to validate this Cost Control Solution.</p> 
+<p>To create the serverless automated cost control solution stack, choose the button below. It takes few minutes to spin up the stack. You can monitor the progress in the CloudFormation console.</p> 
+<p><a href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=costControlStack&amp;templateURL=https://s3-us-west-2.amazonaws.com/computeblog-us-west-2/serverless-automated-cost-controls/cfn_budget_lambda_blog_post.json"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/cloudformation-launch-stack-button.png" /></a></p> 
+<p>When you see the CREATE_COMPLETE status for the stack you had created, choose Outputs. Copy the following four values that you need later:</p> 
+<li>TemplateURL</li> 
+<li>UserName</li> 
+<li>SignInURL</li> 
+<li>Password</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_1.png" /></a></p> 
+<b>Verify the stack</b> 
+<p>The next step is to verify the serverless automated cost controls solution stack that you just created. To do this, spin up an EC2 fleet of t2.micro instances, representative of the resources needed for Project Beta, and tag them with <strong>Project, Beta</strong>.</p> 
+<ol> 
+<li>Browse to the <strong>SignInURL</strong>, and log in using the <strong>UserName</strong> and <strong>Password</strong> values copied on from the stack output.</li> 
+<li>In the CloudFormation console, choose <strong>Create Stack</strong>.</li> 
+<li>For <strong>Choose a template</strong>, select <strong>Choose an Amazon S3 template URL</strong> and paste the <strong>TemplateURL</strong> value from the preceding section. Choose <strong>Next</strong>.</li> 
+<li>Give this stack a name, such as “testEc2FleetForProjectBeta”. Choose <strong>Next</strong>.</li> 
+<li>On the Specify Details page, enter parameters such as the <strong>UserName</strong> and <strong>Password</strong> copied in the previous section. Choose Next.</li> 
+<li>Ignore any errors related to listing IAM roles. The test user has a minimal set of permissions that is just sufficient to spin up this test stack (in line with security best practices).</li> 
+<li>On the <strong>Options</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Review</strong> page, choose <strong>Create</strong>. It takes a few minutes to spin up the stack, and you can monitor the progress in the CloudFormation console.&nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_2-1.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_2-1.jpg" /></a></li> 
+<li>When you see the status “CREATE_COMPLETE”, open the EC2 console to verify that four t2.micro instances have been spun up, with the tag of Project, Beta.</li> 
+</ol> 
+<p>The hourly cost for these instances depends on the region in which they are running. On the average (irrespective of the region), you can expect the aggregate cost for this EC2 fleet to exceed the set $2 budget in 48 hours.</p> 
+<b>Verify the solution</b> 
+<p>The first step is to identify the test IAM group that was created in the previous section. The group should have “projectBeta” in the name, prepended with the CloudFormation stack name and appended with an alphanumeric string. Verify that the managed policy associated is: “EC2FullAccess”, which indicates that the users in this group have unrestricted access to EC2.</p> 
+<p>There are two stages of verification for this serverless automated cost controls solution: simulating a notification and waiting for a breach.</p> 
+<h3>Simulated notification</h3> 
+<p>Because it takes at least a few hours for the aggregate cost of the EC2 fleet to breach the set budget, you can verify the solution by simulating the notification from Budgets.</p> 
+<ol> 
+<li>Log in to the SNS console (using your regular AWS credentials).</li> 
+<li>Publish a message on the SNS topic that has “budgetNotificationTopic” in the name. The complete name is appended by the CloudFormation stack identifier. &nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_3.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_3-1024x488.jpg" /></a></li> 
+<li>Copy the following text as the body of the notification: “This is a mock notification”.</li> 
+<li>Choose Publish.</li> 
+<li>Open the IAM console to verify that the policy for the test group has been switched to “EC2ReadOnly”. This prevents users in this group from creating new instances.</li> 
+<li>Verify that the test user created in the previous section cannot spin up new EC2 instances. &nbsp;You can log in as the test user and try creating a new EC2 instance (via the same CloudFormation stack or the EC2 console). You should get an error message indicating that you do not have the necessary permissions.</li> 
+<li>If you are proceeding to stage 2 of the verification, then you must switch the permissions back to “EC2FullAccess” for the test group, which can be done in the IAM console.</li> 
+</ol> 
+<h3>Automatic notification</h3> 
+<p>Within 48 hours, the aggregate cost of the EC2 fleet spun up in the earlier section breaches the budget rule and triggers an automatic notification. This results in the permissions getting switched out, just as in the simulated notification.</p> 
+<b>Clean up</b> 
+<p>Use the following steps to delete your resources and stop incurring costs.</p> 
+<ol> 
+<li>Open the CloudFormation console.</li> 
+<li>Delete the EC2 fleet by deleting the appropriate stack (for example, delete the stack named “testEc2FleetForProjectBeta”). &nbsp;<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_4-1.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_4-1.jpg" /></a> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;<b>&nbsp;</b></li> 
+<li>Next, delete the “costControlStack” stack. &nbsp; <a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_5.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/screen_shot_5-1024x465.jpg" /></a>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;&nbsp;<strong>&nbsp;</strong></li> 
+</ol> 
+<b>Conclusion</b> 
+<p>Using Lambda in tandem with Budgets, you can build Serverless automated cost controls on AWS. Find all the resources (instructions, code) for implementing the solution discussed in this post on the <a href="https://github.com/aws-samples/serverless-automated-cost-controls">Serverless Automated Cost Controls</a> GitHub repo.</p> 
+<p>Stay tuned to this series for more tips about building serverless automated cost controls. In the next post, we discuss using smart lighting to influence developer behavior and describe a solution to encourage cost-aware development practices.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<p>&nbsp;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3299');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/17/social_ECR.png" /> 
 <b class="lb-b blog-post-title" property="name headline">AWS re:Invent 2017 Guide to All Things Containers</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1982,111 +2102,6 @@ $('#client_result').html('ERROR: '+status);
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3143');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure1-756x630.jpeg" /> 
-<b class="lb-b blog-post-title" property="name headline">Bringing Datacenter-Scale Hardware-Software Co-design to the Cloud with FireSim and Amazon EC2 F1 Instances</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Mia Champion</span></span> | on 
-<time property="datePublished" datetime="2017-10-25T10:09:51+00:00">25 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/bringing-datacenter-scale-hardware-software-co-design-to-the-cloud-with-firesim-and-amazon-ec2-f1-instances/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3096" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3096&amp;disqus_title=Bringing+Datacenter-Scale+Hardware-Software+Co-design+to+the+Cloud+with+FireSim+and+Amazon+EC2+F1+Instances&amp;disqus_url=https://aws.amazon.com/blogs/compute/bringing-datacenter-scale-hardware-software-co-design-to-the-cloud-with-firesim-and-amazon-ec2-f1-instances/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3096');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>The recent addition of Xilinx FPGAs to AWS Cloud compute offerings is one way that AWS is enabling global growth in the areas of advanced analytics, deep learning and AI. The customized F1 servers use pooled accelerators, enabling interconnectivity of up to 8 FPGAs, each one including 64 GiB DDR4 ECC protected memory, with a dedicated PCIe x16 connection. That makes this a powerful engine with the capacity to process advanced analytical applications at scale, at a significantly faster rate. For example, AWS commercial partner <a href="http://www.edicogenome.com/dragen-on-amazon-web-services/">Edico Genome </a>is able to achieve an approximately 30X speedup in analyzing whole genome sequencing datasets using their DRAGEN platform powered with F1 instances.</em></p> 
-<p><em>While the availability of FPGA F1 compute on-demand provides clear accessibility and cost advantages, many mainstream users are still finding that the “threshold to entry” in developing or running FPGA-accelerated simulations is too high. Researchers at the UC Berkeley RISE Lab have developed “FireSim”, powered by Amazon FPGA F1 instances as an open-source resource, FireSim lowers that entry bar and makes it easier for everyone to leverage the power of an FPGA-accelerated compute environment. Whether you are part of a small start-up development team or working at a large datacenter scale, hardware-software co-design enables faster time-to-deployment, lower costs, and more predictable performance. We are excited to feature FireSim in this post from Sagar Karandikar and his colleagues at UC-Berkeley.</em></p> 
-<p>―Mia Champion, Sr. Data Scientist, AWS</p> 
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure1.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure1.jpeg" /></a> 
-<p class="wp-caption-text">Mapping an 8-node FireSim cluster simulation to Amazon EC2 F1</p> 
-<p style="text-align: left">As traditional hardware scaling nears its end, the data centers of tomorrow are trending towards heterogeneity, employing custom hardware accelerators and increasingly high-performance interconnects. Prototyping new hardware at scale has traditionally been either extremely expensive, or very slow. In this post, I introduce <a href="https://fires.im/">FireSim</a>, a new hardware simulation platform under development in the computer architecture research group at UC Berkeley that enables fast, scalable hardware simulation using <a href="https://aws.amazon.com/ec2/instance-types/f1/">Amazon EC2 F1 instances</a>.</p> 
-<p>FireSim benefits both hardware and software developers working on new rack-scale systems: software developers can use the simulated nodes with new hardware features as they would use a real machine, while hardware developers have full control over the hardware being simulated and can run real software stacks while hardware is still under development. In conjunction with this post, we’re releasing the first public demo of FireSim, which lets you deploy your own 8-node simulated cluster on an F1 Instance and run benchmarks against it. This demo simulates a pre-built “vanilla” cluster, but demonstrates FireSim’s high performance and usability.</p> 
-<h3>Why FireSim + F1?</h3> 
-<p>FPGA-accelerated hardware simulation is by no means a new concept. However, previous attempts to use FPGAs for simulation have been fraught with usability, scalability, and cost issues. FireSim takes advantage of EC2 F1 and open-source hardware to address the traditional problems with FPGA-accelerated simulation:<br /> <em>Problem #1: FPGA-based simulations have traditionally been expensive, difficult to deploy, and difficult to reproduce.</em><br /> FireSim uses public-cloud infrastructure like F1, which means no upfront cost to purchase and deploy FPGAs. Developers and researchers can distribute pre-built AMIs and AFIs, as in this public demo (more details later in this post), to make experiments easy to reproduce. FireSim also automates most of the work involved in deploying an FPGA simulation, essentially enabling one-click conversion from new RTL to deploying on an FPGA cluster.</p> 
-<p><em>Problem #2: FPGA-based simulations have traditionally been difficult (and expensive) to scale.</em><br /> Because FireSim uses F1, users can scale out experiments by spinning up additional EC2 instances, rather than spending hundreds of thousands of dollars on large FPGA clusters.</p> 
-<p><em>Problem #3: Finding open hardware to simulate has traditionally been difficult.</em> <em>Finding open hardware that can run real software stacks is even harder.</em><br /> FireSim simulates <a href="https://github.com/freechipsproject/rocket-chip">RocketChip</a>, an open, silicon-proven, <a href="https://riscv.org/">RISC-V</a>-based processor platform, and adds peripherals like a NIC and disk device to build up a realistic system. Processors that implement RISC-V automatically support real operating systems (such as <a href="https://github.com/riscv/riscv-linux">Linux</a>) and even support applications like Apache and Memcached. We provide a custom Buildroot-based FireSim Linux distribution that runs on our simulated nodes and includes many popular developer tools.</p> 
-<p><em>Problem #4: Writing hardware in traditional HDLs is time-consuming.</em><br /> Both FireSim and RocketChip use the <a href="https://chisel.eecs.berkeley.edu/">Chisel</a> HDL, which brings modern programming paradigms to hardware description languages. Chisel greatly simplifies the process of building large, highly parameterized hardware components.</p> 
-<h3>How to use FireSim for hardware/software co-design</h3> 
-<p>FireSim drastically improves the process of co-designing hardware and software by acting as a push-button interface for collaboration between hardware developers and systems software developers. The following diagram describes the workflows that hardware and software developers use when working with FireSim.</p> 
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure2-1.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure2-1.jpeg" /></a> 
-<p class="wp-caption-text">Figure 2. The FireSim custom hardware development workflow.</p> 
-<p>The hardware developer’s view:</p> 
-<ol> 
-<li>Write custom RTL for your accelerator, peripheral, or processor modification in a productive language like Chisel.</li> 
-<li>Run a software simulation of your hardware design in standard gate-level simulation tools for early-stage debugging.</li> 
-<li>Run FireSim build scripts, which automatically build your simulation, run it through the Vivado toolchain/AWS shell scripts, and publish an AFI.</li> 
-<li>Deploy your simulation on EC2 F1 using the generated simulation driver and AFI</li> 
-<li>Run real software builds released by software developers to benchmark your hardware</li> 
-</ol> 
-<p>The software developer’s view:</p> 
-<ol> 
-<li>Deploy the AMI/AFI generated by the hardware developer on an F1 instance to simulate a cluster of nodes (or scale out to many F1 nodes for larger simulated core-counts).</li> 
-<li>Connect using SSH into the simulated nodes in the cluster and boot the Linux distribution included with FireSim. This distribution is easy to customize, and already supports many standard software packages.</li> 
-<li>Directly prototype your software using the same exact interfaces that the software will see when deployed on the real future system you’re prototyping, with the same performance characteristics as observed from software, even at scale.</li> 
-</ol> 
-<p><strong>FireSim demo v1.0</strong></p> 
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure3.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure3.jpeg" /></a> 
-<p class="wp-caption-text">Figure 3. Cluster topology simulated by FireSim demo v1.0.</p> 
-<p style="text-align: left">This first public demo of FireSim focuses on the aforementioned “software-developer’s view” of the custom hardware development cycle. The demo simulates a cluster of 1 to 8 RocketChip-based nodes, interconnected by a functional network simulation. The simulated nodes work just like “real” machines: &nbsp;they boot Linux, you can connect to them using SSH, and you can run real applications on top. The nodes can see each other (and the EC2 F1 instance on which they’re deployed) on the network and communicate with one another. While the demo currently simulates a pre-built “vanilla” cluster, the entire hardware configuration of these simulated nodes can be modified after FireSim is open-sourced.</p> 
-<p>In this post, I walk through bringing up a single-node FireSim simulation for experienced EC2 F1 users. For more detailed instructions for new users and instructions for running a larger 8-node simulation, see <a href="https://fires.im/2017/08/29/firesim-demo-v1.0.html">FireSim Demo v1.0 on Amazon EC2 F1</a>. Both demos walk you through setting up an instance from a demo AMI/AFI and booting Linux on the simulated nodes. The full demo instructions also walk you through an example workload, running Memcached on the simulated nodes, with YCSB as a load generator to demonstrate network functionality.</p> 
-<h3>Deploying the demo on F1</h3> 
-<p>In this release, we provide pre-built binaries for driving simulation from the host and a pre-built AFI that contains the FPGA infrastructure necessary to simulate a RocketChip-based node.</p> 
-<h3>Starting your F1 instances</h3> 
-<p>First, launch an instance using the free <a href="https://aws.amazon.com/marketplace/pp/B0758SR46G">FireSim Demo v1.0 product</a> available on the AWS Marketplace on an f1.2xlarge instance. After your instance has booted, log in using the user name centos. On the first login, you should see the message “FireSim network config completed.” This sets up the necessary tap interfaces and bridge on the EC2 instance to enable communicating with the simulated nodes.</p> 
-<h3>AMI contents</h3> 
-<p>The AMI contains a variety of tools to help you run simulations and build software for RISC-V systems, including the riscv64 toolchain, a Buildroot-based Linux distribution that runs on the simulated nodes, and the simulation driver program. For more details, see the <a href="https://fires.im/2017/08/29/firesim-demo-v1.0.html#ami-contents">AMI Contents</a> section on the FireSim website.</p> 
-<h3>Single-node demo</h3> 
-<p>First, you need to flash the FPGA with the FireSim AFI. To do so, run:</p> 
-<p style="text-align: left"><em>[centos@ip-IP_ADDR ~]$ sudo fpga-load-local-image -S 0 -I agfi-00a74c2d615134b21</em></p> 
-<p>To start a simulation, run the following at the command line:</p> 
-<p style="text-align: left"><em>[centos@ip-IP_ADDR ~]$ boot-firesim-singlenode</em></p> 
-<p>This automatically calls the simulation driver, telling it to load the Linux kernel image and root filesystem for the Linux distro. This produces output similar to the following:</p> 
-<p style="text-align: left"><em>Simulations Started. You can use the UART console of each simulated node by attaching to the following screens:</em></p> 
-<p style="text-align: left"><em>There is a screen on:</em></p> 
-<p style="text-align: left"><em>2492.fsim0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (Detached)</em></p> 
-<p style="text-align: left"><em>1 Socket in /var/run/screen/S-centos.</em></p> 
-<p>You could connect to the simulated UART console by connecting to this screen, but instead opt to use SSH to access the node instead.</p> 
-<p>First, ping the node to make sure it has come online. This is currently required because nodes may get stuck at Linux boot if the NIC does not receive any network traffic. For more information, see <a href="https://fires.im/2017/08/29/firesim-demo-v1.0.html#troubleshooting-ping">Troubleshooting/Errata</a>. The node is always assigned the IP address 192.168.1.10:</p> 
-<p style="text-align: left"><em>[centos@ip-IP_ADDR ~]$ ping 192.168.1.10</em></p> 
-<p>This should eventually produce the following output:</p> 
-<p><em>PING 192.168.1.10 (192.168.1.10) 56(84) bytes of data.</em></p> 
-<p><em>From 192.168.1.1 icmp_seq=1 Destination Host Unreachable</em></p> 
-<p><em>…</em></p> 
-<p><em>64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=2017 ms</em></p> 
-<p><em>64 bytes from 192.168.1.10: icmp_seq=2 ttl=64 time=1018 ms</em></p> 
-<p><em>64 bytes from 192.168.1.10: icmp_seq=3 ttl=64 time=19.0 ms</em></p> 
-<p><em>…</em></p> 
-<p>At this point, you know that the simulated node is online. You can connect to it using SSH with the user name root and password firesim. It is also convenient to make sure that your TERM variable is set correctly. In this case, the simulation expects TERM=linux, so provide that:</p> 
-<p><em>[centos@ip-IP_ADDR ~]$ TERM=linux ssh root@192.168.1.10</em></p> 
-<p><em>The authenticity of host ‘192.168.1.10 (192.168.1.10)’ can’t be established.</em></p> 
-<p><em>ECDSA key fingerprint is 63:e9:66:d0:5c:06:2c:1d:5c:95:33:c8:36:92:30:49.</em></p> 
-<p><em>Are you sure you want to continue connecting (yes/no)? yes</em></p> 
-<p><em>Warning: Permanently added ‘192.168.1.10’ (ECDSA) to the list of known hosts.</em></p> 
-<p><em>root@192.168.1.10’s password:</em></p> 
-<p><em>#</em></p> 
-<p>At this point, you’re connected to the simulated node. Run uname -a as an example. You should see the following output, indicating that you’re connected to a RISC-V system:</p> 
-<p><em># uname -a</em></p> 
-<p><em>Linux buildroot 4.12.0-rc2 #1 Fri Aug 4 03:44:55 UTC 2017 riscv64 GNU/Linux</em></p> 
-<p>Now you can run programs on the simulated node, as you would with a real machine. For an example workload (running YCSB against Memcached on the simulated node) or to run a larger 8-node simulation, see the full <a href="https://fires.im/2017/08/29/firesim-demo-v1.0.html">FireSim Demo v1.0 on Amazon EC2 F1 demo instructions</a>.</p> 
-<p>Finally, when you are finished, you can shut down the simulated node by running the following command from within the simulated node:</p> 
-<p style="text-align: left"><em># poweroff</em></p> 
-<p>You can confirm that the simulation has ended by running screen -ls, which should now report that there are no detached screens.</p> 
-<h3>Future plans</h3> 
-<p>At Berkeley, we’re planning to keep improving the FireSim platform to enable our own research in future data center architectures, like <a href="https://www.usenix.org/sites/default/files/conference/protected-files/fast14_asanovic.pdf">FireBox</a>. The FireSim platform will eventually support more sophisticated processors, custom accelerators (such as <a href="http://hwacha.org/">Hwacha</a>), network models, and peripherals, in addition to scaling to larger numbers of FPGAs. In the future, we’ll open source the entire platform, including Midas, the tool used to transform RTL into FPGA simulators, allowing users to modify any part of the hardware/software stack. Follow <a href="https://twitter.com/firesimproject">@firesimproject</a> on Twitter to stay tuned to future FireSim updates.</p> 
-<h3>Acknowledgements</h3> 
-<p>FireSim is the joint work of many students and faculty at Berkeley: Sagar Karandikar, Donggyu Kim, Howard Mao, David Biancolin, Jack Koenig, Jonathan Bachrach, and Krste Asanović. This work is partially funded by AWS through the RISE Lab, by the Intel Science and Technology Center for Agile HW Design, and by ASPIRE Lab sponsors and affiliates Intel, Google, HPE, Huawei, NVIDIA, and SK hynix.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3096');
 });
 </script> 
 </article> 

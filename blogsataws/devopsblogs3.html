@@ -190,6 +190,405 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Database Continuous Integration and Automated Release Management Workflow with AWS and Datical DB</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Balaji Iyer</span></span> | on 
+<time property="datePublished" datetime="2017-06-02T05:00:14+00:00">02 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/best-practices/" title="View all posts in Best practices"><span property="articleSection">Best practices</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/partners/" title="View all posts in Partners"><span property="articleSection">Partners</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/database-continuous-integration-and-automated-release-management-workflow-with-aws-and-datical-db/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Just as a herd can move only as fast as its slowest member, companies must increase the speed of all parts of their release process, especially the database change process, which is often manual. One bad database change can bring down an app or compromise data security.</p> 
+<p>We need to make database code deployment as fast and easy as application release automation, while eliminating risks that cause application downtime and data security vulnerabilities. Let’s take a page from the application development playbook and bring a continuous deployment approach to the database.</p> 
+<p>By creating a continuous deployment database, you can:</p> 
+<li>Discover mistakes more quickly.</li> 
+<li>Deliver updates faster and frequently.</li> 
+<li>Help developers write better code.</li> 
+<li>Automate the database release management process.</li> 
+<p>The database deployment package can be promoted automatically with application code changes. With database continuous deployment, application development teams can deliver smaller, less risky deployments, making it possible to respond more quickly to business or customer needs.</p> 
+<p>In our previous post, <a href="https://aws.amazon.com/blogs/devops/building-end-to-end-continuous-delivery-and-deployment-pipelines-in-aws-and-teamcity/">Building End-to-End Continuous Delivery and Deployment Pipelines in AWS</a>, we walked through steps for implementing a continuous deployment and automated delivery pipeline for your application.</p> 
+<p>In this post, we walk through steps for building a continuous deployment workflow for databases using <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> (a fully managed continuous delivery service) and <a href="http://www.datical.com/solution/">Datical DB</a> (a database release automation application). We use <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a> for source code control and <a href="https://aws.amazon.com/rds/">Amazon RDS</a> for database hosting to demonstrate end-to-end database change management — from check-in to final deployment.</p> 
+<p>As part of this example, we will show how a database change that does not meet standards is rejected automatically and actionable feedback is provided to the developer. Just like a code unit test, Datical DB evaluates changes and enforces your organization’s standards. In the sample use case, database table indexes of more than three columns are disallowed. In some cases, this type of index can slow performance.</p> 
+<p><strong>Prerequisites</strong></p> 
+<p>You’ll need an AWS account, an Amazon EC2 key pair, and administrator-level permissions for <a href="https://aws.amazon.com/iam/">AWS Identity and Access Management (IAM)</a>, AWS CodePipeline, AWS CodeCommit, Amazon RDS, <a href="https://aws.amazon.com/ec2/">Amazon EC2</a>, and <a href="https://aws.amazon.com/s3/">Amazon S3</a>.</p> 
+<p>From Datical DB, you’ll need access to software.datical.com portal, your license key, a database, and JDBC drivers. You can request a free trial of Datical <a href="http://pages.datical.com/aws-blog-trial-request.html">here</a>.</p> 
+<b>Overview</b> 
+<p>Here are the steps:</p> 
+<ol> 
+<li style="text-align: left">Install and configure Datical DB.</li> 
+<li style="text-align: left">Create an RDS database instance running the Oracle database engine.</li> 
+<li style="text-align: left">Configure Datical DB to manage database changes across your software development life cycle (SDLC).</li> 
+<li style="text-align: left">Set up database version control using AWS CodeCommit.</li> 
+<li style="text-align: left">Set up a continuous integration server to stage database changes.</li> 
+<li style="text-align: left">Integrate the continuous integration server with Datical DB.</li> 
+<li style="text-align: left">Set up automated release management for your database through AWS CodePipeline.</li> 
+<li style="text-align: left">Enforce security governance and standards with the Datical DB Rules Engine.</li> 
+</ol> 
+<b>1. Install and configure Datical DB</b> 
+<p>Navigate to <a href="https://software.datical.com">https://software.datical.com</a> and sign in with your credentials. From the left navigation menu, expand the <strong>Common</strong> folder, and then open the <strong>Datical_DB_Folder</strong>. Choose the latest version of the application by reviewing the date suffix in the name of the folder. Download the installer for your platform — Windows (32-bit or 64-bit) or Linux (32-bit or 64-bit).</p> 
+<b>Verify the JDK Version</b> 
+<p>In a terminal window, run the following command to ensure you’re running JDK version 1.7.x or later.</p> 
+<code class="lang-code"># java –version
+java version &quot;1.7.0_75&quot;
+Java(TM) SE Runtime Environment (build 1.7.0_75-b13)
+Java HotSpot(TM) Client VM (build 24.75-b04, mixed mode, sharing)</code> 
+<p>The Datical DB installer contains a graphical (GUI) and command line (CLI) interface that can be installed on Windows and Linux operating systems.</p> 
+<b>Install Datical DB (GUI)</b> 
+<ol> 
+<li>Double-click on the installer</li> 
+<li>Follow the prompts to install the application.</li> 
+<li>When prompted, type the path to a valid license.</li> 
+</ol> 
+<h3>Install JDBC drivers</h3> 
+<ol> 
+<li>Open the Datical DB application.</li> 
+<li>From the menu, choose <strong>Help</strong>, and then choose <strong>Install New Software</strong>.</li> 
+<li>From the <strong>Work with</strong> drop-down list, choose Database Drivers – <a href="http://update.datical.com/drivers/updates">http://update.datical.com/drivers/updates</a>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/1-2.png" /></li> 
+<li>Follow the prompts to install the drivers.</li> 
+</ol> 
+<b>Install Datical DB (CLI)</b> 
+<p>Datical DB (CLI only) can be installed on a headless Linux system. Select the correct 32-bit or 64-bit Linux installer for your system.</p> 
+<ol> 
+<li>Run the installer as root and install it to /usr/local/DaticalDB. <code class="lang-bash">sudo java -jar ../installers/&lt;Datical Installer&gt;.jar -console</code> </li> 
+<li>Follow the prompts to install the application.</li> 
+<li>When prompted, type the path to a valid license.</li> 
+</ol> 
+<h3>Install JDBC drivers</h3> 
+<ol> 
+<li>Copy JDBC drivers to /usr/local/DaticalDB/jdbc_drivers. <code class="lang-bash">sudo mkdir /usr/local/DaticalDB/jdbc_drivers
+copy JDBC Drivers from software.datical.com to /usr/local/DaticalDB/jdbc_drivers</code> </li> 
+<li><code class="lang-bash"></code>Copy the license file to /usr/local/DaticalDB/repl. <code class="lang-bash">sudo cp &lt;license_filename&gt; /usr/local/DaticalDB/repl
+sudo chmod 777 /usr/local/DaticalDB/repl/&lt;license_filename&gt;</code> </li> 
+</ol> 
+<b>2. Create an RDS instance running the Oracle database engine</b> 
+<p>Datical DB supports database engines like Oracle, MySQL, Microsoft SQL Server, PostgreSQL, and IBM DB2. The example in this post uses a DB instance running Oracle. To create a DB instance running Oracle, <a href="http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CreateOracleInstance.html">follow these steps</a>.<br /> Make sure that you can access the Oracle port (1521) from the location where you will be using Datical DB. Just like SQLPlus or other database management tools, Datical DB must be able to connect to the Oracle port. When you configure the security group for your RDS instance, make sure you can access port 1521 from your location.</p> 
+<b>3. Manage database changes across the SDLC</b> 
+<p>This one-time process is required to ensure databases are in sync so that you can manage database changes across the SDLC:</p> 
+<ol> 
+<li>Create a Datical DB deployment plan with connections to the databases to be managed.</li> 
+<li>Baseline the first database (DEV/CI). This must be the original or best configured database – your reference database.</li> 
+<li>For each additional database (TEST and PROD):<br /> a. Compare databases to ensure the application schema are in sync.<br /> b. Resolve any differences.<br /> c. Perform a change log sync to get each setup for Datical DB management.</li> 
+</ol> 
+<p>Datical DB creates an initial model change log from one of the databases. It also creates in each database a metadata table named DATABASECHANGELOG that will be used to track the state. Now the databases look like this:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/2.png" /></p> 
+<p><strong>Note</strong>: In the preceding figure, the Datical DB model and metadata table are a representation of the actual model.</p> 
+<b>Create a deployment plan</b> 
+<ol> 
+<li style="list-style-type: none"> 
+<ol> 
+<li>In Datical DB, right-click <strong>Deployment Plans</strong>, and choose <strong>New</strong>.</li> 
+<li>On the <strong>New Deployment Plan</strong> page, type a name for your project (for example, AWS-Sample-Project), and then choose <strong>Next</strong>.</li> 
+<li>Select <strong>Oracle 11g Instant Client</strong>, type a name for the database (for example, DevDatabase), and then choose <strong>Next</strong>.</li> 
+<li>On the following page, provide the database connection information.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/3-1.png" /> 
+<ol> 
+<li>For <strong>Hostname</strong>, enter the RDS endpoint..</li> 
+<li>Select <strong>SID</strong>, and then type ORCL.</li> 
+<li>Type the user name and password used to connect to the RDS instance running Oracle.</li> 
+<li>Before you choose <strong>Finish</strong>, choose the <strong>Test Connection</strong> button.</li> 
+</ol> </li> 
+</ol> </li> 
+</ol> 
+<p>When Datical DB creates the project, it also creates a baseline snapshot that captures the current state of the database schema. Datical DB stores the snapshot in Datical change sets for future forecasting and modification.</p> 
+<b>Create a database change set</b> 
+<p>A change set describes the change/refactoring to apply to the database.<br /> From the <strong>AWS-Sample-Project</strong> project in the left pane, right-click <strong>Change Log</strong>, select <strong>New</strong>, and then select <strong>Change Set</strong>. Choose the type of change to make, and then choose <strong>Next</strong>. In this example, we’re creating a table. For <strong>Table Name</strong>, type a name. Choose <strong>Add Column</strong>, and then provide information to add one or more columns to the new table. Follow the prompts, and then choose <strong>Finish</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/4.png" /></p> 
+<p>The new change set will be added at the end of your current change log. You can tag change sets with a sprint label. Depending on the environment, changes can be deployed based on individual labels or by the higher-level grouping construct.<br /> Datical DB also provides an option to load SQL scripts into a database, where the change sets are labeled and captured as objects. This makes them ready for deployment in other environments.</p> 
+<b>Best practices for continuous delivery</b> 
+<p>Change sets are stored in an XML file inside the Datical DB project. The file, changelog.xml, is stored inside the Changelog folder. (In the Datical DB UI, it is called Change Log.)</p> 
+<p>Just like any other files stored in your source code repository, the Datical DB change log can be branched and merged to support agile software development, where individual work spaces are isolated until changes are merged into the parent branch.</p> 
+<p>To implement this best practice, your Datical DB project should be checked into the same location as your application source code. That way, branches and merges will be applied to your Datical DB project automatically. Use unique change set IDs to avoid collisions with other scrum teams.</p> 
+<b>4. Set up database version control using AWS CodeCommit</b> 
+<p>To create a new CodeCommit repository, <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-create-repository.html">follow these steps</a>.</p> 
+<p><strong>Note</strong>: On some versions of Windows and Linux, you might see a pop-up dialog box asking for your user name and password. This is the built-in credential management system, but it is not compatible with the credential helper for AWS CodeCommit. Choose <strong>Cancel</strong>.</p> 
+<p>Commit the contents located in the Datical working directory (for example, ~/datical/AWS-Sample-Project) to the AWS CodeCommit repository.</p> 
+<b>5. Set up a continuous integration server to stage database changes</b> 
+<p>In this example, Jenkins is the continuous integration server. To create a Jenkins server, <a href="https://aws.amazon.com/getting-started/projects/setup-jenkins-build-server/">follow these steps</a>. Be sure your instance security group allows port 8080 access.</p> 
+<code class="lang-basg">sudo wget -O /etc/yum.repos.d/jenkins.repo http://pkg.jenkins-ci.org/redhat/jenkins.repo</code> 
+<p>For more information about installing Jenkins, see the <a href="https://wiki.jenkins-ci.org/display/JENKINS/Installing+Jenkins">Jenkins wiki</a>.</p> 
+<p>After setup, connect to your Jenkins server, and create a job.</p> 
+<ol> 
+<li>Install the following Jenkins plugins:<br /> For this project, you will need to install the following Jenkins plugins:<p></p> 
+<ol> 
+<li>AWS CodeCommit plugin</li> 
+<li>DaticalDB4Jenkins plugin</li> 
+<li>Hudson Post Build Task plugin</li> 
+<li>HTML Publisher plugin</li> 
+</ol> </li> 
+<li>To configure Jenkins for AWS CodeCommit, <a href="https://aws.amazon.com/blogs/devops/integrating-aws-codecommit-with-jenkins/">follow these steps</a>.</li> 
+<li>To configure Jenkins with Datical DB, navigate to Jenkins, choose <strong>Manage Jenkins</strong>, and then choose <strong>Configure System</strong>. In the Datical DB section, provide the requested directory information.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/5-1.png" /></p> 
+<p>For example:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/6-1.png" /></p> 
+<b>Add a build step:</b> 
+<p>Go to your newly created Jenkins project and choose <strong>Configure</strong>. On the <strong>Build</strong> tab, under <strong>Build</strong>, choose <strong>Add build step</strong>, and choose <strong>Datical DB</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/7-1.png" /></p> 
+<p>In <strong>Project Dir</strong>, enter the Datical DB project directory (in this example, /var/lib/jenkins/workspace/demo/MyProject). You can use Jenkins environment variables like $WORKSPACE. The first build action&nbsp;is <strong>Check Drivers</strong>. This allow you to verify that Datical DB and Jenkins are configured correctly.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/8-1.png" /></p> 
+<p>Choose <strong>Save</strong>. Choose <strong>Build Now</strong> to test the configuration.</p> 
+<p>After you’ve verified the drivers are installed, add forecast and deploy steps.</p> 
+<b>Add forecast and deploy steps:</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/9-1.png" /><br /> Choose <strong>Save</strong>. Then choose <strong>Build Now</strong> to test the configuration.</p> 
+<b>6. Configure the continuous integration server to publish Datical DB reports</b> 
+<p>In this step, we will configure Jenkins to publish Datical DB forecast and HTML reports. In your Jenkins project, select <strong>Delete workspace before build starts</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/10-2.png" /></p> 
+<b>Add post-build steps</b> 
+<h3>1. Archive the Datical DB reports, logs, and snapshots</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/11.png" /><br /> To expose Datical DB reports in Jenkins, you must create a post-build task step to copy the forecast and deployment HTML reports to a location easily published, and then publish the HTML reports.</p> 
+<h4>2. Copy the forecast and deploy HTML reports</h4> 
+<code class="lang-bash">mkdir /var/lib/jenkins/workspace/Demo/MyProject/report
+cp -rv /var/lib/jenkins/workspace/Demo/MyProject/Reports/*/*/*/forecast*/* /var/lib/jenkins/workspace/Demo/MyProject/report 2&gt;NUL
+cp -rv /var/lib/jenkins/workspace/Demo/MyProject/Reports/*/*/*/deploy*/deployReport.html /var/lib/jenkins/workspace/Demo/MyProject/report 2&gt;NUL</code> 
+<h4><code class="lang-code"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/12.png" /><br /> </code></h4> 
+<p>&nbsp;</p> 
+<h4>3. Publish HTML reports</h4> 
+<p>Use the information in the following screen shot. Depending on the location where you configured Jenkins to build, your details might be different.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/13-1.png" /></p> 
+<p><strong>Note</strong>: Datical DB HTML reports use CSS, so update the JENKINS_JAVA_OPTIONS in your config file as follows:</p> 
+<p>Edit /etc/sysconfig/jenkins and set JENKINS_JAVA_OPTIONS to:</p> 
+<code class="lang-code">JENKINS_JAVA_OPTIONS=&quot;-Djava.awt.headless=true -Dhudson.model.DirectoryBrowserSupport.CSP= &quot;
+</code> 
+<b>7. Enable automated release management for your database through AWS CodePipeline</b> 
+<p>To create an automated release process for your databases using AWS CodePipeline, follow these instructions.</p> 
+<ol> 
+<li>Sign in to the AWS Management Console and open the AWS CodePipeline console at <a href="http://console.aws.amazon.com/codepipeline">http://console.aws.amazon.com/codepipeline</a>.</li> 
+<li>On the introductory page, choose <strong>Get started</strong>. If you see the <strong>All pipelines</strong> page, choose <strong>Create pipeline</strong>.</li> 
+<li>In <strong>Step 1: Name</strong>, in <strong>Pipeline name</strong>, type <strong>DatabasePipeline</strong>, and then choose <strong>Next step</strong>.</li> 
+<li>In <strong>Step 2: Source</strong>, in <strong>Source provider</strong>, choose <strong>AWS CodeCommit</strong>. In <strong>Repository name</strong>, choose the name of the AWS CodeCommit repository you created earlier. In <strong>Branch name</strong>, choose the name of the branch that contains your latest code update. Choose <strong>Next step</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/15-1.png" /></li> 
+<li>In <strong>Step 3: Build</strong>, chose <strong>Jenkins</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/17-1.png" /></li> 
+</ol> 
+<p>To complete the deployment workflow, follow steps 6 through 9 in the <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/tutorials-simple-codecommit.html#codecommit-create-pipeline">Create a Simple Pipeline Tutorial</a>.</p> 
+<b>8. Enforce database standards and compliance with the Datical DB Rules Engine</b> 
+<p>The Datical DB Dynamic Rules Engine automatically inspects the Virtual Database Model to make sure that proposed database code changes are safe and in compliance with your organization’s database standards. The Rules Engine also makes it easy to identify complex changes that warrant further review and empowers DBAs to efficiently focus only on the changes that require their attention. It also provides application developers with a self-service validation capability that uses the same automated build process established for the application. The consistent evaluation provided by the Dynamic Rules Engine removes uncertainty about what is acceptable and empowers application developers to write safe, compliant changes every time.</p> 
+<p>Earlier, you created a Datical DB project with no changes. To demonstrate rules, you will now create changes that violate a rule.</p> 
+<p>First, create a table with four columns. Then try to create an index on the table that comprises all four columns. For some databases, having more than three columns in an index can cause performance issues. For this reason, create a rule that will prevent the creation of an index on more than three columns, long before the change is proposed for production. Like a unit test that will fail the build, the Datical DB Rules Engine fails the build at the forecast step and provides feedback to the development team about the rule and the change to fix.</p> 
+<b>Create a Datical DB rule</b> 
+<p>To create a Datical DB rule, open the Datical DB UI and navigate to your project. Expand the Rules folder. In this example, you will create a rule in the Forecast folder.</p> 
+<p>Right-click the Forecast folder, and then select <strong>Create Rules File</strong>. In the dialog box, type a unique file name for your rule. Use a .drl extension.</p> 
+<p>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/18-2.png" /></p> 
+<p>In the editor window that opens, type&nbsp;the following:</p> 
+<code class="lang-java">package com.datical.hammer.core.forecast
+import java.util.Collection;
+import java.util.List;
+import java.util.Arrays;
+import java.util.ArrayList;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.collections.ListUtils;
+import com.datical.db.project.Project;
+import com.datical.hammer.core.rules.Response;
+import com.datical.hammer.core.rules.Response.ResponseType;
+// ************************************* Models *************************************
+// Database Models
+import com.datical.dbsim.model.DbModel;
+import com.datical.dbsim.model.Schema;
+import com.datical.dbsim.model.Table;
+import com.datical.dbsim.model.Index;
+import com.datical.dbsim.model.Column;
+import org.liquibase.xml.ns.dbchangelog.CreateIndexType;
+import org.liquibase.xml.ns.dbchangelog.ColumnType;
+/* @return false if validation fails; true otherwise */
+function boolean validate(List columns)
+{
+// FAIL If more than 3 columns are included in new index
+if (columns.size() &gt; 3)
+return false;
+else
+return true;
+}
+rule &quot;Index Too Many Columns Error&quot;
+salience 1
+when
+$createIndex : CreateIndexType($indexName: indexName, $columns: columns, $tableName: tableName, $schemaName: schemaName)
+eval(!validate($columns))
+then
+String errorMessage = &quot;The new index [&quot; + $indexName + &quot;] contains more than 3 columns.&quot;;
+insert(new Response(ResponseType.FAIL, errorMessage, drools.getRule().getName()));
+end</code> 
+<p>Save the new rule file, and then right-click the Forecast folder, and select Check Rules. You should see “Rule Validation returned no errors.”</p> 
+<p>Now check your rule into source code control and request a new build. The build will fail, which is expected. Go back to Datical DB, and change the index to comprise only three columns. After your check-in, you will see a successful deployment to your RDS instance.</p> 
+<p>The following forecast report shows the Datical DB rule violation:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/19-2.png" /></p> 
+<p>To implement database continuous delivery into your existing continuous delivery process, consider creating a separate project for your database changes that use the Datical DB forecast functionality at the same time unit tests are run on your code. This will catch database changes that violate standards before deployment.</p> 
+<b>Summary:</b> 
+<p>In this post, you learned how to build a modern database continuous integration and automated release management workflow on AWS. You also saw how Datical DB can be seamlessly integrated with AWS services to enable database release automation, while eliminating risks that cause application downtime and data security vulnerabilities. This fully automated delivery mechanism for databases can accelerate every organization’s ability to deploy software rapidly and reliably while improving productivity, performance, compliance, and auditability, and increasing data security. These methodologies simplify process-related overhead and make it possible for organizations to serve their customers efficiently and compete more effectively in the market.</p> 
+<p>I hope you enjoyed this post. If you have any feedback, please leave a comment below.</p> 
+<hr /> 
+<h3 style="text-align: left">About the Authors</h3> 
+<p>&nbsp;</p> 
+<p style="text-align: left"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/pic-150x150.jpg" /></p> 
+<p style="text-align: left"><strong>Balaji Iyer is an Enterprise Consultant for the Professional Services Team&nbsp;at Amazon Web Services</strong>. In this role, he has helped several customers successfully navigate their journey to AWS. His specialties include architecting and implementing highly scalable distributed systems, serverless architectures, large scale migrations, operational&nbsp;security, and leading strategic AWS initiatives. Before he joined Amazon, Balaji spent more than&nbsp;a decade building operating systems, big data analytics solutions, mobile services, and web applications. In his spare time, he enjoys experiencing the great outdoors and spending time with his family.</p> 
+<p style="text-align: left"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/robert-reeves-150x150.jpg" /></p> 
+<p style="text-align: left"><strong>Robert Reeves&nbsp;is a Co-Founder &amp;&nbsp;Chief Technology Officer at Datical</strong>. In this role, he advocates for Datical’s customers and provides technical architecture leadership. Prior to cofounding Datical, Robert was a Director at the Austin Technology Incubator. At ATI, he provided real-world entrepreneurial expertise to ATI member companies to aid in market validation, product development, and fundraising efforts. Robert cofounded Phurnace Software in 2005. He invented and created the flagship product, Phurnace Deliver, which provides middleware infrastructure management to multiple Fortune 500 companies. As Chief Technology Officer for Phurnace, he led technical evangelism efforts, product vision, and large account technical sales efforts. After BMC Software acquired Phurnace in 2009, Robert served as Chief Architect and lead worldwide technology evangelism.</p> 
+<hr /> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Jason Barto</span></span> | on 
+<time property="datePublished" datetime="2017-06-01T04:05:35+00:00">01 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/how-to-create-an-ami-builder-with-aws-codebuild-and-hashicorp-packer/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><strong>Written by AWS Solutions Architects Jason Barto and Heitor Lessa</strong></p> 
+<p>It’s an operational and security best practice to create and maintain custom <a href="https://aws.amazon.com/answers/configuration-management/aws-ami-design/">Amazon Machine Images</a>. Because it’s also a best practice to maintain infrastructure as code, it makes sense to use automated tooling to script the creation and configuration of AMIs that are used to quickly launch <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> instances.</p> 
+<p>In this first of two posts, we’ll use <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> to programmatically create AMIs for use in our environment. As a part of the AMI generation, we will apply OS patches, configure a banner statement, and install some common software, forming a solid base for future Amazon EC2-based deployments.<br /> <span id="more-1046"></span></p> 
+<b>Requirements</b> 
+<p>You will need <a href="https://git-scm.com/downloads">Git</a> and a text editor.</p> 
+<b>Technologies</b> 
+<p><a href="https://aws.amazon.com/codebuild/details/">AWS CodeBuild</a> is a fully managed build service that enables customers to compile source code, run tests, and produce software packages that are ready to deploy. It is elastic, scalable, and provides curated build environments for programming languages such as Java, Ruby, Python, Go, and Node.js. With AWS CodeBuild, you don’t need to provision, manage, and scale your own build servers. For more information, see the <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/welcome.html">AWS CodeBuild User Guide</a>.</p> 
+<p><a href="https://www.packer.io/">HashiCorp Packer</a> is an open source utility designed to automate the creation of identical virtual machine images for multiple platforms from a single source configuration. For more information, see the <a href="https://www.packer.io/guides/index.html">HashiCorp Packer documentation</a>.</p> 
+<b>Getting Started</b> 
+<p>We need to host the AWS CodeBuild and HashiCorp Packer project somewhere. AWS CodeBuild can use <a href="https://aws.amazon.com/s3/">Amazon S3</a>, <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a>, or <a href="https://github.com/">GitHub</a> as source code repositories. For this tutorial, sign in to the AWS Management Console and create an AWS CodeCommit repository. If you have not used AWS CodeCommit before, we recommend that you start with the <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/getting-started.html">Git with AWS CodeCommit Tutorial</a>.</p> 
+<b>Create an AWS CodeBuild Project in the Console</b> 
+<p>Create an AWS CodeBuild project. It will be used later to build our HashiCorp Packer template.</p> 
+<ol> 
+<li>From the AWS Management Console, open the AWS CodeBuild console.</li> 
+<li>If you have no AWS CodeBuild projects, choose <strong>Get Started</strong> or, on the <strong>Build Projects</strong> page, choose <strong>Create project</strong>.</li> 
+<li>On the <strong>Create project</strong> page, type a name for your AWS CodeBuild project (for example, <strong>AMI_Builder</strong>).</li> 
+<li>For <strong>Source provider</strong>, choose AWS CodeCommit. From the <strong>Repository</strong> drop-down list, select the repository you created in the Getting Started step.</li> 
+</ol> 
+<p>AWS CodeBuild uses containers to execute the project’s build instructions and build your project. You can specify custom container images hosted in <a href="https://aws.amazon.com/ecr/">Amazon EC2 Container Registry</a> or <a href="https://hub.docker.com/">DockerHub</a>, but this tutorial uses the default managed Ubuntu container.</p> 
+<ol start="5"> 
+<li>For <strong>Environment Image</strong>, select <strong>Use an image managed by AWS CodeBuild</strong>. For <strong>Operating system</strong>, choose <strong>Ubuntu</strong>. For <strong>Runtime</strong>, choose <strong>Base</strong>. For <strong>Version</strong>, choose <strong>aws/codebuild/ubuntu-base:14.04</strong>.</li> 
+</ol> 
+<p>The next section of the page tells AWS CodeBuild where to find commands that will be executed as a part of the build. For this project, the build commands are stored in the buildspec.yml file in your repository.</p> 
+<ol start="6"> 
+<li>For <strong>Build specification</strong>, accept the default.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/24/configure_project.png" /></p> 
+<p>The buildspec.yml file will use HashiCorp Packer to execute a template and generate an Amazon EC2 AMI. There is no binary output or build result that will be used as an artifact.</p> 
+<ol start="7"> 
+<li>For <strong>Artifacts type</strong>, choose <strong>No artifacts</strong>.</li> 
+</ol> 
+<p>In the Service Role section the service role you select here will provide the AWS CodeBuild container with permissions to your AWS account. HashiCorp Packer needs permissions to create a temporary EC2 instance and an AMI, delete an EC2 instance, and perform other EC2-related actions. .</p> 
+<p>For the purposes of this post, allow AWS CodeBuild to create a service role for you. You will update it later with the permissions required by HashiCorp Packer.</p> 
+<ol start="8"> 
+<li>For <strong>Service Role</strong> choose the default of <strong>Create a service role in your account</strong>.</li> 
+<li>Choose <strong>Continue</strong>.</li> 
+<li>Review the settings on the next page, and then choose <strong>Save</strong>.</li> 
+</ol> 
+<b>Update Service Role Permissions</b> 
+<p>You have now created an AWS CodeBuild project that is connected to an AWS CodeCommit repository and is ready to build our source code. Now we need to grant AWS CodeBuild the additional permissions it will need to create, delete, and image an EC2 instance.</p> 
+<ol> 
+<li>Open the IAM console and click the AWS CodeBuild service role, created in the last section, to display its summary page.</li> 
+<li>On the summary page, under <strong>Permissions</strong>, expand <strong>Inline policies</strong>, and click the link to create a policy.</li> 
+<li>Choose <strong>Custom Policy</strong>, and then choose <strong>Select</strong>.</li> 
+<li>Copy and paste the IAM policy from the <a href="https://www.packer.io/docs/builders/amazon.html#using-an-iam-instance-profile">HashiCorp Packer documentation</a> into the text area. Type a name for the policy (for example, <strong>codebuild-AMI_Builder-ec2-permissions</strong>).</li> 
+<li>Choose <strong>Validate Policy</strong>, and then choose <strong>Apply Policy</strong> to link the policy with the service role.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/24/permissions.png" /></p> 
+<p>AWS CodeBuild should now have the permissions required to create AMIs.</p> 
+<b>Initial Commit</b> 
+<p>The next step is to create the HashiCorp Packer template and build specification. Check out a copy of the Git repository and create two files:</p> 
+<li>The HashiCorp Packer template, amazon-linux_packer-template.json.</li> 
+<li>The AWS CodeBuild configuration file, buildspec.yml.</li> 
+<b>Create a HashiCorp Packer Template</b> 
+<p>A HashiCorp Packer template is a JSON-formatted document that provides HashiCorp Packer with information about how to build a machine image. A HashiCorp Packer template can be composed of many keys. In this post, the focus is on the builders and provisioners keys. For more information, see <a href="https://www.packer.io/docs/templates/index.html">Templates</a> on the HashiCorp Packer website.</p> 
+<p>Using a text editor, create a HashiCorp Packer template named amazon-linux_packer-template.json that contains three sections: variables, builders, and provisioners.</p> 
+<p>The variables section defines two variables, <code>aws_region</code> and <code>aws_ami_name</code>. These variables can be reused later in the template. They are defined by using an environment variable <code>{{env `AWS_REGION`}}</code> and an internal HashiCorp Packer function <code>{{isotime \&quot;02Jan2006\&quot;}}</code> . For more information about HashiCorp Packer functions, see <a href="https://www.packer.io/docs/templates/engine.html">Template Engine</a> on the HashiCorp Packer website.</p> 
+<p>The builders section configures the amazon-ebs builder to deploy an instance into the same region in which AWS CodeBuild is running, using a t2.micro instance, and to connect to the instance with a username of ec2-user. The source_ami_filter is being used to find the latest version of Amazon Linux available for the target region. The selected source AMI will be the base for your custom AMI. After the EC2 instance has been provisioned, amazon-ebs will create an AMI using the value of the <code>aws_ami_name</code> variable as the AMI name.</p> 
+<code class="lang-json">{
+&quot;variables&quot;: {
+&quot;aws_region&quot;: &quot;{{env `AWS_REGION`}}&quot;,
+&quot;aws_ami_name&quot;: &quot;amazon-linux_{{isotime \&quot;02Jan2006\&quot;}}&quot;
+},
+&quot;builders&quot;: [{
+&quot;type&quot;: &quot;amazon-ebs&quot;,
+&quot;region&quot;: &quot;{{user `aws_region`}}&quot;,
+&quot;instance_type&quot;: &quot;t2.micro&quot;,
+&quot;ssh_username&quot;: &quot;ec2-user&quot;,
+&quot;ami_name&quot;: &quot;{{user `aws_ami_name`}}&quot;,
+&quot;ami_description&quot;: &quot;Customized Amazon Linux&quot;,
+&quot;associate_public_ip_address&quot;: &quot;true&quot;,
+&quot;source_ami_filter&quot;: {
+&quot;filters&quot;: {
+&quot;virtualization-type&quot;: &quot;hvm&quot;,
+&quot;name&quot;: &quot;amzn-ami*-ebs&quot;,
+&quot;root-device-type&quot;: &quot;ebs&quot;
+},
+&quot;owners&quot;: [&quot;137112412989&quot;, &quot;591542846629&quot;, &quot;801119661308&quot;, &quot;102837901569&quot;, &quot;013907871322&quot;, &quot;206029621532&quot;, &quot;286198878708&quot;, &quot;443319210888&quot;],
+&quot;most_recent&quot;: true
+}
+}],
+&quot;provisioners&quot;: [
+{
+&quot;type&quot;: &quot;shell&quot;,
+&quot;inline&quot;: [
+&quot;sudo yum update -y&quot;,
+&quot;sudo /usr/sbin/update-motd --disable&quot;,
+&quot;echo 'No unauthorized access permitted' | sudo tee /etc/motd&quot;,
+&quot;sudo rm /etc/issue&quot;,
+&quot;sudo ln -s /etc/motd /etc/issue&quot;,
+&quot;sudo yum install -y elinks screen&quot;
+]
+}
+]
+}
+</code> 
+<p>The provisioners section provides shell commands that Packer will use to configure the virtual machine after it has been created by the builders, but before it is captured as a machine image. The provisioners section updates the package management system and cleans up temporary keys before exiting. For more information, see <a href="https://www.packer.io/docs/provisioners/index.html">Provisioners</a>&nbsp;on the HashiCorp Packer website.</p> 
+<p>AWS CodeBuild and the containers it executes operate outside of a customer’s VPC. Any actions performed as a part of your build project will not have access to private IP addresses in your VPC. As a result a public IP address must be assigned to the EC2 instance so that HashiCorp Packer can remotely connect to it and configure the system. If the instance is not going to be launched in your default VPC, you must provide HashiCorp Packer with the VPC and a public-facing subnet. You will also need to be able to use SSH to connect to the EC2 instance from the internet.</p> 
+<p>To protect against malicious behavior and prevent unnecessary access, during the short life of the EC2 instance, HashiCorp Packer will use a newly created key pair and security group to deploy the EC2 instance. They will be deleted after the AMI has been created.</p> 
+<p>The source_ami_filter is an alternative to source_ami, which states which AMI should be used to create the EC2 instance. source_ami_filter will query the AMIs available in your region and select the one that best matches the filter criteria. In this example, source_ami_filter is configured to find the most recent AMI that matches the expression amzn-ami*-ebs. The filter has been restricted to match AMIs owned by a limited set of AWS accounts. The owners listed are accounts owned and managed by AWS.</p> 
+<b>Create a Build Specification</b> 
+<p>AWS CodeBuild uses the buildspec.yml file to execute user-defined commands at various phases of the build process. This file tells AWS CodeBuild how to use HashiCorp Packer to execute the template.</p> 
+<p>The buildspec.yml must contain the following:</p> 
+<code class="lang-yaml">---
+version: 0.2
+phases:
+pre_build:
+commands:
+- echo &quot;Installing HashiCorp Packer...&quot;
+- curl -qL -o packer.zip https://releases.hashicorp.com/packer/0.12.3/packer_0.12.3_linux_amd64.zip &amp;&amp; unzip packer.zip
+- echo &quot;Installing jq...&quot;
+- curl -qL -o jq https://stedolan.github.io/jq/download/linux64/jq &amp;&amp; chmod +x ./jq
+- echo &quot;Validating amazon-linux_packer-template.json&quot;
+- ./packer validate amazon-linux_packer-template.json
+build:
+commands:
+### HashiCorp Packer cannot currently obtain the AWS CodeBuild-assigned role and its credentials
+### Manually capture and configure the AWS CLI to provide HashiCorp Packer with AWS credentials
+### More info here: https://github.com/mitchellh/packer/issues/4279
+- echo &quot;Configuring AWS credentials&quot;
+- curl -qL -o aws_credentials.json http://169.254.170.2/$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI &gt; aws_credentials.json
+- aws configure set region $AWS_REGION
+- aws configure set aws_access_key_id `./jq -r '.AccessKeyId' aws_credentials.json`
+- aws configure set aws_secret_access_key `./jq -r '.SecretAccessKey' aws_credentials.json`
+- aws configure set aws_session_token `./jq -r '.Token' aws_credentials.json`
+- echo &quot;Building HashiCorp Packer template, amazon-linux_packer-template.json&quot;
+- ./packer build amazon-linux_packer-template.json
+post_build:
+commands:
+- echo &quot;HashiCorp Packer build completed on `date`&quot;
+</code> 
+<p>During pre_build, this build file configures the AWS CodeBuild container with the tools it will need to execute the Packer template. The first tool is HashiCorp Packer, which is available for download from the <a href="https://www.packer.io/downloads.html">HashiCorp website</a>. The second tool is the <a href="https://stedolan.github.io/jq/">jq</a> utitility, used to parse JSON files. The last command in this phase validates the HashiCorp Packer template to ensure there are no syntax errors.</p> 
+<p>In the build phase, the build file configures the build container’s AWS credentials using the metadata URL. This metadata will provide the AWS credentials provided by the IAM role assigned to the AWS CodeBuild project earlier to HashiCorp Packer so that it can create EC2 resources on your behalf. As a final step the HashiCorp Packer template is executed, resulting in the building of an EC2 AMI.</p> 
+<b>Execute the AWS CodeBuild Project</b> 
+<p>Commit the new files to your repository and push them to AWS CodeCommit. You are now ready to have AWS CodeBuild create the AMI.</p> 
+<ol> 
+<li>From the AWS Management Console, navigate to the AWS CodeBuild console.</li> 
+<li>In the list of build projects, choose the project you created, and then choose <strong>Start build</strong>.</li> 
+<li>In <strong>Start new build</strong>, choose which branch and revision of your AWS CodeCommit repository should be used to build your AMI.</li> 
+<li>From the <strong>Branch</strong> drop-down list, choose <strong>master</strong>. This should populate the <strong>Source version</strong> field with the latest commit you pushed to the repository.</li> 
+<li>Choose <strong>Start build</strong>. AWS CodeBuild will execute the buildspec.yml file in your repository.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/24/build_start.png" /></p> 
+<p>You will be taken to a page that provides status and results for each phase of the build. <strong>Succeeded</strong> should be displayed for every stage. If an error occurred, you can review the build logs at the bottom of the page for any error messages.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/24/build_status.png" /></p> 
+<p>During the build, HashiCorp Packer will generate a temporary key pair, launch an EC2 instance, remotely connect to the instance using the generated key pair, and then provision the machine, before converting the instance to an AMI and tearing down everything that was created to build the AMI. After these steps are complete, the build log should contain output that shows an AMI with an ID of something like <strong>ami-1a2b3cde</strong> was created.</p> 
+<p>This AMI can now be used to create EC2 instances on demand or as part of an Auto Scaling group to elastically scale your infrastructure.</p> 
+<b>Next Steps</b> 
+<p>We hope you found the information in this first post helpful and will use it as a starting point for your own infrastructure as code pipeline. In this post, we created a portion of your infrastructure as code in the form of a HashiCorp Packer template. We used AWS CodeBuild to create an AMI based on the template. Your next steps could include:</p> 
+<li>Building more than one HashiCorp Packer template. Multiple HashiCorp Packer templates can be used to build custom AMIs based on different source AMIs, perhaps one for Ubuntu and another for Microsoft Windows.</li> 
+<li>Adding AWS CodePipeline to monitor your AWS CodeCommit repository. When a new version is committed, AWS CodePipeline will call AWS CodeBuild and re-create your AMIs automatically.</li> 
+<li>Using CloudWatch Events to implement automated compliance. You can use an <a href="https://aws.amazon.com/lambda/?sc_channel=PS&amp;sc_campaign=acquisition_US&amp;sc_publisher=google&amp;sc_medium=lambda_b&amp;sc_content=lambda_e&amp;sc_detail=aws%20lambda&amp;sc_category=lambda&amp;sc_segment=186623768554&amp;sc_matchtype=e&amp;sc_country=US&amp;s_kwcid=AL!4422!3!186623768554!e!!g!!aws%20lambda&amp;ef_id=WFGCgwAABYUoeNPB:20170501191444:s">AWS Lambda</a> function to verify that all EC2 instances launched in your account are using one of your preconfigured custom AMIs.</li> 
+<p>For next steps and taking advantage of other more advanced features and services please see <a href="https://aws.amazon.com/blogs/devops/how-to-create-an-ami-builder-with-aws-codebuild-and-hashicorp-packer-part-2/" title="How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer – Part 2" target="null">part 2</a> in this two-part series. The post uses AWS services such as AWS CodePipeline, AWS CloudFormation, and Amazon Cloudwatch Events to continuously release new AMIs from end to end.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Building a Secure Cross-Account Continuous Delivery Pipeline</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -864,226 +1263,6 @@ git push <span style="color: #c24040"><em>sync</em></span> --mirror
 <p>Your AWS CodeCommit replica repository will now be automatically updated with any changes to your source repository as scheduled.</p> 
 <p>We hope you’ve enjoyed this blog post. If you have questions or suggestions for future blog post, please leave it in the comments below or visit our <a href="https://forums.aws.amazon.com/forum.jspa?forumID=189&amp;start=0">user forum</a>!</p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Extending AWS CodeBuild with Custom Build Environments</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">John Pignata</span></span> | on 
-<time property="datePublished" datetime="2017-02-17T13:40:26+00:00">17 FEB 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/extending-aws-codebuild-with-custom-build-environments/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-591" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=591&amp;disqus_title=Extending+AWS+CodeBuild+with+Custom+Build+Environments&amp;disqus_url=https://aws.amazon.com/blogs/devops/extending-aws-codebuild-with-custom-build-environments/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-591');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/codebuild/" target="_blank">AWS CodeBuild</a> is a fully managed build service that compiles source code, runs tests, and produces software packages that are ready to deploy. CodeBuild provides curated build environments for programming languages and runtimes such as Java, Ruby, Python, Go, Node.js, Android, and Docker. It can be extended through the use of custom build environments to support many more.</p> 
-<p>Build environments are Docker images that include a complete file system with everything required to build and test your project. To use a custom build environment in a CodeBuild project, you build a container image for your platform that contains your build tools, push it to a Docker container registry such as <a href="https://aws.amazon.com/ecr/" target="_blank">Amazon EC2 Container Registry (ECR)</a>, and reference it in the project configuration. When building your application, CodeBuild will retrieve the Docker image from the container registry specified in the project configuration and use the environment to compile your source code, run your tests, and package your application.</p> 
-<p>In this post, we’ll create a build environment for <a href="http://www.php.net/" target="_blank">PHP</a> applications and walk through the steps to configure CodeBuild to use this environment.</p> 
-<p><span id="more-591"></span></p> 
-<h3>Requirements</h3> 
-<p>In order to follow this tutorial and build the Docker container image, you need to have the <a href="https://www.docker.com/products/overview#/install_the_platform" target="_blank">Docker platform</a>, the <a href="http://aws.amazon.com/cli" target="_blank">AWS Command Line Interface</a>, and <a href="https://git-scm.com/downloads" target="_blank">Git</a> installed.</p> 
-<h3>Create the demo resources</h3> 
-<p>To begin, we’ll clone <a href="https://github.com/awslabs/codebuild-images" target="_blank">codebuild-images</a> from GitHub. It contains an <a href="https://aws.amazon.com/cloudformation/" target="_blank">AWS CloudFormation</a> template that we’ll use to create resources for our demo: a source code repository in <a href="https://aws.amazon.com/codecommit/" target="_blank">AWS CodeCommit</a> and a Docker image repository in Amazon ECR. The repository also includes PHP sample code and tests that we’ll use to demonstrate our custom build environment.</p> 
-<ol> 
-<li>Clone the Git repository: 
-<code class="lang-bash">git clone https://github.com/awslabs/codebuild-images.git
-cd codebuild-images</code> 
-<li>Create the CloudFormation stack using the template.yml file. You can use<a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stack.html" target="_blank"> the CloudFormation console to create the stack</a>&nbsp;or you can use the <a href="https://aws.amazon.com/cli/" target="_blank">AWS Command Line Interface</a>: 
-<code class="lang-bash">aws cloudformation create-stack \
---stack-name codebuild-php \
---parameters ParameterKey=EnvName,ParameterValue=php \
---template-body file://template.yml &gt; /dev/null &amp;&amp; \
-aws cloudformation wait stack-create-complete \
---stack-name codebuild-php &amp;&amp; \
-aws cloudformation describe-stacks \
---stack-name codebuild-php \
---output table \
---query Stacks[0].Outputs</code> 
-</ol> 
-<p>After the stack has been created, CloudFormation will return two outputs:</p> 
-<li><strong>BuildImageRepositoryUri</strong>: the URI of the Docker repository that will host our build environment image.</li> 
-<li><strong>SourceCodeRepositoryCloneUrl</strong>: the clone URL of the Git repository that will host our sample PHP code.</li> 
-<h3>Build and push the Docker image</h3> 
-<p>Docker images are specified using a <a href="https://docs.docker.com/engine/reference/builder/" target="_blank">Dockerfile</a>, which contains the instructions for assembling the image. The Dockerfile included in the PHP build environment contains these instructions:</p> 
-<code class="lang-docker">FROM php:7
-ARG composer_checksum=55d6ead61b29c7bdee5cccfb50076874187bd9f21f65d8991d46ec5cc90518f447387fb9f76ebae1fbbacf329e583e30
-ARG composer_url=https://raw.githubusercontent.com/composer/getcomposer.org/ba0141a67b9bd1733409b71c28973f7901db201d/web/installer
-ENV COMPOSER_ALLOW_SUPERUSER=1
-ENV PATH=$PATH:vendor/bin
-RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends \
-curl \
-git \
-python-dev \
-python-pip \
-zlib1g-dev \
-&amp;&amp; pip install awscli \
-&amp;&amp; docker-php-ext-install zip \
-&amp;&amp; curl -o installer &quot;$composer_url&quot; \
-&amp;&amp; echo &quot;$composer_checksum *installer&quot; | shasum –c –a 384 \
-&amp;&amp; php installer --install-dir=/usr/local/bin --filename=composer \
-&amp;&amp; rm -rf /var/lib/apt/lists/*
-</code> 
-<p>This Dockerfile inherits all of the instructions from the <a href="https://hub.docker.com/_/php/" target="_blank">official PHP Docker image</a>, which installs the PHP runtime. On top of that base image, the build process will install Python, Git, the AWS CLI, and <a href="https://getcomposer.org/" target="_blank">Composer</a>, a dependency management tool for PHP. We’ve installed the AWS CLI and Git as tools we can use during builds. For example, using the AWS CLI, we could trigger a notification from <a href="https://aws.amazon.com/sns/" target="_blank">Amazon Simple Notification Service (SNS)</a> when a build is complete or we could use Git to create a new tag to mark a successful build. Finally, the build process cleans up files created by the packaging tools, as recommended in <a href="https://docs.docker.com/engine/userguide/eng-image/dockerfile_best-practices/" target="_blank">Best practices for writing Dockerfiles</a>.</p> 
-<p>Next, we’ll build and push the custom build environment.</p> 
-<ol> 
-<li>Provide&nbsp;authentication details for our registry to the local Docker engine by executing the output of the <a href="http://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_AWSCLI.html#AWSCLI_get-login" target="_blank">login helper</a> provided by the AWS CLI: 
-<code class="lang-bash">aws ecr get-login
-</code> 
-<li>Build and push the Docker image. We’ll use the repository URI returned in the CloudFormation stack output (<em>BuildImageRepositoryUri</em>) as the image tag: 
-<code class="lang-bash">cd php
-docker build -t [BuildImageRepositoryUri] .
-docker push [BuildImageRepositoryUri]</code> 
-</ol> 
-<p>After running these commands, your Docker image is pushed into Amazon ECR and ready to build your project.</p> 
-<h3>Configure the Git repository</h3> 
-<p>The repository we cloned includes a small PHP sample that we can use to test our PHP build environment. The <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/RomanNumerals.php" target="_blank">sample function</a> converts Roman numerals to Arabic numerals. The repository also includes a <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/tests/RomanNumeralsTest.php" target="_blank">sample test</a> to exercise this function. The sample also includes a YAML file called a <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html" target="_blank">build spec</a> that contains commands and related settings that CodeBuild uses to run a build:</p> 
-<code class="lang-yaml">version: 0.1
-phases:
-&nbsp; pre_build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - composer install
-&nbsp; build:
-&nbsp; &nbsp; commands:
-&nbsp; &nbsp; &nbsp; - phpunit tests</code> 
-<p>This build spec configures CodeBuild to run two commands during the build:</p> 
-<li><code class="lang-yaml">composer install</code> to install <a href="https://github.com/awslabs/codebuild-images/blob/master/php/sample/composer.json" target="_blank">configured dependencies</a>, such as <a href="https://phpunit.de/" target="_blank">PHPUnit</a> before the build.</li> 
-<li><code class="lang-yaml">phpunit tests</code> to run the unit tests during the build.</li> 
-<p>We will push the sample application to the CodeCommit repo created by the CloudFormation stack. You’ll need to grant your IAM user the required level of access to the AWS services required for CodeCommit and you’ll need to configure your Git client with the appropriate credentials. See <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html" target="_blank">Setup for HTTPS Users Using Git Credentials</a> in the CodeCommit documentation for detailed steps.</p> 
-<p>We’re going to initialize a Git repository for our sample, configure our origin, and push the sample to the master branch in CodeCommit.</p> 
-<ol> 
-<li>Initialize a new Git repository in the sample directory: 
-<code class="lang-bash">cd sample
-git init</code> 
-<li>Add and commit the sample files to the repository: 
-<code class="lang-bash">git add .
-git commit -m &quot;Initial commit&quot;</code> 
-<li>Configure the git remote and push the sample to it. We’ll use the repository clone URL returned in the CloudFormation stack output (<em>SourceCodeRepositoryCloneUrl</em>) as the remote URL: 
-<code class="lang-bash">git remote add origin [SourceCodeRepositoryCloneUrl]
-git push origin master</code> 
-</ol> 
-<p>Now that our sample application has been pushed into source control and our build environment image has been pushed into our Docker registry, we’re ready to create a CodeBuild project and start our first build.</p> 
-<h3>Configure the CodeBuild project</h3> 
-<p>In this section, we’ll walk through the steps for configuring CodeBuild to use the custom build environment.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/02/16/build-configuration-1012x1024.png" /></p> 
-<ol> 
-<li>In the AWS Management Console, open the AWS CodeBuild console, and then choose <strong>Create project</strong>.</li> 
-<li>In <strong>Project name</strong>, type <strong>php-demo</strong>.</li> 
-<li>From <strong>Source provider</strong>, choose <strong>AWS CodeCommit</strong>. &nbsp;From <strong>Repository</strong>, choose <strong>codebuild-sample-php</strong>.</li> 
-<li>In <strong>Environment image</strong>, select <strong>Specify a Docker image</strong>. From <strong>Custom image type</strong>, choose <strong>Amazon ECR</strong>. From <strong>Amazon ECR Repository</strong>, choose <strong>codebuild/php</strong>. &nbsp;From <strong>Amazon ECR image</strong>, choose <strong>latest</strong>.</li> 
-<li>In <strong>Build specification</strong>, select <strong>Use the buildspec.yml in the source code root directory</strong>.</li> 
-<li>In <strong>Artifacts type</strong>, choose <strong>No artifacts</strong>.</li> 
-<li>Choose <strong>Continue</strong> and then choose <strong>Save and Build</strong>.</li> 
-<li>On the next page, from <strong>Branch</strong>, choose <strong>master</strong> and then choose <strong>Start build</strong>.</li> 
-</ol> 
-<p>CodeBuild will pull the build environment image from Amazon ECR and use it to test our application. CodeBuild will show us the status of each build step, the last 20 lines of log messages generated by the build process, and provide a link to <a href="https://aws.amazon.com/cloudwatch/details/" target="_blank">Amazon CloudWatch Logs</a> for more debugging output.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/02/16/build-succeeded-1024x426.png" /></p> 
-<h3>Summary</h3> 
-<p>CodeBuild supports a number of platforms and languages out of the box. By using custom build environments, it can be extended to other runtimes. In this post, we built a PHP environment and demonstrated how to use it to test PHP applications.</p> 
-<p>We’re excited to see how customers extend and use CodeBuild to enable continuous integration and continuous delivery for their applications. Please leave questions or suggestions in the comments or share what you’ve learned extending CodeBuild for your own projects.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-591');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Run Umbraco CMS with Flexible Load Balancing on AWS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ihab Shaaban</span></span> | on 
-<time property="datePublished" datetime="2017-01-06T14:26:18+00:00">06 JAN 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/run-umbraco-cms-with-flexible-load-balancing-on-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-487" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=487&amp;disqus_title=Run+Umbraco+CMS+with+Flexible+Load+Balancing+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/devops/run-umbraco-cms-with-flexible-load-balancing-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-487');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>In version 7.3, Umbraco CMS the popular open source CMS introduced the flexible load balancing feature, which makes the setup of load-balanced applications a lot easier. In this blog post, we’ll follow the guidelines in the <a title="undefined" href="https://our.umbraco.org/documentation/Getting-Started/Setup/Server-Setup/load-balancing/" target="_blank">Umbraco documentation</a> to set up a load-balanced Umbraco application on AWS. We’ll let <a title="undefined" href="https://aws.amazon.com/elasticbeanstalk/" target="_blank">AWS Elastic Beanstalk</a> manage the deployments, load balancing, auto scaling, and health monitoring for us.</p> 
-<h3>Application Architecture</h3> 
-<p>When you use the flexible load balancing feature, any updates to Umbraco content will be stored in a queue in the master database. Each server in the load-balanced environment will automatically download, process, and cache the updates from the queue, so no matter which server is selected by the <a title="undefined" href="https://aws.amazon.com/elasticloadbalancing/" target="_blank">Elastic Load Balancing</a> to handle the request, the user will always receive the same content. Umbraco administration doesn’t work correctly if accessed from a load-balanced server. For this reason, we’ll set up a non-balanced environment to be accessed only by the administrators and editors.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-01-Arch-med.png" /></p> 
-<p><span id="more-487"></span></p> 
-<h3>Create Elastic Beanstalk Environments</h3> 
-<p>We’ll start by creating a single instance environment for administrators and editors. This environment will have the master database server as an RDS instance. In the Elastic Beanstalk console, choose <strong>Create New Application</strong>. Type a name for the application, and then choose <strong>Create</strong>. When you see the message “No environments currently exist for this application”, choose <strong>Create one now</strong>. Select <strong>Web server environment</strong> for the environment tier.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-02-Create-med.png" /></p> 
-<p>On the <strong>Create a new environment page</strong>, choose <strong>.NET</strong> for Platform, and then choose <strong>Configure more options</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-03-Create-med.png" /></p> 
-<p>On the next page, under <strong>Capacity</strong>, set the <strong>Environment type</strong> to <strong>Single instance</strong>. Under <strong>Database</strong>, for <strong>Engine</strong>, choose <strong>sqlserver</strong>. Set the <strong>Storage</strong> field to, at minimum, <strong>20 GB</strong>, review the information, and then choose <strong>Create environment</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-04-Create-med.png" /></p> 
-<p>Next, we’ll create a load-balanced environment for the front-end users. Follow the steps you used to create the first Elastic Beanstalk environment. When you reach the configuration page, select <strong>High availability</strong>, and then choose <strong>Create environment</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-05-Create-med.png" /></p> 
-<h3>Configure RDS Database Server Security Groups</h3> 
-<p>When we created the RDS DB instance through the first environment, Elastic Beanstalk automatically configured the security to allow the servers in this environment to access the database. We’ll configure the security for the second environment manually. By following these steps, the front-end servers will be able to connect to the database:</p> 
-<ol> 
-<li>In the Elastic Beanstalk console, copy the name of the security group for the front-end environment. You will need this for step 7 of this procedure.</li> 
-<li>In the admin environment, choose <strong>Configuration</strong>, and then choose <strong>RDS</strong>.</li> 
-<li>Choose the<strong> View in RDS Console</strong> link.</li> 
-<li>On the <strong>Details</strong> tab in the RDS console, in the <strong>Security and Network</strong> section, choose <strong>Security Groups</strong>.</li> 
-<li>Choose the name of the active security group to open it in the EC2 console.</li> 
-<li>In the EC2 console, you should see that Elastic Beanstalk has already added a rule for the admin environment.</li> 
-<li>Choose <strong>Edit</strong>, and then choose <strong>Add Rule</strong>. For <strong>Type</strong>, choose <strong>MS SQL</strong>. For <strong>Source</strong>, paste the name of the security group for the front-end environment.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-06-Configure-med.png" /></p> 
-<h3>Handle Session State in a Load Balanced Environment</h3> 
-<p>By default, ASP.NET stores the user’s session in memory. This means the user will lose session information if the next request goes to a different server. To prevent this from happening while keeping the default session provider, <a title="undefined" href="http://docs.aws.amazon.com/ElasticLoadBalancing/latest/DeveloperGuide/elb-sticky-sessions.html" target="_blank">configure sticky sessions for your load balancer</a>.</p> 
-<p>In the Elastic Beanstalk console, navigate to the front-end environment configuration. You can use the <strong>Sessions</strong> section under the <strong>Load Balancing</strong> settings to specify whether the load balancer for the application will allow session stickiness. Select the <strong>Enable Session Stickiness</strong> check box.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-07-Configure-med.png" /></p> 
-<p>When you enable session stickiness, <a title="undefined" href="https://aws.amazon.com/elasticloadbalancing/" target="_blank">ELB</a> will send all requests for a specific user to the same back-end web server. This can result in an imbalance of requests across all back ends, with some servers having more load than others. When you scale down, the termination of an instance can result in a loss of sessions assigned to it. For this reason, consider storing the sessions in a central location like a SQL Server database and use the <a title="undefined" href="https://msdn.microsoft.com/en-us/library/aa478952.aspx" target="_blank">SqlSessionStateStore</a> provider.</p> 
-<p>AWS offers other options, for example, storing the sessions in a NoSQL database using the <a title="undefined" href="http://docs.aws.amazon.com/AWSSdkDocsNET/V3/DeveloperGuide/net-dg-dynamodb-session.html" target="_blank">DynamoDBSessionStore</a> provider or using the <a title="undefined" href="http://aws.amazon.com/elasticache/" target="_blank">Amazon ElastiCache</a> to store the sessions in the cloud as in-memory cache. For information, see the <a title="undefined" href="https://blogs.aws.amazon.com/net/post/TxMREMF0459SXT/ElastiCache-as-an-ASP-NET-Session-Store" target="_blank">ElastiCache as an ASP.NET Session Store</a> blog post.</p> 
-<h3>A One-Step Alternative: CloudFormation Template</h3> 
-<p>You can download and use this <a title="undefined" href="https://github.com/awslabs/aws-cfn-umbraco-load-balancing-template" target="_blank">CloudFormation template</a> to create resources similar to those created in the preceding steps. If you use the template, you will still have to prepare and publish your own version of Umbraco from a local machine. We’ll do that next.</p> 
-<p>The template is written to create the RDS database as a separate resource from the environments. You’ll see in the previous steps the DB is tied to the admin environment (for example, if you delete the environment, the DB will be deleted, too). This works well during development or testing, but is not ideal for production. If you should accidentally delete your database, by default, Elastic Beanstalk creates a snapshot on environment termination so it can be recovered. For information about how to decouple the DB from your environment, see <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/AWSHowTo.RDS.html" target="_blank">Using Elastic Beanstalk with Amazon RDS</a> in the Elastic Beanstalk Developer Guide.</p> 
-<h3>Prepare the Umbraco CMS Locally</h3> 
-<p>To keep things simple, we’ll download Umbraco from <a title="undefined" href="https://our.umbraco.org/download" target="_blank">our.umbraco.org/download</a>. As of this writing, the current version is v7.5.</p> 
-<p>From IIS on the local machine, add a new website with the following settings:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/30/Umbraco-08-Prepare-med.png" /></p> 
-<h3>File and Folder Permissions</h3> 
-<p>To ensure the Umbraco installation will run smoothly, grant the read and write permissions to the application pool user for Umbraco’s files and folders. In IIS, right-click the UmbracoApp website, and then click <strong>Edit Permissions</strong>. Grant modify or full-control permissions to IIS_IUSRS. For information, see <a title="undefined" href="https://our.umbraco.org/documentation/Getting-Started/Setup/Server-Setup/permissions" target="_blank">File and folder permissions</a> in the Umbraco documentation.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-09-Prepare-med.png" /></p> 
-<p>When we deploy the application to AWS, we need to update the permissions for IIS_IUSRS, too. It isn’t easy to access and grant permissions to each Windows server in the environment. If we create an .ebextension, Elastic Beanstalk can automate the permissions process. It can also allow us to run extra commands during the application deployment:</p> 
-<code class="lang-yaml">commands:
-create_default_website_folder:
-command: if not exist &quot;C:\inetpub\wwwroot&quot; mkdir &quot;C:\inetpub\wwwroot&quot;
-update_iis_user_permissions:
-command: Icacls.exe &quot;C:\inetpub\wwwroot&quot; /grant IIS_IUSRS:(OI)(CI)F
-</code> 
-<p>Here is the .ebextension saved as a .config file:</p> 
-C:\inetpub\wwwroot\UmbracoCms\App_Data\.ebextensions\update_iis_permissions.config 
-<p>Although this one is written in YAML, you can write .ebextensions in JSON, too. You can extend the .ebextension by writing a test to ensure the commands run on the first deployment only and not on redeployments. For more information, see the <a title="undefined" href="https://blogs.aws.amazon.com/net/post/Tx3N7JHP24J1EJ5/Configuring-Advanced-Logging-on-AWS-Elastic-Beanstalk" target="_blank">Configuring Advanced Logging on AWS Elastic Beanstalk</a> blog post or the <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/ebextensions.html" target="_blank">.ebextensions documentation</a>.</p> 
-<h3>Custom Machine Key</h3> 
-<p>By default, ASP.NET generates a unique machine key for each server. In a load-balanced environment, this will cause validation errors and invalid view state. To fix this issue, make sure the machine key is the same on all servers. One of the simplest ways to generate a custom key is from IIS.</p> 
-<p>In IIS, on the <strong>Machine Key</strong> page, click <strong>Generate Keys</strong>. Change the settings as follows, and click <strong>Apply</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-10-Prepare-med.png" /></p> 
-<h3>Create an Empty Database</h3> 
-<p>Before running the CMS installation, we’ll create an empty database in our RDS DB server. Open AWS Explorer in Visual Studio, right-click the DB instance we created in the first step, and then select <strong>Create SQL Server Database</strong>.</p> 
-<p>If you encounter any problems connecting to the RDS server, add the IP address of the development machine to the RDS DB security group. Make sure your Windows Firewall allows outbound access for 1433 port.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-11-Prepare-med.png" /></p> 
-<h3>Run the Umbraco CMS Installation</h3> 
-<p>In IIS, click <strong>Browse</strong>. The Umbraco installation should start. Enter the required information and use the RDS DB information to complete the fields for the database configuration step.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-12-Prepare-med.png" /></p> 
-<h3>Publish Umbraco CMS to AWS</h3> 
-<p>Finally, open the UmbracoApp folder in Visual Studio. From the <strong>File</strong> menu, click <strong>Open</strong>. Click <strong>Web site</strong>, click <strong>File system</strong>, and then navigate to C:\inetpub\wwwroot\UmbracoCms. Right-click the project, and then select <strong>Publish to AWS</strong> to deploy to the admin environment and then deploy again to the front-end environment.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2016/12/17/Umbraco-13-Deploy-med.png" /></p> 
-<p>The <a title="undefined" href="https://aws.amazon.com/ebs/" target="_blank">EBS</a> volumes attached to the instances in the environments are isolated and not shared. When compared to other load-balanced solutions that use shared storage, there is no extra work required to separate Umbraco logging file paths, change XML cache content settings, or update the configuration for Lucene/Examine indexes.</p> 
-<h3>Conclusion</h3> 
-<p>You now have an Umbraco application that is ready to scale up or down on AWS, and you can take this further using Elastic Beanstalk, there are many options to customize your environments, for example, associating a <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/customdomains.html" target="_blank">custom domain</a> name or enabling <a title="undefined" href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/configuring-https.html" target="_blank">HTTPS</a>.</p> 
-<p>We hope you found the information in this post helpful. If you have questions or other feedback, please leave it in the comments below.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-487');
-});
-</script> 
 </article> 
 <p>
 © 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.
