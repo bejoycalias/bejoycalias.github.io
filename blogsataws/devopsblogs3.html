@@ -175,11 +175,11 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
       <ul class="nav docs-sidenav">
       <li><a href="blogsataws1.html">Blogs @ AWS</a></li>
       <li><a href="whatsnew1.html">What's New @ AWS</a></li>
-      <li><a href="secblogs1.html">Security Blogs @ AWS</a></li>
-      <li><a href="computeblogs1.html">Compute Blogs @ AWS</a></li>
-      <li><a href="apnblogs1.html">APN Blogs @ AWS</a></li>
-      <li class="active"><a href="devopsblogs1.html">DevOps Blogs @ AWS</a></li>
       <li><a href="mgmtblogs1.html">Management Tools Blogs @ AWS</a></li>
+      <li><a href="computeblogs1.html">Compute Blogs @ AWS</a></li>
+      <li class="active"><a href="devopsblogs1.html">DevOps Blogs @ AWS</a></li>
+      <li><a href="secblogs1.html">Security Blogs @ AWS</a></li>
+      <li><a href="apnblogs1.html">APN Blogs @ AWS</a></li>
 
     </ul>
     </div>
@@ -188,6 +188,393 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p></p>
 <p><i>Contents of this page is copied directly from AWS blog sites to make it Kindle friendly. Some styles & sections from these pages are removed to render this properly in 'Article Mode' of Kindle e-Reader browser. All the contents of this page is property of AWS.</i></p>
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer – Part 2</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Heitor Lessa</span></span> | on 
+<time property="datePublished" datetime="2017-06-22T02:04:41+00:00">22 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/how-to-create-an-ami-builder-with-aws-codebuild-and-hashicorp-packer-part-2/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h5 id="written-by-aws-solutions-architects-jason-barto-and-heitor-lessa">Written by AWS Solutions Architects Jason Barto and Heitor Lessa</h5> 
+<p>&nbsp;<br /> In <a href="https://aws.amazon.com/blogs/devops/how-to-create-an-ami-builder-with-aws-codebuild-and-hashicorp-packer/">Part 1</a> of this post, we described how AWS CodeBuild, AWS CodeCommit, and HashiCorp Packer can be used to build an Amazon Machine Image (AMI) from the latest version of Amazon Linux. In this post, we show how to use AWS CodePipeline, AWS CloudFormation, and Amazon CloudWatch Events to continuously ship new AMIs. We use Ansible by Red Hat to harden the OS on the AMIs through a well-known set of security controls outlined by the Center for Internet Security in its <a href="https://benchmarks.cisecurity.org/tools2/linux/CIS_Amazon_Linux_Benchmark_v2.0.0.pdf">CIS Amazon Linux Benchmark</a>.</p> 
+<p>You’ll find the source code for this post in our <a href="https://github.com/awslabs/ami-builder-packer">GitHub repo</a>.</p> 
+<p><span id="introduction" class="anchor"></span>At the end of this post, we will have the following architecture:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/21/ami-builder-diagram.png" /></p> 
+<b id="requirements">Requirements</b> 
+<p>&nbsp;<br /> To follow along, you will need <a href="https://git-scm.com/downloads">Git</a> and a text editor. Make sure Git is configured to work with AWS CodeCommit, as described in <a href="https://aws.amazon.com/blogs/devops/how-to-build-an-ami-builder-with-codebuild-and-packer">Part 1</a>.</p> 
+<b id="technologies">Technologies</b> 
+<p>&nbsp;<br /> In addition to the services and products used in Part 1 of this post, we also use these AWS services and third-party software:</p> 
+<p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> gives developers and systems administrators an easy way to create and manage a collection of related AWS resources, provisioning and updating them in an orderly and predictable fashion.</p> 
+<p><a href="https://aws.amazon.com/cloudwatch/">Amazon CloudWatch Events</a> enables you to react selectively to events in the cloud and in your applications. Specifically, you can create CloudWatch Events rules that match event patterns, and take actions in response to those patterns.</p> 
+<p><a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> is a continuous integration and continuous delivery service for fast and reliable application and infrastructure updates. AWS CodePipeline builds, tests, and deploys your code every time there is a code change, based on release process models you define.</p> 
+<p><a href="https://aws.amazon.com/sns">Amazon SNS</a> is a fast, flexible, fully managed push notification service that lets you send individual messages or to fan out messages to large numbers of recipients. Amazon SNS makes it simple and cost-effective to send push notifications to mobile device users or email recipients. The service can even send messages to other distributed services.</p> 
+<p><a href="https://www.ansible.com">Ansible</a> is a simple IT automation system that handles configuration management, application deployment, cloud provisioning, ad-hoc task-execution, and multinode orchestration.</p> 
+<b id="getting-started">Getting Started</b> 
+<p>&nbsp;<br /> We use CloudFormation to bootstrap the following infrastructure:</p> 
+<table cellpadding="10"> 
+<thead> 
+<tr class="header"> 
+<th>Component</th> 
+<th>Purpose</th> 
+</tr> 
+</thead> 
+<tbody> 
+<tr class="odd"> 
+<td><strong>AWS CodeCommit repository</strong></td> 
+<td>Git repository where the AMI builder code is stored.</td> 
+</tr> 
+<tr class="even"> 
+<td><strong>S3 bucket</strong></td> 
+<td>Build artifact repository used by AWS CodePipeline and AWS CodeBuild.</td> 
+</tr> 
+<tr class="odd"> 
+<td><strong>AWS CodeBuild project</strong></td> 
+<td>Executes the AWS CodeBuild instructions contained in the build specification file.</td> 
+</tr> 
+<tr class="even"> 
+<td><strong>AWS CodePipeline pipeline</strong></td> 
+<td>Orchestrates the AMI build process, triggered by new changes in the AWS CodeCommit repository.</td> 
+</tr> 
+<tr class="odd"> 
+<td><strong>SNS topic</strong></td> 
+<td>Notifies subscribed email addresses when an AMI build is complete.</td> 
+</tr> 
+<tr class="even"> 
+<td><strong>CloudWatch Events rule</strong></td> 
+<td>Defines how the AMI builder should send a custom event to notify an SNS topic.</td> 
+</tr> 
+</tbody> 
+</table> 
+<table cellpadding="10"> 
+<thead> 
+<tr class="header"> 
+<th>Region</th> 
+<th>AMI Builder Launch Template</th> 
+</tr> 
+</thead> 
+<tbody> 
+<tr class="odd"> 
+<td><strong>N. Virginia</strong> (us-east-1)</td> 
+<td><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=AMI-Builder-Blogpost&amp;templateURL=https://s3-eu-west-1.amazonaws.com/ami-builder-packer/cloudformation/pipeline.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/21/deploy-to-aws.png" /></a></td> 
+</tr> 
+<tr class="even"> 
+<td><strong>Ireland</strong> (eu-west-1)</td> 
+<td><a href="https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=AMI-Builder-Blogpost&amp;templateURL=https://s3-eu-west-1.amazonaws.com/ami-builder-packer/cloudformation/pipeline.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/21/deploy-to-aws.png" /></a></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>After launching the CloudFormation template linked here, we will have a pipeline in the AWS CodePipeline console. (Failed at this stage simply means we don’t have any data in our newly created AWS CodeCommit Git repository.)</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/22/ami-builder-initial-pipeline-1.png" /></p> 
+<p>Next, we will clone the newly created AWS CodeCommit repository.</p> 
+<p>If this is your first time connecting to a AWS CodeCommit repository, please see instructions in our documentation on <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html">Setup steps for HTTPS Connections to AWS CodeCommit Repositories</a>.</p> 
+<p><strong>To clone the AWS CodeCommit repository (console)</strong></p> 
+<ol style="list-style-type: decimal"> 
+<li>From the AWS Management Console, open the AWS CloudFormation console.</li> 
+<li>Choose the <strong>AMI-Builder-Blogpost</strong> stack, and then choose <strong>Output</strong>.</li> 
+<li>Make a note of the <strong>Git repository URL</strong>.</li> 
+<li>Use&nbsp;<span style="font-family: monospace"><strong>git&nbsp;</strong></span>to clone the repository.</li> 
+</ol> 
+<blockquote> 
+<p>For example:&nbsp;<code class="lang-bash">git clone https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/AMI-Builder_repo</code></p> 
+</blockquote> 
+<p><strong>To clone the AWS CodeCommit repository (CLI)</strong></p> 
+<code class="lang-bash"># Retrieve CodeCommit repo URL
+git_repo=$(aws cloudformation describe-stacks --query 'Stacks[0].Outputs[?OutputKey==`GitRepository`].OutputValue' --output text --stack-name &quot;AMI-Builder-Blogpost&quot;)
+# Clone repository locally
+git clone ${git_repo}</code> 
+<h3 id="bootstrap-the-repo-with-the-ami-builder-structure">Bootstrap the Repo with the AMI Builder Structure</h3> 
+<p>&nbsp;<br /> Now that our infrastructure is ready, download all the files and templates required to build the AMI.</p> 
+<li>Download <a href="https://github.com/awslabs/ami-builder-packer/archive/master.zip">ami-builder-packer ZIP</a>.</li> 
+<li>Extract and copy the contents to the Git repo.</li> 
+<p>Your local Git repo should have the following structure:</p> 
+<code class="lang-bash">.
+├── ami_builder_event.json
+├── ansible
+├── buildspec.yml
+├── cloudformation
+├── packer_cis.json</code> 
+<p>Next, push these changes to AWS CodeCommit, and then let AWS CodePipeline orchestrate the creation of the AMI:</p> 
+<code class="lang-bash">git add .
+git commit -m &quot;My first AMI&quot;
+git push origin master</code> 
+<h3 id="aws-codebuild-implementation-details">AWS CodeBuild Implementation Details</h3> 
+<p>&nbsp;<br /> While we wait for the AMI to be created, let’s see what’s changed in our AWS CodeBuild <code>buildspec.yml</code> file:</p> 
+<code class="lang-yaml">...
+phases:
+...
+build:
+commands:
+...
+- ./packer build -color=false packer_cis.json | tee build.log
+post_build:
+commands:
+- egrep &quot;${AWS_REGION}\:\sami\-&quot; build.log | cut -d' ' -f2 &gt; ami_id.txt
+# Packer doesn't return non-zero status; we must do that if Packer build failed
+- test -s ami_id.txt || exit 1
+- sed -i.bak &quot;s/&lt;&lt;AMI-ID&gt;&gt;/$(cat ami_id.txt)/g&quot; ami_builder_event.json
+- aws events put-events --entries file://ami_builder_event.json
+...
+artifacts:
+files:
+- ami_builder_event.json
+- build.log
+discard-paths: yes</code> 
+<p>In the build phase, we capture Packer output into a file named build.log. In the post_build phase, we take the following actions:</p> 
+<ol style="list-style-type: decimal"> 
+<li>Look up the AMI ID created by Packer and save its findings to a temporary file (ami_id.txt).</li> 
+<li>Forcefully make AWS CodeBuild to fail if the AMI ID (ami_id.txt) is not found. This is required because Packer doesn’t fail if something goes wrong during the AMI creation process. We have to tell AWS CodeBuild to stop by informing it that an error occurred.</li> 
+<li>If an AMI ID is found, we update the ami_builder_event.json file and then notify CloudWatch Events that the AMI creation process is complete.</li> 
+<li>CloudWatch Events publishes a message to an SNS topic. Anyone subscribed to the topic will be notified in email that an AMI has been created.</li> 
+</ol> 
+<p>Lastly, the new <code>artifacts</code> phase instructs AWS CodeBuild to upload files built during the build process (<code>ami_builder_event.json</code> and <code>build.log</code>) to the S3 bucket specified in the Outputs section of the CloudFormation template. These artifacts can then be used as an input artifact in any later stage in AWS CodePipeline.</p> 
+<blockquote> 
+<p>For information about customizing the artifacts sequence of the buildspec.yml, see the <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html">Build Specification Reference for AWS CodeBuild</a>.</p> 
+</blockquote> 
+<h3 id="cloudwatch-events-implementation-details">CloudWatch Events Implementation Details</h3> 
+<p>&nbsp;<br /> CloudWatch Events allow you to extend the AMI builder to not only send email after the AMI has been created, but to hook up any of the supported targets to react to the AMI builder event. This event publication means you can decouple from Packer actions you might take after AMI completion and plug in other actions, as you see fit.</p> 
+<blockquote> 
+<p>For more information about targets in CloudWatch Events, see the <a href="http://docs.aws.amazon.com/AmazonCloudWatchEvents/latest/APIReference/API_Target.html">CloudWatch Events API Reference</a><strong>.</strong></p> 
+</blockquote> 
+<p>In this case, CloudWatch Events should receive the following event, match it with a rule we created through CloudFormation, and publish a message to SNS so that you can receive an email.</p> 
+<p><strong>Example CloudWatch custom event</strong></p> 
+<code class="lang-json">[
+{
+&quot;Source&quot;: &quot;com.ami.builder&quot;,
+&quot;DetailType&quot;: &quot;AmiBuilder&quot;,
+&quot;Detail&quot;: &quot;{ \&quot;AmiStatus\&quot;: \&quot;Created\&quot;}&quot;,
+&quot;Resources&quot;: [ &quot;ami-12cd5guf&quot; ]
+}
+]</code> 
+<p><strong>Cloudwatch Events rule</strong></p> 
+<code class="lang-json">{
+&quot;detail-type&quot;: [
+&quot;AmiBuilder&quot;
+],
+&quot;source&quot;: [
+&quot;com.ami.builder&quot;
+],
+&quot;detail&quot;: {
+&quot;AmiStatus&quot;: [
+&quot;Created&quot;
+]
+}
+}</code> 
+<p><strong>Example SNS message sent in email</strong></p> 
+<code class="lang-json">{
+&quot;version&quot;: &quot;0&quot;,
+&quot;id&quot;: &quot;f8bdede0-b9d7...&quot;,
+&quot;detail-type&quot;: &quot;AmiBuilder&quot;,
+&quot;source&quot;: &quot;com.ami.builder&quot;,
+&quot;account&quot;: &quot;&lt;&lt;aws_account_number&gt;&gt;&quot;,
+&quot;time&quot;: &quot;2017-04-28T17:56:40Z&quot;,
+&quot;region&quot;: &quot;eu-west-1&quot;,
+&quot;resources&quot;: [&quot;ami-112cd5guf &quot;],
+&quot;detail&quot;: {
+&quot;AmiStatus&quot;: &quot;Created&quot;
+}
+}</code> 
+<h3 id="packer-implementation-details">Packer Implementation Details</h3> 
+<p>&nbsp;<br /> In addition to the build specification file, there are differences between the current version of the HashiCorp Packer template (<code>packer_cis.json</code>) and the one used in Part 1.</p> 
+<p><strong>Variables</strong></p> 
+<code class="lang-json">  &quot;variables&quot;: {
+&quot;vpc&quot;: &quot;{{env `BUILD_VPC_ID`}}&quot;,
+&quot;subnet&quot;: &quot;{{env `BUILD_SUBNET_ID`}}&quot;,
+“ami_name”: “Prod-CIS-Latest-AMZN-{{isotime \”02-Jan-06 03_04_05\”}}”
+},</code> 
+<li><code>ami_name</code>: Prefixes a name used by Packer to tag resources during the <code>Builders</code> sequence.</li> 
+<li><code>vpc</code> and <code>subnet</code>: Environment variables defined by the CloudFormation stack parameters.</li> 
+<p>We no longer assume a default VPC is present and instead use the VPC and subnet specified in the CloudFormation parameters. CloudFormation configures the AWS CodeBuild project to use these values as environment variables. They are made available throughout the build process.</p> 
+<p>That allows for more flexibility should you need to change which VPC and subnet will be used by Packer to launch temporary resources.</p> 
+<p><strong>Builders</strong></p> 
+<code class="lang-json">  &quot;builders&quot;: [{
+...
+&quot;ami_name&quot;: “{{user `ami_name`| clean_ami_name}}”,
+&quot;tags&quot;: {
+&quot;Name&quot;: “{{user `ami_name`}}”,
+},
+&quot;run_tags&quot;: {
+&quot;Name&quot;: “{{user `ami_name`}}&quot;,
+},
+&quot;run_volume_tags&quot;: {
+&quot;Name&quot;: “{{user `ami_name`}}&quot;,
+},
+&quot;snapshot_tags&quot;: {
+&quot;Name&quot;: “{{user `ami_name`}}&quot;,
+},
+...
+&quot;vpc_id&quot;: &quot;{{user `vpc` }}&quot;,
+&quot;subnet_id&quot;: &quot;{{user `subnet` }}&quot;
+}],</code> 
+<p>We now have new properties (<code>*_tag</code>) and a new function (<code>clean_ami_name</code>) and launch temporary resources in a <code>VPC</code> and <code>subnet</code> specified in the environment variables. AMI names can only contain a certain set of ASCII characters. If the input in <code>project</code> deviates from the expected characters (for example, includes whitespace or slashes), Packer’s <code>clean_ami_name</code> function will fix it.</p> 
+<blockquote> 
+<p>For more information, see <a href="https://www.packer.io/docs/templates/engine.html">functions</a> on the HashiCorp Packer website.</p> 
+</blockquote> 
+<p><strong>Provisioners</strong></p> 
+<code class="lang-json">  &quot;provisioners&quot;: [
+{
+&quot;type&quot;: &quot;shell&quot;,
+&quot;inline&quot;: [
+&quot;sudo pip install ansible&quot;
+]
+}, 
+{
+&quot;type&quot;: &quot;ansible-local&quot;,
+&quot;playbook_file&quot;: &quot;ansible/playbook.yaml&quot;,
+&quot;role_paths&quot;: [
+&quot;ansible/roles/common&quot;
+],
+&quot;playbook_dir&quot;: &quot;ansible&quot;,
+&quot;galaxy_file&quot;: &quot;ansible/requirements.yaml&quot;
+},
+{
+&quot;type&quot;: &quot;shell&quot;,
+&quot;inline&quot;: [
+&quot;rm .ssh/authorized_keys ; sudo rm /root/.ssh/authorized_keys&quot;
+]
+}</code> 
+<p>We used <code>shell</code> provisioner to apply OS patches in Part 1. Now, we use <code>shell</code> to install Ansible on the target machine and <code>ansible-local</code> to import, install, and execute Ansible roles to make our target machine conform to our standards.</p> 
+<p>Packer uses <code>shell</code> to remove temporary keys before it creates an AMI from the target and temporary EC2 instance.</p> 
+<h3 id="ansible-implementation-details">Ansible Implementation Details</h3> 
+<p>&nbsp;<br /> Ansible provides OS patching through a custom <code>Common</code> role that can be easily customized for other tasks.</p> 
+<p>CIS Benchmark and Cloudwatch Logs are implemented through two Ansible third-party roles that are defined in <code>ansible/requirements.yaml</code> as seen in the Packer template.</p> 
+<p>The Ansible provisioner uses Ansible Galaxy to download these roles onto the target machine and execute them as instructed by <code>ansible/playbook.yaml</code>.</p> 
+<blockquote> 
+<p>For information about how these components are organized, see the <a href="http://docs.ansible.com/ansible/playbooks_roles.html">Playbook Roles and Include Statements</a> in the Ansible documentation.</p> 
+</blockquote> 
+<p>The following Ansible playbook (<code>ansible&lt;/playbook.yaml</code>) controls the execution order and custom properties:</p> 
+<code class="lang-yaml">---
+- hosts: localhost
+connection: local
+gather_facts: true    # gather OS info that is made available for tasks/roles
+become: yes           # majority of CIS tasks require root
+vars:
+# CIS Controls whitepaper:  http://bit.ly/2mGAmUc
+# AWS CIS Whitepaper:       http://bit.ly/2m2Ovrh
+cis_level_1_exclusions:
+# 3.4.2 and 3.4.3 effectively blocks access to all ports to the machine
+## This can break automation; ignoring it as there are stronger mechanisms than that
+- 3.4.2 
+- 3.4.3
+# CloudWatch Logs will be used instead of Rsyslog/Syslog-ng
+## Same would be true if any other software doesn't support Rsyslog/Syslog-ng mechanisms
+- 4.2.1.4
+- 4.2.2.4
+- 4.2.2.5
+# Autofs is not installed in newer versions, let's ignore
+- 1.1.19
+# Cloudwatch Logs role configuration
+logs:
+- file: /var/log/messages
+group_name: &quot;system_logs&quot;
+roles:
+- common
+- anthcourtney.cis-amazon-linux
+- dharrisio.aws-cloudwatch-logs-agent</code> 
+<p>Both third-party Ansible roles can be easily configured through variables (<code>vars</code>). We use Ansible playbook variables to exclude CIS controls that don’t apply to our case and to instruct the CloudWatch Logs agent to stream the /var/log/messages log file to CloudWatch Logs.</p> 
+<p>If you need to add more OS or application logs, you can easily duplicate the playbook and make changes. The CloudWatch Logs agent will ship configured log messages to CloudWatch Logs.</p> 
+<blockquote> 
+<p>For more information about parameters you can use to further customize third-party roles, download Ansible roles for the <a href="https://galaxy.ansible.com/dharrisio/aws-cloudwatch-logs-agent/">Cloudwatch Logs</a> Agent and <a href="https://galaxy.ansible.com/anthcourtney/cis-amazon-linux/">CIS Amazon Linux</a> from the Galaxy website.</p> 
+</blockquote> 
+<b id="commiting-changes">Committing Changes</b> 
+<p>&nbsp;<br /> Now that Ansible and CloudWatch Events are configured as a part of the build process, commiting any changes to the AWS CodeComit Git Repository will triger a new AMI build process that can be followed through the AWS CodePipeline console.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/21/ami-builder-pipeline.png" /></p> 
+<p>When the build is complete, an email will be sent to the email address you provided as a part of the CloudFormation stack deployment. The email serves as notification that an AMI has been built and is ready for use.</p> 
+<b id="summary">Summary</b> 
+<p>&nbsp;<br /> We used AWS CodeCommit, AWS CodePipeline, AWS CodeBuild, Packer, and Ansible to build a pipeline that continuously builds new, hardened CIS AMIs. We used Amazon SNS so that email addresses subscribed to a SNS topic are notified upon completion of the AMI build.</p> 
+<p>By treating our AMI creation process as code, we can iterate and track changes over time. In this way, it’s no different from a software development workflow. With that in mind, software patches, OS configuration, and logs that need to be shipped to a central location are only a git commit away.</p> 
+<b id="next-steps">Next Steps</b> 
+<p>&nbsp;<br /> Here are some ideas to extend this AMI builder:</p> 
+<li>Hook up a Lambda function in Cloudwatch Events to update EC2 Auto Scaling configuration upon completion of the AMI build.</li> 
+<li>Use AWS CodePipeline parallel steps to build multiple Packer images.</li> 
+<li>Add a commit ID as a tag for the AMI you created.</li> 
+<li>Create a scheduled Lambda function through Cloudwatch Events to clean up old AMIs based on timestamp (name or additional tag).</li> 
+<li>Implement Windows support for the AMI builder.</li> 
+<li>Create a cross-account or cross-region AMI build.</li> 
+<p>Cloudwatch Events allow the AMI builder to decouple AMI configuration and creation so that you can easily add your own logic using targets (AWS Lambda, Amazon SQS, Amazon SNS) to add events or recycle EC2 instances with the new AMI.</p> 
+<p>If you have questions or other feedback, feel free to leave it in the comments or contribute to the AMI Builder repo on GitHub.<span id="tood" class="anchor"></span></p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Building a Continuous Delivery Pipeline for AWS Service Catalog (Sync AWS Service Catalog with Version Control)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
+<time property="datePublished" datetime="2017-06-12T22:53:40+00:00">12 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/best-practices/" title="View all posts in Best practices"><span property="articleSection">Best practices</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/aws-service-catalog-sync-code/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/servicecatalog">AWS Service Catalog</a> enables organizations to create and manage catalogs of IT services that are approved for use on AWS. These IT services can include everything from virtual machine images, servers, software, and databases to complete multitier application architectures. You can use AWS Service Catalog to centrally manage commonly deployed IT services. It also helps you achieve consistent governance and meet your compliance requirements, while enabling users to quickly deploy only the approved IT services they need.</p> 
+<p>However, as the number of Service Catalog <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#w1ab1b5c17c11">portfolios</a> and <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#w1ab1b5c17c13">products</a> increases across an organization, centralized management and scaling can become a challenge. In this blog post, I walk you through a solution that simplifies management of AWS Service Catalog portfolios and related products. This solution also enables <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs_portfolios_sharing.html">portfolio sharing with other accounts</a>, <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/portfoliomgmt-tags.html">portfolio tagging</a>, and <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs_portfolios_users.html">granting access to users</a>. Finally, the solution delivers <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/productmgmt-update.html">updates to the products</a> using a continuous delivery in <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a>. This enables you to maintain them in version control, thereby adopting “Infrastructure as Code” practices.</p> 
+<b>Solution overview</b> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/architecture.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/architecture.jpeg" /></a></p> 
+<ol> 
+<li>Authors (developers, operations, architects, etc.) create the <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation templates</a> based on the needs of their organizations. These templates are the reusable artifacts. They can be shared among various teams within the organizations. You can name these templates product-A.yaml or product-B.yaml. For example, if the template creates an <a href="https://aws.amazon.com/vpc">Amazon VPC</a> that is based on organization needs, as described in the <a href="https://aws.amazon.com/quickstart/architecture/vpc/">Amazon VPC Architecture Quick Start</a>, you can save it as product-vpc.yaml.</li> 
+</ol> 
+<p>The authors also define a mapping.yaml file, which includes the list of <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs_products.html">products</a> that you want to include in the <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs_portfolios.html">portfolio</a> and related metadata. The mapping.yaml file is the core configuration component of this solution. This file defines your portfolio and its associated permissions and products. This configuration file determines how your portfolio will look in AWS Service Catalog, after the solution deploys it. A sample mapping.yaml is described <a href="https://github.com/awslabs/aws-pipeline-to-service-catalog/blob/master/portfolio-infrastructure/mapping.yaml">here</a>. Configuration properties of this mapping.yaml are explained <a href="https://github.com/awslabs/aws-pipeline-to-service-catalog/blob/master/README.md">here</a>.</p> 
+<p>&nbsp;</p> 
+<ol start="2"> 
+<li>Product template files and the mappings are committed to version control. In this example, we use <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a>. The folder structure on the file system looks like the following: 
+<li>portfolio-infrastructure (folder name)<br /> – product-a.yaml<br /> – product-b.yaml<br /> – product-c.yaml<br /> – mapping.yaml</li> 
+<li>portfolio-example (folder name)<br /> – product-c.yaml<br /> – product-d.yaml<br /> – mapping.yaml</li> 
+</ul> <p>The name of the folder must start with <strong>portfolio-</strong> because the <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> function iterates through all folders whose names start with <strong>portfolio-</strong>, and syncs them with AWS Service Catalog.</p> <p>Checking in any code in the repository triggers an AWS CodePipeline orchestration and invokes the Lambda function.</p></li> 
+<li>The Lambda function downloads the code from version control and iterates through all folders with names that start with <strong>portfolio-</strong>. The function gets a list of all existing portfolios in AWS Service Catalog. Then it checks whether the display name of the portfolio matches the “name” property in the mapping.yaml under each folder. If the name doesn’t match, a new portfolio is created. If the name matches, the description and owner fields are updated and synced with what is in the file. There must be only one mapping.yaml file in each folder with a name starting with <strong>portfolio-</strong>.</li> 
+<li>and 5. The Lambda function iterates through the list of products in the mapping.yaml file. If the name of product matches any of the products already associated with the portfolio, a new version of the product is created and is associated with the portfolio. If the name of the product doesn’t match, a new product is created. The CloudFormation template file (as specified in the template property for that product in the mapping file) is uploaded to Amazon S3 with a unique ID. A new version of the product is created and is pointed to the unique S3 path.</li> 
+</ol> 
+<b>Try it out!</b> 
+<p>Get started using this solution, which is available in this <a href="https://github.com/awslabs/aws-pipeline-to-service-catalog">AWSLabs GitHub repository</a>.</p> 
+<ol> 
+<li>Clone the repository. It contains the <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation templates</a> that we use in this walkthrough.</li> 
+</ol> 
+<code class="lang-bash">git clone https://github.com/awslabs/aws-pipeline-to-service-catalog.git
+cd aws-pipeline-to-service-catalog
+</code> 
+<ol start="2"> 
+<li>Examine mapping.yaml under the portfolio-infrastructure folder. Replace the account number with the account number with which to share the portfolio. To <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/catalogs_portfolios_sharing.html">share the portfolio</a> with multiple other accounts, you can append more account numbers to the list. These account numbers must be valid AWS accounts, and must not include the account number in which this solution is being created. Optionally, edit this file and provide the values you want for the name, description, and owner properties. You can also choose to leave these values as they are, which creates a portfolio with the name, description, and owners described in the file.</li> 
+<li>Optional – If you don’t have the <a href="https://aws.amazon.com/cli/">AWS Command Line Interface</a> (AWS CLI) installed, install it as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">here</a>. To prepare your access keys or assumed role to make calls to AWS, configure the AWS CLI as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>.</li> 
+<li>Create a pipeline. This orchestrates continuous integration with the AWS CodeCommit repository created in step 2, and continuously syncs AWS Service Catalog with the code.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --template-file pipeline-to-service-catalog.yaml \
+--stack-name service-catalog-sync-pipeline --capabilities CAPABILITY_NAMED_IAM \
+--parameter-overrides RepositoryName=blogs-pipeline-to-service-catalog
+</code> 
+<p>This creates the following resources.</p> 
+<ol> 
+<li>An AWS CodeCommit repository to push the code to. You can get the repository URL to push the code from the outputs of the stack that we just created. Connect, commit, and push code to this repository as described <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-connect.html">here</a>.</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/Screen-Shot-2017-05-14-at-7.23.58-PM.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/Screen-Shot-2017-05-14-at-7.23.58-PM.png" /></a></p> 
+<ol start="2"> 
+<li style="list-style-type: none"> 
+<ol start="2"> 
+<li>An S3 bucket, which holds the built artifacts (CloudFormation templates) and the Lambda function code.</li> 
+<li>The <a href="https://aws.amazon.com/iam/">AWS IAM </a><a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html">roles</a> and <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html">policies</a>, with least privileges for this solution to work.</li> 
+<li>An <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> project, which builds the Lambda function. This <a href="http://docs.aws.amazon.com/lambda/latest/dg/python-programming-model.html">Python-based Lambda function</a> has the logic, as explained earlier.</li> 
+<li>A pipeline with the following four stages: 
+<li><strong>Stage-1</strong>: Checks out source from the repository created in step 2</li> 
+<li><strong>Stage-2</strong>: Builds the Lambda function using AWS CodeBuild, which has the logic to sync the AWS Service Catalog products and portfolios with code.</li> 
+<li><strong>Stage-3</strong>: Deploys the Lambda function using CloudFormation.</li> 
+<li><strong>Stage-4</strong>: Invokes the Lambda function. Once this stage completes successfully, you see an AWS Service Catalog portfolio and two products created, as shown below.</li> 
+</ul> </li> 
+</ol> </li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/Screen-Shot-2017-05-07-at-4.16.27-PM.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/05/29/Screen-Shot-2017-05-07-at-4.16.27-PM.png" /></a></p> 
+<p>&nbsp;</p> 
+<b>Optional next steps!</b> 
+<p>You can deploy the Lambda function as we explained in this post to sync AWS Service Catalog products, portfolios, and permissions across multiple accounts that you own with version control. You can create a secure cross-account continuous delivery pipeline, as explained <a href="https://aws.amazon.com/blogs/devops/aws-building-a-secure-cross-account-continuous-delivery-pipeline/">here</a>. To do this:</p> 
+<ol> 
+<li>Delete all the resources created earlier.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation delete-stack -- stack-name service-catalog-sync-pipeline</code> 
+<ol start="2"> 
+<li>Follow the steps in <a href="https://aws.amazon.com/blogs/devops/aws-building-a-secure-cross-account-continuous-delivery-pipeline/">this blog post</a>. The sample Lambda function, described <a href="https://github.com/awslabs/aws-refarch-cross-account-pipeline/blob/master/README.md">here</a>, is the same as what I explained in this post.</li> 
+</ol> 
+<b>Conclusion</b> 
+<p>You can use AWS Lambda to make API calls to AWS Service Catalog to keep portfolios and products in sync with a mapping file. The code includes the CloudFormation templates and the mapping file and folder structure, which resembles the portfolios in AWS Service Catalog. When checked in to an AWS CodeCommit repository, it invokes the Lambda function, orchestrated by AWS CodePipeline.</p> 
+</article> 
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Database Continuous Integration and Automated Release Management Workflow with AWS and Datical DB</b> 
@@ -1011,261 +1398,8 @@ cd custom-lookup-lambda
 <b>Conclusion</b> 
 <p>In this blog post, we showed how to use an AWS CloudFormation custom resource backed by an AWS Lambda function to query Amazon DynamoDB to retrieve key-value data, thereby replacing the Mappings and Parameter sections of the CloudFormation template. This solution provides a more automated approach to managing template parameters and mappings. You can use the DynamoDB table to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
 </article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Implementing DevSecOps Using AWS CodePipeline</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ramesh Adabala</span></span> | on 
-<time property="datePublished" datetime="2017-03-23T10:57:15+00:00">23 MAR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/implementing-devsecops-using-aws-codepipeline/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/devops/what-is-devops/" target="_blank">DevOps </a>is a combination of cultural philosophies, practices, and tools that emphasizes collaboration and communication between software developers and IT infrastructure teams while automating an organization’s ability to deliver applications and services rapidly, frequently, and more reliably.</p> 
-<p><a href="https://aws.amazon.com/getting-started/projects/set-up-ci-cd-pipeline/" target="_blank">CI/CD</a> stands for continuous integration and continuous deployment. These concepts represent everything related to automation of application development and the deployment pipeline — from the moment a developer adds a change to a central repository until that code winds up in production.</p> 
-<p>DevSecOps covers security of and in the CI/CD pipeline, including <a href="https://d0.awsstatic.com/whitepapers/compliance/Intro_to_Security_by_Design.pdf" target="_blank">automating security operations and auditing</a>. The goals of DevSecOps are to:</p> 
-<li>Embed security knowledge into DevOps teams so that they can secure the pipelines they design and automate.</li> 
-<li>Embed application development knowledge and automated tools and processes into security teams so that they can provide security at scale in the cloud.</li> 
-<p>The <a href="https://d0.awsstatic.com/whitepapers/AWS_CAF_Security_Perspective.pdf" target="_blank">Security Cloud Adoption Framework (CAF) whitepaper</a> provides prescriptive controls to improve the security posture of your AWS accounts. These controls are in line with a DevOps blog post published last year about the <a href="https://aws.amazon.com/blogs/devops/it-governance-in-a-dynamic-devops-environment/" target="_blank">control-monitor-fix governance model</a>.</p> 
-<p>Security CAF controls are grouped into four categories:</p> 
-<li><strong>Directive</strong>: controls establish the governance, risk, and compliance models on AWS.</li> 
-<li><strong>Preventive</strong>: controls protect your workloads and mitigate threats and vulnerabilities.</li> 
-<li><strong>Detective</strong>: controls provide full visibility and transparency over the operation of your deployments in AWS.</li> 
-<li><strong>Responsive</strong>: controls drive remediation of potential deviations from your security baselines.</li> 
-<p>To embed the DevSecOps discipline in the enterprise, AWS customers are automating CAF controls using a combination of AWS and third-party solutions.</p> 
-<li>AWS solutions: <a href="http://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudwatch-alarms-for-cloudtrail.html" target="_blank">Amazon Cloudwatch Alarms</a>,&nbsp; <a href="https://aws.amazon.com/cloudtrail/" target="_blank">AWS CloudTrail</a>,&nbsp; <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html" target="_blank">Amazon CloudWatch Events</a>, <a href="https://aws.amazon.com/lambda/" target="_blank">AWS Lambda</a>, <a href="https://aws.amazon.com/config/" target="_blank">AWS Config</a></li> 
-<li>Third-party solutions: <a href="https://aws.amazon.com/marketplace/seller-profile?id=59a38c69-0c0e-490c-8427-e4c4ed1b4371" target="_blank">Dome9</a>, <a href="https://aws.amazon.com/marketplace/seller-profile?id=fad58384-1745-4c81-a502-a081c858ea67" target="_blank">Evident.IO</a></li> 
-<p>In this blog post, I will show you how to use a CI/CD pipeline to automate preventive and detective security controls. I’ll use an example that show how you can take the creation of a simple security group through the CI/CD pipeline stages and enforce security CAF controls at various stages of the deployment. I’ll use <a href="https://aws.amazon.com/codepipeline/" target="_blank">AWS CodePipeline</a> to orchestrate the steps in a continuous delivery pipeline.</p> 
-<p>These resources are being used in this example:</p> 
-<li>An <a href="https://aws.amazon.com/cloudformation/" target="_blank">AWS CloudFormation</a> template to create the demo pipeline.</li> 
-<li>A <a href="https://aws.amazon.com/lambda/" target="_blank">Lambda </a>function to perform the static code analysis of the CloudFormation template.</li> 
-<li>A <a href="https://aws.amazon.com/lambda/" target="_blank">Lambda </a>function to perform dynamic stack validation for the security groups in scope.</li> 
-<li>An <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/Welcome.html" target="_blank">S3 bucket</a> as the sample code repository.</li> 
-<li>An <a href="https://aws.amazon.com/cloudformation/" target="_blank">AWS CloudFormation</a> source template file to create the <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-network-security.html" target="_blank">security groups</a>.</li> 
-<li>Two <a href="https://aws.amazon.com/vpc/" target="_blank">VPCs</a> to deploy the test and production security groups.</li> 
-<p>These are the high-level security checks enforced by the pipeline:</p> 
-<li>During the Source stage, static code analysis for any open security groups. The pipeline will fail if there are any violations.</li> 
-<li>During the Test stage, dynamic analysis to make sure port 22 (SSH) is open only to the approved IP CIDR range. The pipeline will fail if there are any violations.</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/23/demo_pipeline1.png" /></p> 
-<p>&nbsp;</p> 
-<p>These are the pipeline stages:</p> 
-<p>1. <strong>Source stage</strong>: In this example, the pipeline gets the CloudFormation code that creates the security group from S3, the code repository service.</p> 
-<p>This stage passes the CloudFormation template and pipeline name to a Lambda function, CFNValidateLambda. This function performs the static code analysis. It uses the regular expression language to find patterns and identify security group policy violations. If it finds violations, then Lambda fails the pipeline and includes the violation details.</p> 
-<p>Here is the regular expression that Lambda function using for static code analysis of the open SSH port:</p> 
-<code class="lang-json">&quot;^.*Ingress.*(([fF]rom[pP]ort|[tT]o[pP]ort).\s*:\s*u?.(22).*[cC]idr[iI]p.\s*:\s*u?.((0\.){3}0\/0)|[cC]idr[iI]p.\s*:\s*u?.((0\.){3}0\/0).*([fF]rom[pP]ort|[tT]o[pP]ort).\s*:\s*u?.(22))&quot;</code> 
-<p>2. <strong>Test stage</strong>: After the static code analysis is completed successfully, the pipeline executes the following steps:</p> 
-<p>a. <strong>Create stack</strong>: This step creates the stack in the test VPC, as described in the test configuration.</p> 
-<p>b. <strong>Stack validation</strong>: This step triggers the StackValidationLambda Lambda function. It passes the stack name and pipeline name in the event parameters. Lambda validates the security group for the following security controls. If it finds violations, then Lambda deletes the stack, stops the pipeline, and returns an error message.</p> 
-<p>The following is the sample Python code used by AWS Lambda to check if the SSH port is open to the approved IP CIDR range (in this example, 72.21.196.67/32):</p> 
-<code class="lang-python">for n in regions:
-client = boto3.client('ec2', region_name=n)
-response = client.describe_security_groups(
-Filters=[{'Name': 'tag:aws:cloudformation:stack-name', 'Values': [stackName]}])
-for m in response['SecurityGroups']:
-if &quot;72.21.196.67/32&quot; not in str(m['IpPermissions']):
-for o in m['IpPermissions']:
-try:
-if int(o['FromPort']) &lt;= 22 &lt;= int(o['ToPort']):
-result = False
-failReason = &quot;Found Security Group with port 22 open to the wrong source IP range&quot;
-offenders.append(str(m['GroupId']))
-except:
-if str(o['IpProtocol']) == &quot;-1&quot;:
-result = False
-failReason = &quot;Found Security Group with port 22 open to the wrong source IP range&quot;
-offenders.append(str(n) + &quot; : &quot; + str(m['GroupId']))
-</code> 
-<p>c. <strong>Approve test stack</strong>: This step creates a manual approval task for stack review. This step could be eliminated for automated deployments.</p> 
-<p>d. <strong>Delete test stack</strong>: After all the stack validations are successfully completed, this step deletes the stack in the test environment to avoid unnecessary costs.</p> 
-<p>3. <strong>Production stage</strong>: After the static and dynamic security checks are completed successfully, this stage creates the stack in the production VPC using the production configuration supplied in the template.</p> 
-<p>a. <strong>Create change set</strong>: This step creates the change set for the resources in the scope.</p> 
-<p>b. <strong>Execute change set</strong>: This step executes the change set and creates/updates the security group in the production VPC.</p> 
-<p><strong>&nbsp;</strong></p> 
-<h3>Source code and CloudFormation template</h3> 
-<p>You’ll find the source code at <a href="https://github.com/awslabs/automating-governance-sample/tree/master/DevSecOps-Blog-Code">https://github.com/awslabs/automating-governance-sample/tree/master/DevSecOps-Blog-Code</a></p> 
-<p><a href="https://github.com/awslabs/automating-governance-sample/blob/master/DevSecOps-Blog-Code/basic-sg-3-cfn.json">basic-sg-3-cfn.json</a> creates the pipeline in AWS CodePipeline with all the stages previously described. It also creates the static code analysis and stack validation Lambda functions.</p> 
-<p>The CloudFormation template points to a shared S3 bucket. The codepipeline-lambda.zip file contains the Lambda functions. Before you run the template, upload the zip file to your S3 bucket and then update the CloudFormation template to point to your S3 bucket location.</p> 
-<p>The CloudFormation template uses the codepipe-single-sg.zip file, which contains the sample security group and test and production configurations. Update these configurations with your VPC details, and then upload the modified zip file to your S3 bucket.</p> 
-<p>Update these parts of the code to point to your S3 bucket:</p> 
-<code class="lang-json"> &quot;S3Bucket&quot;: {
-&quot;Default&quot;: &quot;codepipeline-devsecops-demo&quot;,
-&quot;Description&quot;: &quot;The name of the S3 bucket that contains the source artifact, which must be in the same region as this stack&quot;,
-&quot;Type&quot;: &quot;String&quot;
-},
-&quot;SourceS3Key&quot;: {
-&quot;Default&quot;: &quot;codepipe-single-sg.zip&quot;,
-&quot;Description&quot;: &quot;The file name of the source artifact, such as myfolder/myartifact.zip&quot;,
-&quot;Type&quot;: &quot;String&quot;
-},
-&quot;LambdaS3Key&quot;: {
-&quot;Default&quot;: &quot;codepipeline-lambda.zip&quot;,
-&quot;Description&quot;: &quot;The file name of the source artifact of the Lambda code, such as myfolder/myartifact.zip&quot;,
-&quot;Type&quot;: &quot;String&quot;
-},
-&quot;OutputS3Bucket&quot;: {
-&quot;Default&quot;: &quot;codepipeline-devsecops-demo&quot;,
-&quot;Description&quot;: &quot;The name of the output S3 bucket that contains the processed artifact, which must be in the same region as this stack&quot;,
-&quot;Type&quot;: &quot;String&quot;
-},</code> 
-<p>After the stack is created, AWS CodePipeline executes the pipeline and starts deploying the sample CloudFormation template. In the default template, security groups have wide-open ports (0.0.0.0/0), so the pipeline execution will fail. Update the CloudFormation template in codepipe-single-sg.zip with more restrictive ports and then upload the modified zip file to S3 bucket. Open the AWS CodePipeline console, and choose the <strong>Release Change</strong> button. This time the pipeline will successfully create the security groups.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/23/demo_pipeline2.png" /></p> 
-<p>You could expand the security checks in the pipeline to include other AWS resources, not just security groups. The following table shows the sample controls you could enforce in the pipeline using the static and dynamic analysis Lambda functions.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/23/demo_pipeline3.png">Developer Tools forum</a>.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Replicating and Automating Sync-Ups for a Repository with AWS CodeCommit</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Cherry Zhou</span></span> | on 
-<time property="datePublished" datetime="2017-03-13T17:01:41+00:00">13 MAR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/replicating-and-automating-sync-ups-for-a-repository-with-aws-codecommit/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>by Chenwei (Cherry) Zhou, Software Development Engineer</p> 
-<hr /> 
-<p>&nbsp;</p> 
-<p>Many of our customers have expressed interest in the following scenarios:</p> 
-<li>Backing up or replicating an AWS CodeCommit repository to another AWS region.</li> 
-<li>Automatically backing up repositories currently hosted on other services (for example, GitHub or BitBucket) to AWS CodeCommit.</li> 
-<p>In this blog post, we’ll show you how to automate the replication of a source repository to a repository in AWS CodeCommit. Your source repository could be another AWS CodeCommit repository, a local repository, or a repository hosted on other Git services.</p> 
-<p>To replicate your repository, you’ll first need to set up a repository in AWS CodeCommit to use as your backup/replica repository. After replicating the contents in your source repository to the backup repository, we’ll demonstrate how you can set up a scheduled job to periodically sync up your source repository with the backup/replica.</p> 
-<p><span id="more-705"></span></p> 
-<p><strong>Where do I host this?</strong></p> 
-<p>You can host your local repository and schedule your task on your own machine or on an Amazon EC2 instance. For an example of how to set up an EC2 instance for access to an AWS CodeCommit repository, including a sample AWS CloudFormation template for launching the instance, see <a href="http://docs.aws.amazon.com/devops/latest/gsg/setup-codecommit-launch-instance.html">Launch an Amazon EC2 Instance to Access the AWS CodeCommit Repository</a> in the AWS for DevOps Guide.</p> 
-<p>&nbsp;</p> 
-<p><strong>Part 1: Set Up a Replica Repository</strong></p> 
-<p>In this section, we’ll create an AWS CodeCommit repository and replicate your source repository to it.</p> 
-<ol> 
-<li>If you haven’t already done so, <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up.html">set up for AWS CodeCommit</a>. Then follow the steps to <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-create-repository.html">create a CodeCommit repository</a> in the region of your choice. Choose a name that will help you remember that this repository is a replica or backup repository. For example, you could create a repository in the US East (Ohio) region and name it <em><code class="lang-git">MyReplicaRepo</code></em>. This is the name and region we’ll use in this post.</li> 
-<li>Use the <code class="lang-git">git clone --mirror</code> command to clone the source repository, including the directory where you want to create the local repo, to your local computer. You are not cloning the repository you just created in AWS CodeCommit. You are cloning the repository you want to replicate or back up to that AWS CodeCommit repository. For example, to clone a sample application created for AWS demonstration purposes and hosted on GitHub <em>(https://github.com/awslabs/aws-demo-php-simple-app.git)</em> to a local repo in a directory named <em><code class="lang-git">my-repo-replica</code></em>:</li> 
-</ol> 
-git clone --mirror https://github.com/awslabs/aws-demo-php-simple-app.git <span style="color: #c24040"><em>my-repo-replica</em></span> 
-<p><strong>IMPORTANT</strong></p> 
-<li>DO NOT use your working directory as the local clone repository. Your work-in-progress commits would also be pushed for backup.</li> 
-<li>DO NOT make local changes to this local repository. It should be used for sync-up operations only.</li> 
-<li>DO NOT manually push any changes to this replica repository. It will cause conflicts later when your scheduled job pushes changes in the source repository. Treat it as a read-only repository, and push all of your development changes to your source repository.</li> 
-<ol start="3"> 
-<li>Change directories to the directory where you made the clone:</li> 
-</ol> 
-cd <span style="color: #c24040"><em>my-repo-replica</em></span> 
-<ol start="4"> 
-<li>Use the&nbsp;<strong><code class="lang-git">git remote add</code> </strong><em><code class="lang-git">RemoteName RemoteRepositoryURL</code></em> command to add the AWS CodeCommit repository you created as a remote repository for the local repo. Use an appropriate nickname, such as <em><code class="lang-git">sync</code></em>. (Because this is a mirror, the default nickname, <strong>origin</strong>, will already be in use.) For example, to add your AWS CodeCommit repository&nbsp;<em><code class="lang-git">MyReplicaRepo</code></em> as a remote for&nbsp;<em><code class="lang-git">my-repo-replica</code></em> with the nickname <em>sync</em>:</li> 
-</ol> 
-git remote add <span style="color: #c24040"><em>sync</em></span> ssh://git-codecommit.us-east-2.amazonaws.com/v1/repos/<span style="color: #c24040"><em>MyReplicaRepo</em></span> 
-<p style="padding-left: 30px">When you push large repositories, consider using SSH instead of HTTPS. When you push a large change, a large number of changes, or a large repository, long-running HTTPS connections are often terminated prematurely due to networking issues or firewall settings. For more information about setting up AWS CodeCommit for SSH, see <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-ssh-unixes.html">For SSH Connections on Linux, macOS, or Unix</a> or <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-ssh-windows.html">For SSH Connections on Windows</a>.</p> 
-<p style="padding-left: 30px"><strong>Tip</strong></p> 
-<p style="padding-left: 30px">Use the git remote show command to review the list of remotes set for your local repo.</p> 
-<ol start="5"> 
-<li>Run the <code class="lang-git">git push</code> <em><code class="lang-git">sync</code></em> <code class="lang-git">--mirror</code> command to push to your replica repository.</li> 
-</ol> 
-<li>If you named your remote for the replica repository something else, replace&nbsp;<em><code class="lang-git">sync</code></em> with your remote name.</li> 
-<li>The&nbsp;<code class="lang-git">--mirror</code> option specifies that all refs under <strong>refs/</strong> (which includes, but is not limited to, <strong>refs/heads/</strong>, <strong>refs/remotes/</strong>, and <strong>refs/tags/</strong>) will be mirrored to the remote repository. If you only want to push branches and commits, but don’t care if you push other references such as tags, you can use the <code class="lang-git">--all</code> option instead.</li> 
-<p>&nbsp;</p> 
-<p>Your replica repository is now ready for sync-up operations. To do a manual sync, run <code class="lang-git">git pull</code> to pull from your original repository, and then run <code class="lang-git">git push</code>&nbsp;<em><code class="lang-git">sync</code></em> <code class="lang-git">--mirror</code> to push to the replica repository. Again, do not push any local changes to your replica repository at any time.</p> 
-<p>&nbsp;</p> 
-<p><strong>Part 2: Create a Periodic Sync Job</strong></p> 
-<p>You can use a number of tools to set up an automated sync job. In this section, we’ll briefly cover four common tools: a cron job (Linux), a task in Windows Task Scheduler (Windows), a launchd instance (macOS), and, for those users who already have a Jenkins server set up, a Freestyle project with build triggers. Feel free to use whatever tools are best for you.</p> 
-<p><strong>Note</strong></p> 
-<p>Some hosted repositories offer options for syncing repositories, such as Git hooks, notifications, and other triggers. To learn more about those options, consult the documentation for your source repository system.</p> 
-<p>&nbsp;</p> 
-<p>All of the following approaches rely on commands that pull the latest changes from the source repository to your local clone repo, and then mirror those changes to your AWS CodeCommit repository. They can be summed up as follows:</p> 
-cd <span style="color: #c24040"><em>/path/to/your/local/repo </em></span>git pull
-git push <span style="color: #c24040"><em>sync</em></span> --mirror 
-<p>Where and how you save and schedule these commands depends on your operating system and tool(s). We’ve included just a few options/examples from a variety of approaches.</p> 
-<p>&nbsp;</p> 
-<p><strong>In Linux:</strong></p> 
-<ol> 
-<li>At the terminal, run the crontab -e command to edit your crontab file in your default editor.</li> 
-<li>Add a line for a new cron job that will change directories to your local clone repo, pull from your source repository, and mirror any changes to your AWS CodeCommit repository on the schedule you specify. For example, to run a daily job at 2:45 A.M. for a local repo named&nbsp;<em><code class="lang-git">my-repo-replica</code></em> in the ~/tmp directory where you nicknamed your remote (the AWS CodeCommit repository) <em><code class="lang-ggit">sync</code></em>, your new line might look like this:</li> 
-</ol> 
-45 2 * * * cd <em>~</em>/tmp/<span style="color: #c24040"><em>my-repo-replica</em></span> &amp;&amp; git pull &amp;&amp; git push <span style="color: #c24040"><em>sync</em></span> --mirror 
-<ol start="3"> 
-<li>Save the crontab file and exit your editor.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<p><strong>In Windows:</strong></p> 
-<ol> 
-<li>Create a batch file that contains the command to change directories to your local clone repo, pull from your source repository, and mirror any changes up to your AWS CodeCommit repository. For example, if you created your local repo&nbsp;<em><code class="lang-git">my-repo-replica</code></em> in a c:\temp directory, and you nicknamed your remote (the AWS CodeCommit repository) <em><code class="lang-ggit">sync</code></em>, your file might look like this:</li> 
-</ol> 
-cd /d c:\temp\<em><span style="color: #c24040">my-repo-replica</span>
-</em>git pull
-git push <span style="color: #c24040"><em>sync</em></span> --mirror 
-<ol start="2"> 
-<li>Save the batch file with a name like <em><code class="lang-git">my-repo-backup.bat</code></em>.</li> 
-<li>Open Task Scheduler. (Not sure how? The simplest way is to open a command line and run <strong>msc</strong>.)</li> 
-<li>In <strong>Actions</strong>, choose <strong>Create Basic Task</strong>, and then follow the steps in the wizard.</li> 
-</ol> 
-<p><strong>&nbsp;</strong></p> 
-<p><strong>In macOS:</strong></p> 
-<ol> 
-<li>Create a shell script that contains the command to change directories to your local clone repo, pull from your source repository, and mirror any changes up to your AWS CodeCommit repository. For example, if you created your local repo&nbsp;<em><code class="lang-git">my-repo-replica</code></em> in a ~/Documents directory, and you nicknamed your remote (the AWS CodeCommit repository) <em><code class="lang-ggit">sync</code></em>, your file might look like this:</li> 
-</ol> 
-cd ~/Documents/<em><span style="color: #c24040">my-repo-replica</span>
-</em>git pull
-git push <span style="color: #c24040"><em>sync</em></span> --mirror 
-<ol start="2"> 
-<li>Save the shell script with a name like <em><code class="lang-git">my-repo-backup.sh</code></em>.</li> 
-<li>Create a <strong>launchd</strong> property list file that runs the shell script on the schedule you specify. For example, if you stored&nbsp;<em><code class="lang-git">my-repo-backup.sh</code></em> in ~/Documents, to run the script daily at 2:45 A.M., your plist file might look like this:</li> 
-</ol> 
-<code class="lang-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
-&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
-&lt;plist version=&quot;1.0&quot;&gt;
-&lt;dict&gt;
-&lt;key&gt;Label&lt;/key&gt;
-&lt;string&gt;com.example.codecommit.backup&lt;/string&gt;
-&lt;key&gt;ProgramArguments&lt;/key&gt;
-&lt;array&gt;
-&lt;string&gt;~/Documents/<em>my-repo-backup.sh</em>&lt;/string&gt;
-&lt;/array&gt;
-&lt;key&gt;StartCalendarInterval&lt;/key&gt;
-&lt;dict&gt;
-&lt;key&gt;Minute&lt;/key&gt;
-&lt;integer&gt;45&lt;/integer&gt;
-&lt;key&gt;Hour&lt;/key&gt;
-&lt;integer&gt;2&lt;/integer&gt;
-&lt;/dict&gt;
-&lt;/dict&gt;
-&lt;/plist&gt;
-</code> 
-<ol start="4"> 
-<li>Save your plist file in ~/Library/LaunchAgents, /Library/LaunchAgents, or /Library/LaunchDaemons folder, depending on the definition you want for the job.</li> 
-<li>Run the <strong>launtchctl</strong> command to load your job. For example, if you want to load a plist file named&nbsp;<em><code class="lang-git">codecommit.sync.plist</code></em> in ~/Library/LaunchAgents, your command might look like this:</li> 
-</ol> 
-launchctl load ~/Library/LaunchAgents/<span style="color: #c24040"><em>codecommit.sync.plist</em></span> 
-<p>&nbsp;</p> 
-<p><strong>For Jenkins:</strong></p> 
-<ol> 
-<li>Open Jenkins.</li> 
-<li>Create a new job as a Freestyle project.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/09/New-Item.png" /></p> 
-<ol start="3"> 
-<li>In the <strong>Build Triggers</strong> section, select <strong>Build periodically</strong>, and set up a schedule for the task. Jenkins uses cron expressions to run periodic tasks. For more information, see the <a href="https://github.com/jenkinsci/jenkins/blob/master/core/src/main/resources/hudson/triggers/TimerTrigger/help-spec.html">Jenkins documentation for the syntax of cron</a>.</li> 
-</ol> 
-<p style="padding-left: 30px">If you are replicating a GitHub or BitBucket repository, you can also set the task to build when the <a href="https://developer.github.com/webhooks/">Git hook</a> is triggered.</p> 
-<p style="padding-left: 30px">The following example builds once a day between midnight and 1 A.M.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/09/Build-Triggers.png" /></p> 
-<ol start="4"> 
-<li>In the <strong>Build</strong> section, add a build step and choose <strong>Execute Windows batch command</strong> or <strong>Execute Shell</strong>. Then write a script and implement the Git operations:</li> 
-</ol> 
-cd <span style="color: #c24040"><em>/path/to/your/local/repo </em></span>git pull
-git push <span style="color: #c24040"><em>sync</em></span> --mirror 
-<p style="padding-left: 30px">Note: Jenkins may require the full path for Git.</p> 
-<p style="padding-left: 30px">The following example is a Windows batch command file, with the full path for Git on the host.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/09/Build.png" /></p> 
-<ol start="5"> 
-<li>Save the configuration for the task.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<p>Your AWS CodeCommit replica repository will now be automatically updated with any changes to your source repository as scheduled.</p> 
-<p>We hope you’ve enjoyed this blog post. If you have questions or suggestions for future blog post, please leave it in the comments below or visit our <a href="https://forums.aws.amazon.com/forum.jspa?forumID=189&amp;start=0">user forum</a>!</p> 
-<p>&nbsp;</p> 
-</article> 
 <p>
-© 2017, Amazon Web Services, Inc. or its affiliates. All rights reserved.
+© 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
 </p>
 
     </div>
