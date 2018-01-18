@@ -190,6 +190,373 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step121-1153x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Patch, Inspect, and Protect Microsoft Windows Workloads on AWS—Part 2</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Koen van Blijderveen</span></span> | on 
+<time property="datePublished" datetime="2017-11-22T07:36:58+00:00">22 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/amazon-inspector/" title="View all posts in Amazon Inspector*"><span property="articleSection">Amazon Inspector*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-6418" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=6418&amp;disqus_title=How+to+Patch%2C+Inspect%2C+and+Protect+Microsoft+Windows+Workloads+on+AWS%E2%80%94Part+2&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6418');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Yesterday in <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">Part 1 of this blog post</a>, I showed you how to:</p> 
+<ol> 
+<li><strong>Launch an </strong><a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer"><strong>Amazon EC2</strong></a><strong> instance</strong> with an <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) role, an <a href="http://aws.amazon.com/ebs/" target="_blank" rel="noopener noreferrer">Amazon Elastic Block Store</a> (Amazon EBS) volume, and tags that <a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">Amazon EC2 Systems Manager</a> (Systems Manager) and Amazon Inspector use.</li> 
+<li><strong>Configure </strong><a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer"><strong>Systems Manager</strong></a> to install the Amazon Inspector agent and patch your EC2 instances.</li> 
+</ol> 
+<p>Today in Steps 3 and 4, I show you how to:</p> 
+<ol start="3"> 
+<li><strong>Take </strong><a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSSnapshots.html" target="_blank" rel="noopener noreferrer"><strong>Amazon EBS snapshots</strong></a><strong> using </strong><a href="http://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/overview.html" target="_blank" rel="noopener noreferrer"><strong>Amazon EBS Snapshot Scheduler</strong></a> to automate snapshots based on instance tags.</li> 
+<li><strong>Use <a href="https://aws.amazon.com/inspector/" target="_blank" rel="noopener noreferrer">Amazon Inspector</a></strong> to check if your EC2 instances running Microsoft Windows contain any common vulnerabilities and exposures (CVEs).</li> 
+</ol> 
+<p>To catch up on Steps 1 and 2, see <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">yesterday’s blog post</a>.</p> 
+<b>Step 3: Take EBS snapshots using EBS Snapshot Scheduler</b> 
+<p>In this section, I show you how to use EBS Snapshot Scheduler to take snapshots of your instances at specific intervals. To do this, I will show you how to:</p> 
+<li><strong>Determine the schedule</strong> for EBS Snapshot Scheduler by providing you with best practices.</li> 
+<li><strong>Deploy EBS Snapshot Scheduler</strong> by using <a href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>.</li> 
+<li><strong>Tag your EC2 instances</strong> so that EBS Snapshot Scheduler backs up your instances when you want them backed up.</li> 
+<p>In addition to making sure your EC2 instances have all the available operating system patches applied on a regular schedule, you should take snapshots of the EBS storage volumes attached to your EC2 instances. Taking regular snapshots allows you to restore your data to a previous state quickly and cost effectively. With Amazon EBS snapshots, you pay only for the actual data you store, and snapshots save only the data that has changed since the previous snapshot, which minimizes your cost. You will use EBS Snapshot Scheduler to make regular snapshots of your EC2 instance. EBS Snapshot Scheduler takes advantage of other AWS services including CloudFormation, <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a>, and <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> to make backing up your EBS volumes simple.<span id="more-6418"></span></p> 
+<h3>Determine the schedule</h3> 
+<p>As a best practice, you should back up your data frequently during the hours when your data changes the most. This reduces the amount of data you lose if you have to restore from a snapshot. For the purposes of this blog post, the data for my instances changes the most between the business hours of 9:00 A.M. to 5:00 P.M. Pacific Time. During these hours, I will make snapshots hourly to minimize data loss.</p> 
+<p>In addition to backing up frequently, another best practice is to establish a strategy for retention. This will vary based on how you need to use the snapshots. If you have compliance requirements to be able to restore for auditing, your needs may be different than if you are able to detect data corruption within three hours and simply need to restore to something that limits data loss to five hours. EBS Snapshot Scheduler enables you to specify the retention period for your snapshots. For this post, I only need to keep snapshots for recent business days. To account for weekends, I will set my retention period to three days, which is down from the default of 15 days when deploying EBS Snapshot Scheduler.</p> 
+<h3>Deploy EBS Snapshot Scheduler</h3> 
+<p>In <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/#p1s1" target="_blank" rel="noopener noreferrer">Step 1 of Part 1</a> of this post, I showed how to configure an EC2 for Windows Server 2012 R2 instance with an EBS volume. You will use EBS Snapshot Scheduler to take eight snapshots each weekday of your EC2 instance’s EBS volumes:</p> 
+<ol> 
+<li>Navigate to the EBS Snapshot Scheduler <a href="http://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/deployment.html#step1" target="_blank" rel="noopener noreferrer">deployment page</a> and choose <strong>Launch Solution.</strong> This takes you to the <a href="https://console.aws.amazon.com/cloudformation/home" target="_blank" rel="noopener noreferrer">CloudFormation console</a> in your account. The <strong>Specify an Amazon S3 template URL </strong>option is already selected and prefilled. Choose <strong>Next</strong> on the <strong>Select Template</strong> page.</li> 
+<li>On the <strong>Specify Details</strong> page, retain all default parameters except for <strong>AutoSnapshotDeletion</strong>. Set <strong>AutoSnapshotDeletion</strong> to <strong>Yes</strong> to ensure that old snapshots are periodically deleted. The default retention period is 15 days (you will specify a shorter value on your instance in the next subsection).</li> 
+<li>Choose <strong>Next</strong> twice to move to the <strong>Review</strong> step, and start deployment by choosing the <strong>I acknowledge that AWS CloudFormation might create IAM resources</strong> check box and then choosing&nbsp;<strong>Create</strong>.</li> 
+</ol> 
+<h3>Tag your EC2 instances</h3> 
+<p>EBS Snapshot Scheduler takes a few minutes to deploy. While waiting for its deployment, you can start to tag your instance to define its schedule. EBS Snapshot Scheduler reads tag values and looks for four possible custom parameters in the following order:</p> 
+<li><code>&lt;snapshot time&gt;</code> – Time in 24-hour format with no colon.</li> 
+<li><code>&lt;retention days&gt;</code> – The number of days (a positive integer) to retain the snapshot before deletion, if set to automatically delete snapshots.</li> 
+<li><code>&lt;time zone&gt;</code> – The time zone of the times specified in <code>&lt;snapshot time&gt;</code>.</li> 
+<li><code>&lt;active day(s)&gt;</code> – <code>all</code>, <code>weekdays</code>, or <code>mon</code>, <code>tue</code>, <code>wed</code>, <code>thu</code>, <code>fri</code>, <code>sat</code>, and/or <code>sun</code>.</li> 
+<p>Because you want hourly backups on weekdays between 9:00 A.M. and 5:00 P.M. Pacific Time, you need to configure eight tags—one for each hour of the day. You will add the eight tags shown in the following table to your EC2 instance.</p> 
+<table border="1" cellspacing="0" cellpadding="5"> 
+<tbody> 
+<tr> 
+<td width="255"><strong>Tag</strong></td> 
+<td width="207"><strong>Value</strong></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:0900</code></td> 
+<td width="207"><code>0900;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1000</code></td> 
+<td width="207"><code>1000;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1100</code></td> 
+<td width="207"><code>1100;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1200</code></td> 
+<td width="207"><code>1200;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1300</code></td> 
+<td width="207"><code>1300;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1400</code></td> 
+<td width="207"><code>1400;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1500</code></td> 
+<td width="207"><code>1500;3;utc;weekdays</code></td> 
+</tr> 
+<tr> 
+<td width="255"><code>scheduler:ebs-snapshot:1600</code></td> 
+<td width="207"><code>1600;3;utc;weekdays</code></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>Next, you will add these tags to your instance. If you want to tag multiple instances at once, you can use <a href="http://docs.aws.amazon.com/awsconsolehelpdocs/latest/gsg/tag-editor.html" target="_blank" rel="noopener noreferrer">Tag Editor</a> instead. To add the tags in the preceding table to your EC2 instance:</p> 
+<ol> 
+<li>Navigate to your EC2 instance in the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a> and choose <strong>Tags</strong> in the navigation pane.</li> 
+<li>Choose <strong>Add/Edit Tags </strong>and then choose <strong>Create Tag </strong>to add all the tags specified in the preceding table.</li> 
+<li>Confirm you have added the tags by choosing <strong>Save</strong>. After adding these tags, navigate to your EC2 instance in the EC2 console. Your EC2 instance should look similar to the following screenshot.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step3-ebssnap-step1.png" /></li> 
+<li>After waiting a couple of hours, you can see snapshots beginning to populate on the <strong>Snapshots</strong> page of the EC2 console.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step3-ebssnap-step2.png" /></li> 
+<li>To check if EBS Snapshot Scheduler is active, you can check the CloudWatch rule that runs the Lambda function. If the clock icon shown in the following screenshot is green, the scheduler is active. If the clock icon is gray, the rule is disabled and does not run. You can enable or disable the rule by selecting it, choosing <strong>Actions</strong>, and choosing <strong>Enable</strong> or <strong>Disable</strong>. This also allows you to temporarily disable EBS Snapshot Scheduler.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step3-ebssnap-step3.png" /></li> 
+</ol> 
+<ol start="6"> 
+<li>You can also monitor when EBS Snapshot Scheduler has run by choosing the name of the CloudWatch rule as shown in the previous screenshot and choosing <strong>Show metrics for the rule</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step3-ebssnap-step4.png" /></li> 
+</ol> 
+<p>If you want to restore and attach an EBS volume, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-restoring-volume.html" target="_blank" rel="noopener noreferrer">Restoring an Amazon EBS Volume from a Snapshot</a> and <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-attaching-volume.html" target="_blank" rel="noopener noreferrer">Attaching an Amazon EBS Volume to an Instance</a>.</p> 
+<b>Step 4: Use Amazon Inspector</b> 
+<p>In this section, I show you how to you use Amazon Inspector to scan your EC2 instance for common vulnerabilities and exposures (CVEs) and set up <a href="https://aws.amazon.com/sns/" target="_blank" rel="noopener noreferrer">Amazon SNS</a> notifications. To do this I will show you how to:</p> 
+<li><strong>Install the Amazon Inspector agent</strong> by using EC2 Run Command.</li> 
+<li><strong>Set up notifications using Amazon SNS</strong> to notify you of any findings.</li> 
+<li><strong>Define an Amazon Inspector target and template</strong> to define what assessment to perform on your EC2 instance.</li> 
+<li><strong>Schedule Amazon Inspector assessment runs</strong> to assess your EC2 instance on a regular interval.</li> 
+<p>Amazon Inspector can help you scan your EC2 instance using prebuilt rules packages, which are built and maintained by AWS. These prebuilt rules packages tell Amazon Inspector what to scan for on the EC2 instances you select. Amazon Inspector provides the following prebuilt packages for Microsoft Windows Server 2012 R2:</p> 
+<li>Common Vulnerabilities and Exposures</li> 
+<li>Center for Internet Security Benchmarks</li> 
+<li>Runtime Behavior Analysis</li> 
+<p>In this post, I’m focused on how to make sure you keep your EC2 instances patched, backed up, and inspected for common vulnerabilities and exposures (CVEs). As a result, I will focus on how to use the CVE rules package and use your instance tags to identify the instances on which to run the CVE rules. If your EC2 instance is fully patched using Systems Manager, as described earlier, you should not have any findings with the CVE rules package. Regardless, as a best practice I recommend that you use Amazon Inspector as an additional layer for identifying any unexpected failures. This involves using <a href="https://aws.amazon.com/cloudwatch/" target="_blank" rel="noopener noreferrer">Amazon CloudWatch</a> to set up weekly Amazon Inspector scans, and configuring Amazon Inspector to notify you of any findings through SNS topics. By acting on the notifications you receive, you can respond quickly to any CVEs on any of your EC2 instances to help ensure that malware using known CVEs does not affect your EC2 instances. In a previous blog post, Eric Fitzgerald showed how to <a href="https://aws.amazon.com/blogs/security/how-to-remediate-amazon-inspector-security-findings-automatically/" target="_blank" rel="noopener noreferrer">remediate Amazon Inspector security findings automatically</a>.</p> 
+<h4>Install the Amazon Inspector agent</h4> 
+<p>To install the Amazon Inspector agent, you will use <a href="https://aws.amazon.com/ec2/run-command/" target="_blank" rel="noopener noreferrer">EC2 Run Command</a>, which allows you to run any command on any of your EC2 instances that have the Systems Manager agent with an attached IAM role that allows access to Systems Manager.</p> 
+<ol> 
+<li>Choose <strong>Run Command</strong> under <strong>Systems Manager Services</strong> in the navigation pane of the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>. Then choose <strong>Run a command</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step1.png" /></li> 
+<li>To install the Amazon Inspector agent, you will use an AWS managed and provided command document that downloads and installs the agent for you on the selected EC2 instance. Choose <strong>AmazonInspector-ManageAWSAgent</strong>. To choose the target EC2 instance where this command will be run, use the tag you previously assigned to your EC2 instance, <code>Patch Group</code>, with a value of <code>Windows Servers</code>. For this example, set the concurrent installations to <code>1</code> and tell Systems Manager to stop after <code>5</code> errors.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step2.png" /></li> 
+<li>Retain the default values for all other settings on the <strong>Run a command</strong> page and choose <strong>Run</strong>. Back on the <strong>Run Command</strong> page, you can see if the command that installed the Amazon Inspector agent executed successfully on all selected EC2 instances.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step3.png" /></li> 
+</ol> 
+<h4>Set up notifications using Amazon SNS</h4> 
+<p>Now that you have installed the Amazon Inspector agent, you will set up an SNS topic that will notify you of any findings after an Amazon Inspector run.</p> 
+<p>To set up an SNS topic:</p> 
+<ol> 
+<li>In the <a href="https://console.aws.amazon.com/console/home" target="_blank" rel="noopener noreferrer">AWS Management Console</a>, choose <strong>Simple Notification Service</strong> under <strong>Messaging</strong> in the <strong>Services&nbsp;</strong>menu.</li> 
+<li>Choose <strong>Create topic</strong>, name your topic (only alphanumeric characters, hyphens, and underscores are allowed) and give it a display name to ensure you know what this topic does (I’ve named mine <code>Inspector</code>). Choose <strong>Create topic</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step4.png" /></li> 
+<li>To allow Amazon Inspector to publish messages to your new topic, choose <strong>Other topic actions</strong> and choose <strong>Edit topic policy</strong>.</li> 
+<li>For <strong>Allow these users to publish messages to this topic</strong> and <strong>Allow these users to subscribe to this topic</strong>, choose <strong>Only these AWS users</strong>. Type the following ARN for the US East (N. Virginia) Region in which you are deploying the solution in this post: <code>arn:aws:iam::316112463485:root</code>. This is the ARN of Amazon Inspector itself. For the ARNs of Amazon Inspector in other AWS Regions, see <a href="http://docs.aws.amazon.com/inspector/latest/userguide/inspector_assessments.html#sns-topic" target="_blank" rel="noopener noreferrer">Setting Up an SNS Topic for Amazon Inspector Notifications (Console)</a>. <a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Names (ARNs)</a> uniquely identify AWS resources across all of AWS.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step5.png" /></li> 
+<li>To receive notifications from Amazon Inspector, subscribe to your new topic by choosing <strong>Create subscription </strong>and adding your email address. After confirming your subscription by clicking the link in the email, the topic should display your email address as a subscriber. Later, you will configure the Amazon Inspector template to publish to this topic.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step6.png" /></li> 
+</ol> 
+<h4>Define an Amazon Inspector target and template</h4> 
+<p>Now that you have set up the notification topic by which Amazon Inspector can notify you of findings, you can create an Amazon Inspector target and template. A target defines which EC2 instances are in scope for Amazon Inspector. A template defines which packages to run, for how long, and on which target.</p> 
+<p>To create an Amazon Inspector target:</p> 
+<ol> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/inspector/home" target="_blank" rel="noopener noreferrer">Amazon Inspector console</a> and choose <strong>Get started</strong>. At the time of writing this blog post, Amazon Inspector is available in the US East (N. Virginia), US West (N. California), US West (Oregon), EU (Ireland), Asia Pacific (Mumbai), Asia Pacific (Seoul), Asia Pacific (Sydney), and Asia Pacific (Tokyo) Regions.</li> 
+<li>For Amazon Inspector to be able to collect the necessary data from your EC2 instance, you must create an IAM service role for Amazon Inspector. Amazon Inspector can create this role for you if you choose <strong>Choose or create role</strong> and confirm the role creation by choosing <strong>Allow</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step7.png" /></li> 
+<li>Amazon Inspector also asks you to tag your EC2 instance and install the Amazon Inspector agent. You already performed these steps in <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">Part 1</a> of this post, so you can proceed by choosing <strong>Next</strong>. To define the Amazon Inspector target, choose the previously used <code>Patch Group</code> tag with a <strong>Value</strong> of <code>Windows Servers</code>. This is the same tag that you used to define the targets for patching. Then choose <strong>Next</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step8.png" /></li> 
+<li>Now, define your Amazon Inspector template, and choose a name and the package you want to run. For this post, use the <strong>Common Vulnerabilities and Exposures</strong> package and choose the default duration of <strong>1 hour</strong>. As you can see, the package has a version number, so always select the latest version of the rules package if multiple versions are available.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step9.png" /></li> 
+<li>Configure Amazon Inspector to publish to your SNS topic when findings are reported. You can also choose to receive a notification of a started run, a finished run, or changes in the state of a run. For this blog post, you want to receive notifications if there are <em>any</em>&nbsp;findings. To start, choose <strong>Assessment Templates</strong> from the <a href="https://console.aws.amazon.com/inspector/home" target="_blank" rel="noopener noreferrer">Amazon Inspector console</a> and choose your newly created Amazon Inspector assessment template. Choose the icon below <strong>SNS topics </strong>(see the following screenshot).<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step10.png" /></li> 
+<li>A pop-up appears in which you can choose the previously created topic and the events about which you want SNS to notify you (choose <strong>Finding reported</strong>).<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step11.png" /></li> 
+</ol> 
+<h4>Schedule Amazon Inspector assessment runs</h4> 
+<p>The last step in using Amazon Inspector to assess for CVEs is to schedule the Amazon Inspector template to run using <a href="http://aws.amazon.com/cloudwatch" target="_blank" rel="noopener noreferrer">Amazon CloudWatch Events</a>. This will make sure that Amazon Inspector assesses your EC2 instance on a regular basis. To do this, you need the Amazon Inspector template ARN, which you can find under <strong>Assessment templates </strong>in the Amazon Inspector console. CloudWatch Events can run your Amazon Inspector assessment at an interval you define using a Cron-based schedule. Cron is a well-known scheduling agent that is widely used on UNIX-like operating systems and uses the following syntax for CloudWatch Events.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/cronimage.png" /></p> 
+<p>All scheduled events use a UTC time zone, and the minimum precision for schedules is one minute. For more information about scheduling CloudWatch Events, see <a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html" target="_blank" rel="noopener noreferrer">Schedule Expressions for Rules</a>.</p> 
+<p>To create the CloudWatch Events rule:</p> 
+<ol> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/cloudwatch/home" target="_blank" rel="noopener noreferrer">CloudWatch console</a>, choose <strong>Events</strong>, and choose <strong>Create rule</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step12.png" /></li> 
+<li>On the next page, specify if you want to invoke your rule based on an event pattern or a schedule. For this blog post, you will select a schedule based on a Cron expression.</li> 
+<li>You can schedule the Amazon Inspector assessment any time you want using the Cron expression, or you can use the Cron expression I used in the following screenshot, which will run the Amazon Inspector assessment every Sunday at 10:00 P.M. GMT.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step13.png" /></li> 
+<li>Choose <strong>Add target</strong> and choose <strong>Inspector assessment template</strong> from the drop-down menu. Paste the ARN of the Amazon Inspector template you previously created in the <a href="https://console.aws.amazon.com/inspector/home" target="_blank" rel="noopener noreferrer">Amazon Inspector console</a> in the <strong>Assessment template</strong> box and choose <strong>Create a new role for this specific resource</strong>. This new role is necessary so that CloudWatch Events has the necessary permissions to start the Amazon Inspector assessment. CloudWatch Events will automatically create the new role and grant the minimum set of permissions needed to run the Amazon Inspector assessment. To proceed, choose <strong>Configure details</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step14.png" /></li> 
+<li>Next, give your rule a name and a description. I suggest using a name that describes what the rule does, as shown in the following screenshot.</li> 
+<li>Finish the wizard by choosing <strong>Create rule</strong>. The rule should appear in the <strong>Events – Rules</strong> section of the <a href="https://console.aws.amazon.com/cloudwatch/home" target="_blank" rel="noopener noreferrer">CloudWatch console</a>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step15.png" /></li> 
+<li>To confirm your CloudWatch Events rule works, wait for the next time your CloudWatch Events rule is scheduled to run. For testing purposes, you can choose your CloudWatch Events rule and choose <strong>Edit</strong> to change the schedule to run it sooner than scheduled.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step16.png" /></li> 
+<li>Now navigate to the <a href="https://console.aws.amazon.com/inspector/home" target="_blank" rel="noopener noreferrer">Amazon Inspector console</a> to confirm the launch of your first assessment run. The <strong>Start time</strong> column shows you the time each assessment started and the <strong>Status </strong>column the status of your assessment. In the following screenshot, you can see Amazon Inspector is busy <strong>Collecting data</strong> from the selected assessment targets.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/19/part2-step4-inspector-step17.png" /></li> 
+</ol> 
+<p>You have concluded the last step of this blog post by setting up a regular scan of your EC2 instance with Amazon Inspector and a notification that will let you know if your EC2 instance is vulnerable to any known CVEs. In a previous Security Blog post, Eric Fitzgerald explained <a href="https://aws.amazon.com/blogs/security/how-to-remediate-amazon-inspector-security-findings-automatically/" target="_blank" rel="noopener noreferrer">How to Remediate Amazon Inspector Security Findings Automatically</a>. Although that blog post is for Linux-based EC2 instances, the post shows that you can learn about Amazon Inspector findings in other ways than email alerts.</p> 
+<b>Conclusion</b> 
+<p>In this two-part blog post, I showed how to make sure you keep your EC2 instances up to date with patching, how to back up your instances with snapshots, and how to monitor your instances for CVEs. Collectively these measures help to protect your instances against common attack vectors that attempt to exploit known vulnerabilities. In Part 1, I showed how to configure your EC2 instances to make it easy to use Systems Manager, EBS Snapshot Scheduler, and Amazon Inspector. I also showed how to use Systems Manager to schedule automatic patches to keep your instances current in a timely fashion. In Part 2, I showed you how to take regular snapshots of your data by using EBS Snapshot Scheduler and how to use Amazon Inspector to check if your EC2 instances running Microsoft Windows contain any common vulnerabilities and exposures (CVEs).</p> 
+<p>If you have comments about today’s or <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">yesterday’s post</a>, submit them in the “Comments” section below. If you have questions about or issues implementing any part of this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=30" target="_blank" rel="noopener noreferrer">Amazon EC2 forum</a> or the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=205" target="_blank" rel="noopener noreferrer">Amazon Inspector forum</a>, or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Koen</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6418');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/AWSShield_email1.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Now You Can Use AWS Shield Advanced to Help Protect Your Amazon EC2 Instances and Network Load Balancers</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ritwik Manan</span></span> | on 
+<time property="datePublished" datetime="2017-11-21T14:09:47+00:00">21 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-shield/" title="View all posts in AWS Shield*"><span property="articleSection">AWS Shield*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/now-you-can-use-aws-shield-advanced-to-protect-your-amazon-ec2-instances-and-network-load-balancers/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-6248" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=6248&amp;disqus_title=Now+You+Can+Use+AWS+Shield+Advanced+to+Help+Protect+Your+Amazon+EC2+Instances+and+Network+Load+Balancers&amp;disqus_url=https://aws.amazon.com/blogs/security/now-you-can-use-aws-shield-advanced-to-protect-your-amazon-ec2-instances-and-network-load-balancers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6248');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/AWSShield_email1.jpg" /></p> 
+<p>Starting today,&nbsp;<a href="https://aws.amazon.com/shield/" target="_blank" rel="noopener noreferrer">AWS Shield Advanced</a>&nbsp;can help protect your&nbsp;<a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> instances and <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html" target="_blank" rel="noopener noreferrer">Network Load Balancers</a>&nbsp;against infrastructure-layer <a href="https://aws.amazon.com/shield/ddos-attack-protection/" target="_blank" rel="noopener noreferrer">Distributed Denial of Service</a> (DDoS) attacks. Enable AWS Shield Advanced on an <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html" target="_blank" rel="noopener noreferrer">AWS Elastic IP address</a> and attach the address to an internet-facing EC2 instance or Network Load Balancer. AWS Shield Advanced automatically detects the type of AWS resource behind the Elastic IP address and mitigates DDoS attacks.</p> 
+<p>AWS Shield Advanced also ensures that all your <a href="https://aws.amazon.com/vpc/" target="_blank" rel="noopener noreferrer">Amazon VPC</a> <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_ACLs.html" target="_blank" rel="noopener noreferrer">network access control lists</a> (ACLs) are automatically executed on AWS Shield at the edge of the AWS network, giving you access to additional bandwidth and scrubbing capacity as well as mitigating large volumetric DDoS attacks. You also can customize additional mitigations on AWS Shield by <a href="http://docs.aws.amazon.com/waf/latest/developerguide/ddos-overview.html#ddos-drt" target="_blank" rel="noopener noreferrer">engaging the AWS DDoS Response Team</a>, which can preconfigure the mitigations or respond to incidents as they happen. For every incident detected by AWS Shield Advanced, you also get near-real-time visibility via <a href="https://aws.amazon.com/cloudwatch/" target="_blank" rel="noopener noreferrer">Amazon CloudWatch</a> metrics and details about the incident, such as the geographic origin and source IP address of the attack.</p> 
+<p>AWS Shield Advanced for Elastic IP addresses extends the coverage of DDoS cost protection, which safeguards against scaling charges as a result of a DDoS attack. DDoS cost protection now allows you to request service credits for <a href="http://aws.amazon.com/elasticloadbalancing" target="_blank" rel="noopener noreferrer">Elastic Load Balancing</a>, <a href="http://aws.amazon.com/cloudfront" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a>, <a href="https://aws.amazon.com/route53/" target="_blank" rel="noopener noreferrer">Amazon Route 53</a>, and your EC2 instance hours in the event that these increase as the result of a DDoS attack.</p> 
+<h3>Get started protecting EC2 instances and Network Load Balancers</h3> 
+<p>To get started:</p> 
+<ol> 
+<li>Sign in to the <a href="https://console.aws.amazon.com/console/home" target="_blank" rel="noopener noreferrer">AWS Management Console</a> and navigate to the <a href="https://console.aws.amazon.com/waf/home" target="_blank" rel="noopener noreferrer">AWS WAF and AWS Shield console</a>.</li> 
+<li>Activate AWS Shield Advanced by choosing <strong>Activate AWS Shield Advanced</strong> and accepting the terms.</li> 
+<li>Navigate to <strong>Protected Resources</strong> through the navigation pane.</li> 
+<li>Choose the Elastic IP addresses that you want to protect (these can point to EC2 instances or Network Load Balancers).</li> 
+</ol> 
+<p>If AWS Shield Advanced detects a DDoS attack, you can get details about the attack by checking CloudWatch, or the <strong>Incidents</strong> tab on the AWS WAF and AWS Shield console. To learn more about this new feature and AWS Shield Advanced, see the <a href="https://aws.amazon.com/shield" target="_blank" rel="noopener noreferrer">AWS Shield home page</a>.</p> 
+<p>If you have comments or questions about this post, submit them in the “Comments” section below, start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=238&amp;start=0" target="_blank" rel="noopener noreferrer">AWS Shield forum</a>, or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Ritwik</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6248');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step0-Overview-v2-a-1260x490.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Patch, Inspect, and Protect Microsoft Windows Workloads on AWS—Part 1</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Koen van Blijderveen</span></span> | on 
+<time property="datePublished" datetime="2017-11-21T07:48:41+00:00">21 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/amazon-inspector/" title="View all posts in Amazon Inspector*"><span property="articleSection">Amazon Inspector*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-6379" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=6379&amp;disqus_title=How+to+Patch%2C+Inspect%2C+and+Protect+Microsoft+Windows+Workloads+on+AWS%E2%80%94Part+1&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6379');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Most malware tries to compromise your systems by using a known vulnerability that the maker of the operating system has already patched. To help prevent malware from affecting your systems, two security best practices are to apply all operating system patches to your systems and actively monitor your systems for missing patches. In case you do need to recover from a malware attack, you should make regular backups of your data.</p> 
+<p>In today’s blog post (Part 1 of a two-part post), I show how to keep your <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> instances that run Microsoft Windows up to date with the latest security patches by using <a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer">Amazon EC2 Systems Manager</a>. <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" target="_blank" rel="noopener noreferrer">Tomorrow in Part 2</a>, I show how to take regular <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSSnapshots.html" target="_blank" rel="noopener noreferrer">snapshots</a> of your data by using <a href="http://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/overview.html" target="_blank" rel="noopener noreferrer">Amazon EBS Snapshot Scheduler</a> and how to use <a href="https://aws.amazon.com/inspector/" target="_blank" rel="noopener noreferrer">Amazon Inspector</a> to check if your EC2 instances running Microsoft Windows contain any common vulnerabilities and exposures (CVEs).</p> 
+<h3>What you should know first</h3> 
+<p>To follow along with the solution in this post, you need one or more EC2 instances. You may use existing instances or create new instances. For the blog post, I assume this is an <a href="https://aws.amazon.com/windows/" target="_blank" rel="noopener noreferrer">EC2 for Microsoft Windows Server 2012 R2</a> instance installed from the <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html" target="_blank" rel="noopener noreferrer">Amazon Machine Images</a> (AMIs). If you are not familiar with how to launch an EC2 instance, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html" target="_blank" rel="noopener noreferrer">Launching an Instance</a>. I also assume you launched or will launch your instance in a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Subnets.html" target="_blank" rel="noopener noreferrer">private subnet</a>. A private subnet is not directly accessible via the internet, and access to it requires either a VPN connection to your on-premises network or a <a href="https://s3.amazonaws.com/quickstart-reference/microsoft/rdgateway/latest/doc/Microsoft_Remote_Desktop_Gateway_Quick_Start.pdf" target="_blank" rel="noopener noreferrer">jump host</a> in a public subnet (a subnet with access to the internet). You must make sure that the EC2 instance can connect to the internet using a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) instance</a> or <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> to communicate with Systems Manager and Amazon Inspector. The following diagram shows how you should structure your <a href="https://aws.amazon.com/vpc/" target="_blank" rel="noopener noreferrer">Amazon Virtual Private Cloud</a> (VPC). You should also be familiar with <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-restoring-volume.html" target="_blank" rel="noopener noreferrer">Restoring an Amazon EBS Volume from a Snapshot</a> and <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-attaching-volume.html" target="_blank" rel="noopener noreferrer">Attaching an Amazon EBS Volume to an Instance</a>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step0-network-diagram-a.png" /></p> 
+<p>Later on, you will assign tasks to a maintenance window to patch your instances with Systems Manager. To do this, the <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) user you are using for this post must have the <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html" target="_blank" rel="noopener noreferrer">iam:PassRole</a> permission. This permission allows this IAM user to assign tasks to pass their own IAM permissions to the AWS service. In this example, when you assign a task to a maintenance window, IAM passes your credentials to Systems Manager. This safeguard ensures that the user cannot use the creation of tasks to elevate their IAM privileges because their own IAM privileges limit which tasks they can run against an EC2 instance. You should also authorize your IAM user to use EC2, Amazon Inspector, <a href="https://aws.amazon.com/cloudwatch/" target="_blank" rel="noopener noreferrer">Amazon CloudWatch</a>, and Systems Manager. You can achieve this by attaching the following AWS managed policies to the IAM user you are using for this example: <code>AmazonInspectorFullAccess</code>, <code>AmazonEC2FullAccess</code>, and <code>AmazonSSMFullAccess</code>.<span id="more-6379"></span></p> 
+<h3>Architectural overview</h3> 
+<p>The following diagram illustrates the components of this solution’s architecture.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step0-Overview-v2-a.png" /></p> 
+<p>For this blog post, <strong>Microsoft Windows EC2</strong> is Amazon EC2 for Microsoft Windows Server 2012 R2 instances with attached <a href="https://aws.amazon.com/ebs/" target="_blank" rel="noopener noreferrer">Amazon Elastic Block Store</a> (Amazon EBS) volumes, which are running in your VPC. These instances may be standalone Windows instances running your Windows workloads, or you may have joined them to an Active Directory domain controller. For instances joined to a domain, you can be using Active Directory running on an EC2 for Windows instance, or you can use <a href="https://aws.amazon.com/directoryservice/" target="_blank" rel="noopener noreferrer">AWS Directory Service for Microsoft Active Directory</a>.</p> 
+<p><strong>Amazon EC2 Systems Manager</strong> is a scalable tool for remote management of your EC2 instances. You will use the <a href="https://aws.amazon.com/ec2/systems-manager/run-command/" target="_blank" rel="noopener noreferrer">Systems Manager Run Command</a> to install the Amazon Inspector agent. The agent enables EC2 instances to communicate with the Amazon Inspector service and run assessments, which I explain in detail later in this blog post. You also will create a Systems Manager association to keep your EC2 instances up to date with the latest security patches.</p> 
+<p>You can use the <a href="https://aws.amazon.com/answers/infrastructure-management/ebs-snapshot-scheduler/" target="_blank" rel="noopener noreferrer"><strong>EBS</strong><strong> Snapshot Scheduler</strong></a> to schedule automated snapshots at regular intervals. You will use it to set up regular snapshots of your Amazon EBS volumes. EBS Snapshot Scheduler is a prebuilt solution by AWS that you will deploy in your AWS account. With Amazon EBS snapshots, you pay only for the actual data you store. Snapshots save only the data that has changed since the previous snapshot, which minimizes your cost.</p> 
+<p>You will use <strong>Amazon Inspector</strong> to run security assessments on your EC2 for Windows Server instance. In this post, I show how to assess if your EC2 for Windows Server instance is vulnerable to any of the more than 50,000 CVEs registered with Amazon Inspector.</p> 
+<p>In today’s and tomorrow’s posts, I show you how to:</p> 
+<ol> 
+<li><strong>Launch an <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">EC2</a> instance</strong> with an IAM role, Amazon EBS volume, and tags that Systems Manager and Amazon Inspector will use.</li> 
+<li><strong>Configure </strong><a href="https://aws.amazon.com/ec2/systems-manager/" target="_blank" rel="noopener noreferrer"><strong>Systems Manager</strong></a> to install the Amazon Inspector agent and patch your EC2 instances.</li> 
+<li><strong>Take </strong><a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSSnapshots.html" target="_blank" rel="noopener noreferrer"><strong>EBS snapshots</strong></a><strong>&nbsp;by using </strong><a href="http://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/overview.html" target="_blank" rel="noopener noreferrer"><strong>EBS Snapshot Scheduler</strong></a> to automate snapshots based on instance tags.</li> 
+<li><strong>Use </strong><a href="https://aws.amazon.com/inspector/" target="_blank" rel="noopener noreferrer"><strong>Amazon Inspector</strong></a> to check if your EC2 instances running Microsoft Windows contain any common vulnerabilities and exposures (CVEs).</li> 
+</ol> 
+<p><a name="p1s1"></a></p> 
+<b>Step 1: Launch an EC2 instance</b> 
+<p>In this section, I show you how to launch your EC2 instances so that you can use Systems Manager with the instances and use instance tags with EBS Snapshot Scheduler to automate snapshots. This requires three things:</p> 
+<li><strong>Create an IAM role for Systems Manager</strong> before launching your EC2 instance.</li> 
+<li><strong>Launch your EC2 instance </strong>with Amazon EBS and the IAM role for Systems Manager.</li> 
+<li><strong>Add tags</strong> to instances so that you can automate policies for which instances you take snapshots of and when.</li> 
+<h3>Create an IAM role for Systems Manager</h3> 
+<p>Before launching your EC2 instance, I recommend that you first create an <a href="https://aws.amazon.com/iam/details/manage-roles/" target="_blank" rel="noopener noreferrer">IAM role</a> for Systems Manager, which you will use to update the EC2 instance you will launch. AWS already provides a preconfigured policy that you can use for your new role, and it is called <code>AmazonEC2RoleforSSM</code>.</p> 
+<ol> 
+<li>Sign in to the <a href="https://console.aws.amazon.com/iam/home" target="_blank" rel="noopener noreferrer">IAM console</a> and choose <strong>Roles</strong> in the navigation pane. Choose <strong>Create new role</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step1-ec2-step1.png" /></li> 
+<li>In the role-creation workflow, choose <strong>AWS service </strong>&gt;<strong> EC2 </strong>&gt;<strong> EC2</strong> to create a role for an EC2 instance.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step1-ec2-step2.png" /></li> 
+<li>Choose the <strong>AmazonEC2RoleforSSM</strong> policy to attach it to the new role you are creating.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step1-ec2-step3.png" /></li> 
+<li>Give the role a meaningful name (I chose <code>EC2SSM</code>) and description, and choose <strong>Create role</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-Step1-ec2-step4.png" /></li> 
+</ol> 
+<h3>Launch your EC2 instance</h3> 
+<p>To follow along, you need an EC2 instance that is running Microsoft Windows Server 2012 R2 and that has an Amazon EBS volume attached. You can use any existing instance you may have or create a new instance.</p> 
+<p>When launching your new EC2 instance, be sure that:</p> 
+<li>The operating system is Microsoft Windows Server 2012 R2.</li> 
+<li>You attach at least one Amazon EBS volume to the EC2 instance.</li> 
+<li>You attach the newly created IAM role (<code>EC2SSM</code>).</li> 
+<li>The EC2 instance can connect to the internet through a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) gateway</a> or a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">NAT instance</a>.</li> 
+<li>You create the tags shown in the following screenshot (you will use them later).</li> 
+<p>If you are using an already launched EC2 instance, you can attach the newly created role as described in <a href="https://aws.amazon.com/blogs/security/easily-replace-or-attach-an-iam-role-to-an-existing-ec2-instance-by-using-the-ec2-console/" target="_blank" rel="noopener noreferrer">Easily Replace or Attach an IAM Role to an Existing EC2 Instance by Using the EC2 Console</a>.</p> 
+<h3>Add tags</h3> 
+<p>The final step of configuring your EC2 instances is to add tags. You will use these tags to configure Systems Manager in Step 2 of this blog post and to configure Amazon Inspector in Part 2. For this example, I add a tag key, <code>Patch Group</code>, and set the value to <code>Windows Servers</code>. I could have other groups of EC2 instances that I treat differently by having the same tag key but a different tag value. For example, I might have a collection of other servers with the <code>Patch Group</code> tag key with a value of <code>IAS Servers</code>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step1-ec2-step5.png" /></p> 
+<p><strong>Note:</strong> You must wait a few minutes until the EC2 instance becomes available before you can proceed to the next section.</p> 
+<p>At this point, you now have at least one EC2 instance you can use to configure Systems Manager, use EBS Snapshot Scheduler, and use Amazon Inspector.</p> 
+<p><strong>Note:</strong> If you have a large number of EC2 instances to tag, you may want to use the EC2 <a href="http://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateTags.html" target="_blank" rel="noopener noreferrer">CreateTags API</a> rather than manually apply tags to each instance.</p> 
+<b>Step 2: Configure Systems Manager</b> 
+<p>In this section, I show you how to use Systems Manager to apply operating system patches to your EC2 instances, and how to manage patch compliance.</p> 
+<p>To start, I will provide some background information about Systems Manager. Then, I will cover how to:</p> 
+<li><strong>Create the Systems Manager IAM role</strong> so that Systems Manager is able to perform patch operations.</li> 
+<li><strong>Associate a Systems Manager patch baseline with your instance</strong> to define which patches Systems Manager should apply.</li> 
+<li><strong>Define a maintenance window</strong> to make sure Systems Manager patches your instance when you tell it to.</li> 
+<li><strong>Monitor patch compliance </strong>to verify the patch state of your instances.</li> 
+<p>Systems Manager is a collection of capabilities that helps you automate management tasks for AWS-hosted instances on EC2 and your on-premises servers. In this post, I use Systems Manager for two purposes: to run remote commands and apply operating system patches. To learn about the full capabilities of Systems Manager, see <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/what-is-systems-manager.html" target="_blank" rel="noopener noreferrer">What Is Amazon EC2 Systems Manager?</a></p> 
+<p>Patch management is an important measure to prevent malware from infecting your systems. Most malware attacks look for vulnerabilities that are publicly known and in most cases are already patched by the maker of the operating system. These publicly known vulnerabilities are well documented and therefore easier for an attacker to exploit than having to discover a new vulnerability.</p> 
+<p>Patches for these new vulnerabilities are available through Systems Manager within hours after Microsoft releases them. There are two prerequisites to use Systems Manager to apply operating system patches. First, you must attach the IAM role you created in the previous section, <code>EC2SSM</code>, to your EC2 instance. Second, you must install the Systems Manager agent on your EC2 instance. If you have used a recent Microsoft Windows Server 2012 R2 AMI published by AWS, Amazon has already installed the Systems Manager agent on your EC2 instance. You can confirm this by logging in to an EC2 instance and looking for <strong>Amazon SSM Agent</strong> under <strong>Programs and Features</strong> in Windows. To install the Systems Manager agent on an instance that does not have the agent preinstalled or if you want to use the Systems Manager agent on your on-premises servers, see the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html" target="_blank" rel="noopener noreferrer">documentation about installing the Systems Manager agent</a>. If you forgot to attach the newly created role when launching your EC2 instance or if you want to attach the role to already running EC2 instances, see <a href="https://aws.amazon.com/blogs/security/new-attach-an-aws-iam-role-to-an-existing-amazon-ec2-instance-by-using-the-aws-cli/" target="_blank" rel="noopener noreferrer">Attach an AWS IAM Role to an Existing Amazon EC2 Instance by Using the AWS CLI</a> or <a href="https://aws.amazon.com/blogs/security/easily-replace-or-attach-an-iam-role-to-an-existing-ec2-instance-by-using-the-ec2-console/" target="_blank" rel="noopener noreferrer">use the AWS Management Console</a>.</p> 
+<p>To make sure your EC2 instance receives operating system patches from Systems Manager, you will use the default <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-patch.html" target="_blank" rel="noopener noreferrer">patch baseline</a> provided and maintained by AWS, and you will define a maintenance window so that you control when your EC2 instances should receive patches. For the maintenance window to be able to run any tasks, you also must create a new role for Systems Manager. This role is a different kind of role than the one you created earlier: Systems Manager will use this role instead of EC2. Earlier we created the <code>EC2SSM</code>&nbsp;role with the <code>AmazonEC2RoleforSSM</code>&nbsp;policy, which allowed the Systems Manager agent on our instance to communicate with the Systems Manager service. Here we need a new role with the policy <code>AmazonSSMMaintenanceWindowRole</code> to make sure the Systems Manager service is able to execute commands on our instance.</p> 
+<h4>Create the Systems Manager IAM role</h4> 
+<p>To create the new IAM role for Systems Manager, follow the same procedure as in the previous section, but in Step 3, choose the <strong>AmazonSSMMaintenanceWindowRole</strong> policy instead of the previously selected <strong>AmazonEC2RoleforSSM</strong> policy.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step1.png" /></p> 
+<p>Finish the wizard and give your new role a recognizable name. For example, I named my role <code>MaintenanceWindowRole</code>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step2.png" /></p> 
+<p>By default, only EC2 instances can assume this new role. You must update the trust policy to enable Systems Manager to assume this role.</p> 
+<p>To update the trust policy associated with this new role:</p> 
+<ol> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/iam/home" target="_blank" rel="noopener noreferrer">IAM console</a> and choose <strong>Roles</strong> in the navigation pane.</li> 
+<li>Choose <strong>MaintenanceWindowRole</strong> and choose the <strong>Trust relationships</strong> tab. Then choose <strong>Edit trust relationship</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step3.png" /></li> 
+<li>Update the policy document by copying the following policy and pasting it in the <strong>Policy Document</strong>&nbsp;box. As you can see, I have added the <code>ssm.amazonaws.com</code> service to the list of allowed Principals that can assume this role. Choose <strong>Update Trust Policy</strong>. 
+<code class="lang-text">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Statement&quot;:[
+{
+&quot;Sid&quot;:&quot;&quot;,
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Principal&quot;:{
+&quot;Service&quot;:[
+&quot;ec2.amazonaws.com&quot;,
+&quot;ssm.amazonaws.com&quot;
+]
+},
+&quot;Action&quot;:&quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+</ol> 
+<h4>Associate a Systems Manager patch baseline with your instance</h4> 
+<p>Next, you are going to associate a Systems Manager patch baseline with your EC2 instance. A patch baseline defines which patches Systems Manager should apply. You will use the default patch baseline that AWS manages and maintains. Before you can associate the patch baseline with your instance, though, you must determine if Systems Manager recognizes your EC2 instance.</p> 
+<p>Navigate to the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>, scroll down to <strong>Systems Manager Shared Resources</strong> in the navigation pane, and choose <strong>Managed Instances</strong>. Your new EC2 instance should be available there. If your instance is missing from the list, verify the following:</p> 
+<ol> 
+<li>Go to the EC2 console and verify your instance is running.</li> 
+<li>Select your instance and confirm you attached the Systems Manager IAM role, <code>EC2SSM</code>.</li> 
+<li>Make sure that you deployed a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> in your public subnet to ensure your VPC reflects the diagram at the start of this post so that the Systems Manager agent can connect to the Systems Manager internet endpoint.</li> 
+<li>Check the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-ssm-win.html#sysman-agent-logs-win" target="_blank" rel="noopener noreferrer">Systems Manager Agent logs</a> for any errors.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step4-a.png" /></li> 
+</ol> 
+<p>Now that you have confirmed that Systems Manager can manage your EC2 instance, it is time to associate the AWS maintained patch baseline with your EC2 instance:</p> 
+<ol> 
+<li>Choose <strong>Patch Baselines</strong> under <strong>Systems Manager Services</strong> in the navigation pane of the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>.</li> 
+<li>Choose the default patch baseline as highlighted in the following screenshot, and choose <strong>Modify Patch Groups</strong> in the <strong>Actions</strong> drop-down.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step5.png" /></li> 
+<li>In the <strong>Patch group</strong> box, enter the same value you entered under the <code>Patch Group</code> tag of your EC2 instance in “Step 1: Configure your EC2 instance.” In this example, the value I enter is <code>Windows Servers</code>. Choose the check mark icon next to the patch group and choose <strong>Close</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step6.png" /></li> 
+</ol> 
+<h4>Define a maintenance window</h4> 
+<p>Now that you have successfully set up a role and have associated a patch baseline with your EC2 instance, you will define a maintenance window so that you can control when your EC2 instances should receive patches. By creating multiple maintenance windows and assigning them to different patch groups, you can make sure your EC2 instances do not all reboot at the same time. The <code>Patch Group</code> resource tag you defined earlier will determine to which patch group an instance belongs.</p> 
+<p>To define a maintenance window:</p> 
+<ol> 
+<li>Navigate to the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>, scroll down to <strong>Systems Manager Shared Resources</strong> in the navigation pane, and choose <strong>Maintenance Windows</strong>. Choose <strong>Create a Maintenance Window</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step7.png" /></li> 
+<li>Select the Cron schedule builder to define the schedule for the maintenance window. In the example in the following screenshot, the maintenance window will start every Saturday at 10:00 P.M. UTC.</li> 
+<li>To specify when your maintenance window will end, specify the duration. In this example, the four-hour maintenance window will end on the following Sunday morning at 2:00 A.M. UTC (in other words, four hours after it started).</li> 
+<li>Systems manager completes all tasks that are in process, even if the maintenance window ends. In my example, I am choosing to prevent new tasks from starting within one hour of the end of my maintenance window because I estimated my patch operations might take longer than one hour to complete. Confirm the creation of the maintenance window by choosing <strong>Create maintenance window</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step8.png" /></li> 
+<li>After creating the maintenance window, you must register the EC2 instance to the maintenance window so that Systems Manager knows which EC2 instance it should patch in this maintenance window. To do so, choose <strong>Register new targets </strong>on the <strong>Targets </strong>tab of your newly created maintenance window. You can register your targets by using the same <code>Patch Group</code> tag you used before to associate the EC2 instance with the AWS-provided patch baseline.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step9.png" /></li> 
+<li>Assign a task to the maintenance window that will install the operating system patches on your EC2 instance: 
+<ol type="a"> 
+<li>Open <strong>Maintenance Windows</strong> in the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>, select your previously created maintenance window, choose the <strong>Tasks</strong> tab, and choose <strong>Register run command task </strong>from the <strong>Register new task </strong>drop-down.</li> 
+<li>Choose the <strong>AWS-RunPatchBaseline</strong> document from the list of available documents.</li> 
+<li>For <strong>Parameters</strong>: 
+<ol type="i"> 
+<li>For <strong>Role</strong>, choose the role you created previously (called <code>MaintenanceWindowRole</code>).</li> 
+<li>For <strong>Execute on</strong>, specify how many EC2 instances Systems Manager should patch at the same time. If you have a large number of EC2 instances and want to patch all EC2 instances within the defined time, make sure this number is not too low. For example, if you have 1,000 EC2 instances, a maintenance window of 4 hours, and 2 hours’ time for patching, make this number at least 500.</li> 
+<li>For <strong>Stop after</strong>, specify after how many errors Systems Manager should stop.</li> 
+<li>For <strong>Operation</strong>, choose <strong>Install</strong> to make sure to install the patches.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step10.png" /></li> 
+</ol> </li> 
+</ol> </li> 
+</ol> 
+<p>Now, you must wait for the maintenance window to run at least once according to the schedule you defined earlier. Note that if you don’t want to wait, you can adjust the schedule to run sooner by choosing <strong>Edit maintenance window </strong>on the <strong>Maintenance Windows</strong> page of Systems Manager. If your maintenance window has expired, you can check the status of any maintenance tasks Systems Manager has performed on the <strong>Maintenance Windows</strong> page of Systems Manager and select your maintenance window.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step11.png" /></p> 
+<h4>Monitor patch compliance</h4> 
+<p>You also can see the overall patch compliance of all EC2 instances that are part of defined patch groups by choosing <strong>Patch Compliance</strong> under <strong>Systems Manager Services</strong> in the navigation pane of the <a href="https://console.aws.amazon.com/ec2/v2/home" target="_blank" rel="noopener noreferrer">EC2 console</a>. You can filter by <strong>Patch Group</strong> to see how many EC2 instances within the selected patch group are up to date, how many EC2 instances are missing updates, and how many EC2 instances are in an error state.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/18/part1-step2-ssm-step12.png" /></p> 
+<p>In this section, you have set everything up for patch management on your instance. Now you know how to patch your EC2 instance in a controlled manner and how to check if your EC2 instance is compliant with the patch baseline you have defined. Of course, I recommend that you apply these steps to all EC2 instances you manage.</p> 
+<h3>Summary</h3> 
+<p>In Part 1 of this blog post, I have shown how to configure EC2 instances for use with Systems Manager, EBS Snapshot Scheduler, and Amazon Inspector. I also have shown how to use Systems Manager to keep your Microsoft Windows–based EC2 instances up to date. In <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" target="_blank" rel="noopener noreferrer">Part 2 </a>of this blog post tomorrow, I will show how to take regular snapshots of your data by using EBS Snapshot Scheduler and how to use Amazon Inspector to check if your EC2 instances running Microsoft Windows contain any CVEs.</p> 
+<p>If you have comments about this post, submit them in the “Comments” section below. If you have questions about or issues implementing this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=30" target="_blank" rel="noopener noreferrer">EC2 forum</a> or the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=205" target="_blank" rel="noopener noreferrer">Amazon Inspector forum</a>, or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Koen</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-6379');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/16/fedRAMP.png" /> 
 <b class="lb-b blog-post-title" property="name headline">AWS Achieves FedRAMP JAB Moderate Provisional Authorization for 20 Services in the AWS US East/West Region</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -651,169 +1018,6 @@ AWS.Blog.commenting('#aws-comment-trigger-5825');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-5825');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/FINAL_Dashboard_RM_1117_a1-642x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Now You Can Monitor DDoS Attack Trends with AWS Shield Advanced</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ritwik Manan</span></span> | on 
-<time property="datePublished" datetime="2017-11-01T12:41:45+00:00">01 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-shield/" title="View all posts in AWS Shield*"><span property="articleSection">AWS Shield*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/now-you-can-monitor-ddos-attack-trends-with-aws-shield-advanced/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5831" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=5831&amp;disqus_title=Now+You+Can+Monitor+DDoS+Attack+Trends+with+AWS+Shield+Advanced&amp;disqus_url=https://aws.amazon.com/blogs/security/now-you-can-monitor-ddos-attack-trends-with-aws-shield-advanced/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5831');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS Shield Advanced has always notified you about <a href="https://aws.amazon.com/shield/ddos-attack-protection/">DDoS attacks</a> on your applications via the AWS Management Console and API as well as Amazon CloudWatch metrics. Today, we added the global threat environment dashboard to <a href="https://aws.amazon.com/shield/tiers/">AWS Shield Advanced</a> to allow you to view trends and metrics about DDoS attacks across <a href="https://aws.amazon.com/cloudfront/" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a>, Elastic Load Balancing, and Amazon Route 53. This information can help you understand the DDoS target profile of the AWS&nbsp;services you use and, in turn, can help you create a more resilient and distributed architecture for your application.</p> 
-<p>The global threat environment dashboard shows comprehensive and easy-to-understand data about DDoS attacks. The dashboard displays a summary of the global threat environment, including the largest attacks, top vectors, and the relative number of significant attacks. You also can view the dashboard for different time durations to give you a history of DDoS attacks.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/01/FINAL_Dashboard_RM_1117_a.png" /></p> 
-<p>To get started with the global threat environment dashboard:</p> 
-<ol> 
-<li>Sign in to the <a href="https://console.aws.amazon.com/console/home" target="_blank" rel="noopener noreferrer">AWS Management Console</a> and navigate to the <a href="https://console.aws.amazon.com/waf/home" target="_blank" rel="noopener noreferrer">AWS WAF and AWS Shield console</a>.</li> 
-<li>To activate AWS Shield Advanced,&nbsp;choose&nbsp;<strong>Protected resources</strong> in the navigation pane,&nbsp;choose&nbsp;<strong>Activate AWS Shield Advanced</strong>, and then accept the terms by typing&nbsp;<span style="font-family: courier">I accept</span>.</li> 
-<li>Navigate to the global threat environment dashboard through the navigation pane.</li> 
-<li>Choose your desired time period from the time period drop-down menu in the top right part of the page.</li> 
-</ol> 
-<p>You can use the information on the global threat environment dashboard to understand the threat landscape as well as to inform decisions&nbsp;you make that will help to better protect your AWS resources.</p> 
-<p>To learn more information, see <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/global-threat-environment-dashboard-view-ddos-attack-trends-across-aws/" target="_blank" rel="noopener noreferrer">Global Threat Environment Dashboard: View DDoS Attack Trends Across AWS</a>.</p> 
-<p>– Ritwik</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5831');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/Marketo_1200x350_NYC_1200x25011.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Join Us for AWS Security Week November 6–9 in New York City</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><a href="https://aws.amazon.com/blogs/security/author/clieb/" title="Posts by Craig Liebendorfer" property="name">Craig Liebendorfer</a></span> | on 
-<time property="datePublished" datetime="2017-11-01T09:52:44+00:00">01 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/events/" title="View all posts in Events*"><span property="articleSection">Events*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/federation/" title="View all posts in Federation"><span property="articleSection">Federation</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/join-us-for-aws-security-week-november-6-9-in-new-york-city/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5865" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=5865&amp;disqus_title=Join+Us+for+AWS+Security+Week+November+6%E2%80%939+in+New+York+City&amp;disqus_url=https://aws.amazon.com/blogs/security/join-us-for-aws-security-week-november-6-9-in-new-york-city/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5865');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/05/Marketo_1200x350_NYC_1200x2501.png" /></p> 
-<p>Want to learn how to securely deploy applications and services in the AWS Cloud? Join us in&nbsp;New York City at the AWS Pop-up Loft for <a href="https://pages.awscloud.com/namer_ny-security_november_2017_RegistrationPage.html" target="_blank" rel="noopener noreferrer">AWS Security Week</a>, November 6–9. At this free technical event,&nbsp;you will learn security concepts and strategies from AWS security professionals in sessions, demos, and labs.</p> 
-<p>Here is a sampling of the security offerings during the week:</p> 
-<li>Become a Cloud Security Ninja</li> 
-<li>Data Protection in Transit and at Rest</li> 
-<li>Soup to Nuts: Identity Federation for AWS</li> 
-<li>Brewing an Effective Cloud Security Strategy</li> 
-<p>Learn more about the available sessions and <a href="https://pages.awscloud.com/namer_ny-security_november_2017_RegistrationPage.html" target="_blank" rel="noopener noreferrer">register</a>!</p> 
-<p>– Craig</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5865');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/11/15/AWSCertificateManager_2b1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Prepare for AWS’s Move to Its Own Certificate Authority</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Jonathan Kozolchyk</span></span> | on 
-<time property="datePublished" datetime="2017-10-30T06:57:55+00:00">30 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-certificate-manager/" title="View all posts in AWS Certificate Manager*"><span property="articleSection">AWS Certificate Manager*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/how-to-prepare-for-aws-move-to-its-own-certificate-authority/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-5777" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=5777&amp;disqus_title=How+to+Prepare+for+AWS%26%238217%3Bs+Move+to+Its+Own+Certificate+Authority&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-prepare-for-aws-move-to-its-own-certificate-authority/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5777');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/25/AWSCertificateManager_2b.png" /></p> 
-<p>Transport Layer Security (TLS, formerly called Secure Sockets Layer [SSL]) is essential for encrypting information that is exchanged on the internet. For example, Amazon.com uses TLS for all traffic on its website, and AWS uses it to secure calls to AWS services.</p> 
-<p>An electronic document called a <em>certificate</em>&nbsp;verifies the identity of the server when creating such an encrypted connection. The certificate helps establish proof that your web browser is communicating securely with the website that you typed in your browser’s address field. <em>Certificate Authorities</em>, also known as CAs, issue certificates to specific domains. When a domain presents a certificate that is issued by a trusted CA, your browser or application knows it’s safe to make the connection.</p> 
-<p>In January 2016, AWS launched <a href="https://aws.amazon.com/acm/" target="_blank" rel="noopener noreferrer">AWS Certificate Manager</a> (ACM), a service that lets you easily provision, manage, and deploy SSL/TLS certificates for use with AWS services. These certificates are available for no additional charge through Amazon’s own CA: <a href="https://www.amazontrust.com/repository/" target="_blank" rel="noopener noreferrer">Amazon Trust Services</a>. For browsers and other applications to trust a certificate, the certificate’s issuer must be included in the browser’s <em>trust store</em>, which is a list of trusted CAs. If the issuing CA is not in the trust store, the browser will display an error message (see an <a href="https://untrusted-root.badssl.com/" target="_blank" rel="noopener noreferrer">example</a>) and applications will show an application-specific error. To ensure the ubiquity of the Amazon Trust Services CA, AWS purchased the Starfield Services CA, a root found in most browsers and which has been valid since 2005. This means you shouldn’t have to take any action to use the certificates issued by Amazon Trust Services.</p> 
-<p>AWS has been offering free certificates to AWS customers from the Amazon Trust Services CA. Now, AWS is in the process of moving certificates for services such as <a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> and <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a> to use certificates from Amazon Trust Services as well. Most software doesn’t need to be changed to handle this transition, but there are exceptions. In this blog post, I show you how to verify that you are prepared to use the Amazon Trust Services CA.</p> 
-<h3>How to tell if the Amazon Trust Services CAs are in your trust store</h3> 
-<p>The following table lists the Amazon Trust Services certificates. To verify that these certificates are in your browser’s trust store, click each Test URL in the following table to verify that it works for you. When a Test URL does not work, it displays an error similar to <a href="https://untrusted-root.badssl.com/" target="_blank" rel="noopener noreferrer">this example</a>.<span id="more-5777"></span></p> 
-<table border="1" width="475" cellpadding="5"> 
-<tbody> 
-<tr> 
-<td><strong>Distinguished name</strong></td> 
-<td><strong>SHA-256 hash of subject public key information</strong></td> 
-<td><strong>Test URL</strong></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">CN=Amazon Root CA 1,O=Amazon,C=US</span></td> 
-<td><span style="font-family: courier">fbe3018031f9586bcbf41727e417b7d1c45c2f47f93be372a17b96b50757d5a2</span></td> 
-<td><a href="https://good.sca1a.amazontrust.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">CN=Amazon Root CA 2,O=Amazon,C=US</span></td> 
-<td><span style="font-family: courier">7f4296fc5b6a4e3b35d3c369623e364ab1af381d8fa7121533c9d6c633ea2461</span></td> 
-<td><a href="https://good.sca2a.amazontrust.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">CN=Amazon Root CA 3,O=Amazon,C=US</span></td> 
-<td><span style="font-family: courier">36abc32656acfc645c61b71613c4bf21c787f5cabbee48348d58597803d7abc9</span></td> 
-<td><a href="https://good.sca3a.amazontrust.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">CN=Amazon Root CA 4,O=Amazon,C=US</span></td> 
-<td><span style="font-family: courier">f7ecded5c66047d28ed6466b543c40e0743abe81d109254dcf845d4c2c7853c5</span></td> 
-<td><a href="https://good.sca4a.amazontrust.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">CN=Starfield Services Root Certificate Authority – G2,O=Starfield Technologies\, Inc.,L=Scottsdale,ST=Arizona,C=US</span></td> 
-<td><span style="font-family: courier">2b071c59a0a0ae76b0eadb2bad23bad4580b69c3601b630c2eaf0613afa83f92</span></td> 
-<td><a href="https://good.sca0a.amazontrust.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-<tr> 
-<td><span style="font-family: courier">Starfield&nbsp;Root Certificate Authority – G2</span></td> 
-<td><span style="font-family: courier">2ce1cb0bf9d2f9e102993fbe215152c3b2dd0cabde1c68e5319b839154dbb7f5</span></td> 
-<td><a href="https://starfieldtech.com/" target="_blank" rel="noopener noreferrer">Test URL</a></td> 
-</tr> 
-</tbody> 
-</table> 
-<h3>What to do if the Amazon Trust Services CAs are not in your trust store</h3> 
-<p>If your tests of any of the Test URLs failed, you must update your trust store. The easiest way to update your trust store is to upgrade the operating system or browser that you are using.</p> 
-<p>You will find the Amazon Trust Services CAs in the following operating systems (release dates are in parentheses):</p> 
-<li>Microsoft Windows versions that have January 2005 or later updates installed, Windows Vista, Windows 7, Windows Server 2008, and newer versions</li> 
-<li>Mac OS X 10.4 with Java for Mac OS X 10.4 Release 5, Mac OS X 10.5 and newer versions</li> 
-<li>Red Hat Enterprise Linux 5 (March 2007), Linux 6, and Linux 7 and CentOS 5, CentOS 6, and CentOS 7</li> 
-<li>Ubuntu 8.10</li> 
-<li>Debian 5.0</li> 
-<li>Amazon Linux (all versions)</li> 
-<li>Java 1.4.2_12, Java 5 update 2, and all newer versions, including Java 6, Java 7, and Java 8</li> 
-<p>All modern browsers trust Amazon’s CAs. You can update the certificate bundle in your browser simply by updating your browser. You can find instructions for updating the following browsers on their respective websites:</p> 
-<li><a href="https://support.google.com/chrome/answer/95414?hl=en" target="_blank" rel="noopener noreferrer">Chrome</a></li> 
-<li><a href="https://support.mozilla.org/en-US/kb/update-firefox-latest-version" target="_blank" rel="noopener noreferrer">Firefox</a></li> 
-<li><a href="https://support.apple.com/en-us/HT204416" target="_blank" rel="noopener noreferrer">Safari</a></li> 
-<li>The Windows operating system manages certificate bundles for <a href="http://windows.microsoft.com/en-us/internet-explorer/which-version-am-i-using#ie=other" target="_blank" rel="noopener noreferrer">Internet Explorer and Microsoft Edge</a>, so you must update Windows as well.</li> 
-<p>If your application is using a custom trust store, you must add the <a href="https://www.amazontrust.com/repository/" target="_blank" rel="noopener noreferrer">Amazon root CAs</a> to your application’s trust store. The instructions for doing this vary based on the application or platform. Please refer to the documentation for the application or platform you are using.</p> 
-<h4>AWS SDKs and CLIs</h4> 
-<p>Most&nbsp;<a href="https://aws.amazon.com/tools/" target="_blank" rel="noopener noreferrer">AWS SDKs and CLIs</a> are not impacted by the transition to the Amazon Trust Services CA. If you are using a version of the Python AWS SDK or CLI released before October 29, 2013, you&nbsp;must upgrade. The .NET, Java, PHP, Go, JavaScript, and C++ SDKs and CLIs do not bundle any certificates, so their certificates come from the underlying operating system. The Ruby SDK has included at least one of the required CAs since June 10, 2015. Before that date, the Ruby V2 SDK did not bundle certificates.</p> 
-<h3>Certificate pinning</h3> 
-<p>If you are using a technique called <em>certificate pinning</em> to lock down the CAs you trust on a domain-by-domain basis, you must adjust your pinning to include the Amazon Trust Services CAs. Certificate pinning helps defend you from an attacker&nbsp;using&nbsp;misissued certificates to fool an application into creating a connection to a spoofed host (an illegitimate host masquerading as a legitimate host). The restriction to a specific, pinned certificate is made by checking that the certificate issued is the expected certificate. This is done by checking that the hash of the certificate public key received from the server matches the expected hash stored in the application. If the hashes do not match, the code stops the connection.</p> 
-<p>AWS recommends against using certificate pinning because it introduces a potential availability risk. If the certificate to which you pin is replaced, your application will fail to connect. If your use case requires pinning, we&nbsp;recommend that you pin to a CA rather than to an individual certificate. If you are pinning to an Amazon Trust Services CA, you should pin to all&nbsp;CAs shown in the table earlier in this post.</p> 
-<p>If you have comments about this post, submit them in the “Comments” section below. If you have questions about this post, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=206" target="_blank" rel="noopener noreferrer">ACM forum</a>.</p> 
-<p>– Jonathan</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-5777');
 });
 </script> 
 </article> 

@@ -452,11 +452,11 @@ import (
 &quot;github.com/aws/aws-sdk-go/aws/session&quot;
 &quot;github.com/aws/aws-sdk-go/service/dynamodb&quot;
 &quot;github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute&quot;
+&quot;github.com/bowmessage/test/xray&quot;
 &quot;github.com/revel/revel&quot;
 )
-const TABLE_NAME = &quot;guestbook&quot;
-const SUCCESS = &quot;Success.\n&quot;
-const DAY = 86400
+const tableName = &quot;guestbook&quot;
+const success = &quot;Success.\n&quot;
 var letters = []rune(&quot;ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot;)
 func init() {
 rand.Seed(time.Now().UnixNano())
@@ -484,9 +484,11 @@ ID      string
 func (c Book) ddb() *dynamodb.DynamoDB {
 if c.ddbClient == nil {
 sess := session.Must(session.NewSession(&amp;aws.Config{
-Region: aws.String(endpoints.UsWest2RegionID),
+Region:     aws.String(endpoints.UsWest2RegionID),
+MaxRetries: aws.Int(3),
 }))
 c.ddbClient = dynamodb.New(sess)
+xray.AWS(c.ddbClient.Client) // add subsegment-generating X-Ray handlers to this client
 }
 return c.ddbClient
 }
@@ -506,22 +508,24 @@ if err != nil {
 return c.RenderError(err)
 }
 putItemInput := &amp;dynamodb.PutItemInput{
-TableName: aws.String(TABLE_NAME),
+TableName: aws.String(tableName),
 Item:      item,
 }
-_, err = c.ddb().PutItem(putItemInput)
+goRequest := c.Request.In.(*revel.GoRequest)
+_, err = c.ddb().PutItemWithContext(goRequest.Original.Context(), putItemInput)
 if err != nil {
 return c.RenderError(err)
 }
-return c.RenderText(SUCCESS)
+return c.RenderText(success)
 }
 // List allows users to list all signatures in the book.
 func (c Book) List() revel.Result {
 scanInput := &amp;dynamodb.ScanInput{
-TableName: aws.String(TABLE_NAME),
+TableName: aws.String(tableName),
 Limit:     aws.Int64(100),
 }
-res, err := c.ddb().Scan(scanInput)
+goRequest := c.Request.In.(*revel.GoRequest)
+res, err := c.ddb().ScanWithContext(goRequest.Original.Context(), scanInput)
 if err != nil {
 return c.RenderError(err)
 }
@@ -561,7 +565,8 @@ func init() {
 revel.OnAppStart(installXRayHandler)
 }
 func installXRayHandler() {
-revel.Server.Handler = xray.Handler(xray.NewFixedSegmentNamer(&quot;GuestbookApp&quot;), revel.Server.Handler)
+server := revel.CurrentEngine.Engine().(*http.Server)
+server.Handler = xray.Handler(xray.NewFixedSegmentNamer(&quot;GuestbookApp&quot;), server.Handler)
 }
 </code> 
 <p>The application will now emit a segment for each incoming web request. The service graph appears:<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/12/28/Screen-Shot-2017-12-21-at-3.00.24-PM-1024x508.png" /></p> 

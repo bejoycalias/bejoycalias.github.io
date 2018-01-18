@@ -190,6 +190,238 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="blogsataws1.html">Page 1</a>|<a href="blogsataws2.html">Page 2</a>|<a href="blogsataws3.html">Page 3</a>|<a href="blogsataws4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/29/s3_select-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">S3 Select and Glacier Select – Retrieving Subsets of Objects</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2017-11-29T09:21:33+00:00">29 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/storage/amazon-glacier/" title="View all posts in Amazon Glacier*"><span property="articleSection">Amazon Glacier*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/storage/" title="View all posts in Storage*"><span property="articleSection">Storage*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/top-posts/" title="View all posts in Top Posts*"><span property="articleSection">Top Posts*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/s3-glacier-select/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-22348" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=22348&amp;disqus_title=S3+Select+and+Glacier+Select+%26%238211%3B+Retrieving+Subsets+of+Objects&amp;disqus_url=https://aws.amazon.com/blogs/aws/s3-glacier-select/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-22348');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/s3/" title="">Amazon Simple Storage Service (S3)</a> stores data for millions of applications used by market leaders in every industry. Many of these customers also use <a href="https://aws.amazon.com/glacier/" title="">Amazon Glacier</a> for secure, durable, and extremely low-cost archival storage. With S3, I can store as many objects as I want and individual objects can be as large as 5 terabytes. Data in object storage have traditionally been accessed as a whole entities, meaning when you ask for a 5 gigabyte object you get all 5 gigabytes. It’s the nature of object storage. Today we’re challenging that paradigm by announcing two new capabilities for S3 and Glacier that allow you to use simple SQL expressions to pull out only the bytes you need from those objects. This fundamentally enhances virtually every application that accesses objects in S3 or Glacier.</p> 
+<b>S3 Select</b> 
+<p><a href="https://aws.amazon.com/s3/details/#s3-select">S3 Select</a>, launching in preview, enables applications to retrieve only a subset of data from an object by using simple SQL expressions. By using S3 Select to retrieve only the data needed by your application, you can achieve drastic performance increases – in many cases you can get as much as a 400% improvement.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/28/s3_select.png" /></p> 
+<p>As an example let’s imagine you’re a developer at a large retailer and you need to analyze the weekly sales data from a single store, but the data for all 200 stores is saved in a new GZIP-ed CSV every day. Without S3 Select, you would need to download, decompress and process the entire CSV to get the data you needed. With S3 Select, you can use a simple SQL expression to return only the data from the store you’re interested in, instead of retrieving the entire object. This means you’re dealing with an order of magnitude less data which improves the performance of your underlying applications.</p> 
+<p>Let’s look at a quick Python example.</p> 
+<code class="lang-python">import boto3
+from s3select import ResponseHandler
+class PrintingResponseHandler(ResponseHandler):
+def handle_records(self, record_data):
+print(record_data.decode('utf-8'))
+handler = PrintingResponseHandler()
+s3 = boto3.client('s3')
+response = s3.select_object_content(
+Bucket=&quot;super-secret-reinvent-stuff&quot;,
+Key=&quot;stuff.csv&quot;,
+SelectRequest={
+'ExpressionType': 'SQL',
+<b>'Expression': 'SELECT s._1 FROM S3Object AS s'',</b>
+'InputSerialization': {
+'CompressionType': 'NONE',
+'CSV': {
+'FileHeaderInfo': 'IGNORE',
+'RecordDelimiter': '\n',
+'FieldDelimiter': ',',
+}
+},
+'OutputSerialization': {
+'CSV': {
+'RecordDelimiter': '\n',
+'FieldDelimiter': ',',
+}
+}
+}
+)
+handler.handle_response(response['Body'])</code> 
+<p>Pretty cool! To enable this behavior S3 Select uses a binary wire-protocol to return the objects. For now, that requires the use of a small additional library to help with deserialization.</p> 
+<p>We expect customers to use S3 Select to accelerate all sorts of applications. For example, this partial data retrieval ability is especially useful for serverless applications built with <a href="https://aws.amazon.com/lambda/" title="">AWS Lambda</a>. When we modified the <a href="https://github.com/awslabs/lambda-refarch-mapreduce">Serverless MapReduce</a> reference architecture to retrieve only the data needed using S3 Select we saw a 2X improvement in performance and an 80% reduction in cost.</p> 
+<p>The S3 Select team also created a Presto connector which can provide an immediate performance boost for <a href="https://aws.amazon.com/elasticmapreduce/" title="">Amazon EMR</a> with no changes to your queries. We put this connector to test by running a complex query that filtered almost 99% of the data retrieved from S3. With S3 Select disabled, Presto had to scan and filter entire objects from S3 but with S3 Select enabled, Presto leveraged S3 Select to retrieve only the data needed for the query.</p> 
+<code class="lang-bash">[hadoop@ip-172-31-19-123 ~]$ time presto-cli --catalog hive --schema default --session hive.s3_optimized_select_enabled=false -f query.sql
+&quot;31.965496&quot;,&quot;127178&quot;,&quot;5976&quot;,&quot;70.89902&quot;,&quot;130147&quot;,&quot;6996&quot;,&quot;37.17715&quot;,&quot;138092&quot;,&quot;8678&quot;,&quot;135.49536&quot;,&quot;103926&quot;,&quot;11446&quot;,&quot;82.35177&quot;,&quot;116816&quot;,&quot;8484&quot;,&quot;67.308304&quot;,&quot;135811&quot;,&quot;10104&quot;
+real  0m35.910s
+user  0m2.320s
+sys   0m0.124s
+[hadoop@ip-172-31-19-123 ~]$ time presto-cli --catalog hive --schema default --session hive.s3_optimized_select_enabled=true -f query.sql
+&quot;31.965496&quot;,&quot;127178&quot;,&quot;5976&quot;,&quot;70.89902&quot;,&quot;130147&quot;,&quot;6996&quot;,&quot;37.17715&quot;,&quot;138092&quot;,&quot;8678&quot;,&quot;135.49536&quot;,&quot;103926&quot;,&quot;11446&quot;,&quot;82.35177&quot;,&quot;116816&quot;,&quot;8484&quot;,&quot;67.308304&quot;,&quot;135811&quot;,&quot;10104&quot;
+real  0m6.566s
+user  0m2.136s
+sys   0m0.088s</code> 
+<p>That query took 35.9 seconds without S3 Select and only 6.5 seconds with S3 Select. That’s 5X faster!</p> 
+<h3>Things To Know</h3> 
+<li>While in preview S3 Select supports CSV or JSON files with or without GZIP compression. During the preview objects that are encrypted at rest are not supported.</li> 
+<li>There are no charges for S3 Select while in preview.</li> 
+<li><a href="https://aws.amazon.com/athena" title="">Amazon Athena</a>, <a href="https://aws.amazon.com/redshift/" title="">Amazon Redshift</a>, and <a href="https://aws.amazon.com/elasticmapreduce/" title="">Amazon EMR</a> as well as partners like Cloudera, DataBricks, and Hortonworks will all support S3 Select.</li> 
+<b>Glacier Select</b> 
+<p>Some companies in highly regulated industries like Financial Services, Healthcare, and others, write data directly to Amazon Glacier to satisfy compliance needs like SEC Rule 17a-4 or HIPAA. Many S3 users have lifecycle policies designed to save on storage costs by moving their data into Glacier when they no longer need to access it on a regular basis. Most legacy archival solutions, like on premise tape libraries, have highly restricted data retrieval throughput and are unsuitable for rapid analytics or processing. If you want to make use of data stored on one of those tapes you might have to wait for weeks to get useful results. In contrast, cold data stored in Glacier can now be easily queried within minutes.</p> 
+<p>This unlocks a lot of exciting new business value for your archived data. <a href="https://aws.amazon.com/glacier/details/#amazon-glacier-select">Glacier Select </a>allows you to to perform filtering directly against a Glacier object using standard SQL statements.</p> 
+<p>Glacier Select works just like any other retrieval job except it has an additional set of parameters you can pass in initiate job request. <code>SelectParameters</code></p> 
+<p>Here a quick example:</p> 
+<code class="lang-python">import boto3
+glacier = boto3.client(&quot;glacier&quot;)
+jobParameters = {
+&quot;Type&quot;: &quot;select&quot;, &quot;ArchiveId&quot;: &quot;ID&quot;,
+&quot;Tier&quot;: &quot;Expedited&quot;,
+&quot;SelectParameters&quot;: {
+&quot;InputSerialization&quot;: {&quot;csv&quot;: {}},
+&quot;ExpressionType&quot;: &quot;SQL&quot;,
+<b>&quot;Expression&quot;: &quot;SELECT * FROM archive WHERE _5='498960'&quot;</b>,
+&quot;OutputSerialization&quot;: {
+&quot;csv&quot;: {}
+}
+},
+&quot;OutputLocation&quot;: {
+&quot;S3&quot;: {&quot;BucketName&quot;: &quot;glacier-select-output&quot;, &quot;Prefix&quot;: &quot;1&quot;}
+}
+}
+glacier.initiate_job(vaultName=&quot;reInventSecrets&quot;, jobParameters=jobParameters)
+</code> 
+<h3>Things To Know</h3> 
+<p>Glacier Select is generally available in all commercial regions that have Glacier.</p> 
+<p>Glacier is priced in 3 dimensions.</p> 
+<li>GB of Data Scanned</li> 
+<li>GB of Data Returned</li> 
+<li>Select Requests</li> 
+<p>Pricing for each dimension is determined by the speed at which you want your results returned: expedited (1-5 minutes), standard (3-5 hours), and bulk (5-12 hours).</p> 
+<p>Soon, in 2018, Athena will be integrated with Glacier using Glacier Select.</p> 
+<p>I hope you’re able to get started enhancing your applications or building new ones with these capabilities.&nbsp;You can apply for this preview at the <a href="https://pages.awscloud.com/amazon-s3-select-preview.html">S3 Select Preview Application Page</a>.</p> 
+<p>– <a href="https://twitter.com/jrhunt/">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-22348');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/29/nept.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Amazon Neptune – A Fully Managed Graph Database Service</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2017-11-29T08:57:02+00:00">29 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/database/amazon-neptune/" title="View all posts in Amazon Neptune"><span property="articleSection">Amazon Neptune</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/database/" title="View all posts in Database*"><span property="articleSection">Database*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/amazon-neptune-a-fully-managed-graph-database-service/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-22144" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=22144&amp;disqus_title=Amazon+Neptune+%26%238211%3B+A+Fully+Managed+Graph+Database+Service&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-neptune-a-fully-managed-graph-database-service/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-22144');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Of all the data structures and algorithms we use to enable our modern lives, <b>graphs</b> are changing the world everyday. Businesses continuously create and ingest rich data with complex relationships. Yet developers are still forced to model these complex relationships in traditional databases. This leads to frustratingly complex queries with high costs and increasingly poor performance as you add relationships. We want to make it easy for you to deal with these modern and increasingly complex datasets, relationships, and patterns.</p> 
+<b>Hello, Amazon Neptune</b> 
+<p>Today we’re launching a limited preview (sign up here)&nbsp;of <a href="https://aws.amazon.com/neptune/">Amazon Neptune</a>, a fast and reliable graph database service that makes it easy to gain insights from relationships among your highly connected datasets. The core of Amazon Neptune is a purpose-built, high-performance graph database engine optimized for storing billions of relationships and querying the graph with milliseconds of latency. Delivered as a fully managed database, Amazon Neptune frees customers to focus on their applications rather than tedious undifferentiated operations like maintenance, patching, backups, and restores. The service supports fast-failover, point-in-time recovery, and Multi-AZ deployments for high availability. With support for up to 15 read replicas you can scale query throughput to 100s of thousands of queries per second. Amazon Neptune runs within your <a href="https://aws.amazon.com/vpc/" title="">Amazon Virtual Private Cloud</a> and allows you to encrypt your data at rest, giving you complete control over your data integrity in transit and at rest.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_1.png" /></p> 
+<p>There are <b>a lot</b> of interesting features in this service but graph databases may be an unfamiliar topic for many of you so lets make sure we’re using the same vocabulary.</p> 
+<b>Graph Databases</b> 
+<p>A graph database is a store of vertices (nodes) and edges (relationships or connections) which can both have properties stored as key-value pairs. Graph databases are useful for connected, contextual, relationship-driven data. Some examples applications are social media networks, recommendation engines, driving directions, logistics, diagnostics, fraud detection, and genomic sequencing.</p> 
+<p>Amazon Neptune supports two open standards for describing and querying your graphs:</p> 
+<li><a href="https://tinkerpop.apache.org/">Apache TinkerPop3</a> style Property Graphs queried with Gremlin. Gremlin is a graph traversal language where a query is a traversal made up of discrete steps following an edge to a node.&nbsp;Your existing tools and clients that are designed to work with TinkerPop&nbsp;allow you to quickly get started with Neptune.</li> 
+<li>Resource Description Framework (RDF) queried with SPARQL. SPARQL is a declarative language based on <a href="https://www.w3.org/standards/semanticweb/">Semantic Web</a> standards from W3C. It follows a subject-&gt;predicate-&gt;object model. Specifically Neptune supports the following standards: RDF 1.1., SPARQL Query 1.1., SPARQL Update 1.1, and the SPARQL Protocol 1.1.</li> 
+<p>If you have existing applications that work with SPARQL or TinkerPop you should be able to start using Neptune by simply updating the endpoint your applications connect to.</p> 
+<p>Let’s walk through launching Amazon Neptune.</p> 
+<b>Launching Amazon Neptune</b> 
+<p>Start by navigating to the Neptune console then click “Launch Neptune” to start the launch wizard.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_start_redux.png" /></p> 
+<p>On this first screen you simply name your instance and select an instance type. Next we configure the advanced options. Many of these may look familiar to you if you’ve launched an instance-based AWS database service before, like <a href="https://aws.amazon.com/rds/" title="">Amazon Relational Database Service (RDS)</a> or <a href="https://aws.amazon.com/elasticache/" title="">Amazon ElastiCache</a>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_4.png" /></p> 
+<p>Amazon Neptune runs securely in your VPC and can&nbsp;create its own security group that you can add your EC2 instances to for easy-access.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_3-1.png" /></p> 
+<p>Next, we are able to configure some additional options like the parameter group, port, and a cluster name.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_5.png" /></p> 
+<p>On this next screen we can enable KMS based encryption-at-rest, failover priority, and a backup retention time.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/console_6-1.png" /></p> 
+<p>Similar to RDS maintenance of the&nbsp;database can be handled by the service.</p> 
+<p>Once the instances are done provisioning you can find your connection endpoint on the Details page of the cluster. In my case it’s <code>triton.cae1ofmxxhy7.us-east-1.rds.amazonaws.com</code>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/25/cluster_endpoint_1.png" /></p> 
+<b>Using Amazon Neptune</b> 
+<p>As stated above there are two different query engines that you can use with Amazon Neptune.</p> 
+<p>To connect to the gremlin endpoint you can use the endpoint with <code>/gremlin</code> to do something like:</p> 
+<code class="lang-bash">
+curl -X POST -d '{&quot;gremlin&quot;:&quot;g.V()&quot;}' https://your-neptune-endpoint:8182/gremlin
+</code> 
+<p>You can similarly connect to the SPARQL endpoint with <code>/sparql</code></p> 
+<code class="lang-bash">
+curl -G https://your-neptune-endpoint:8182/sparql --data-urlencode 'query=select ?s ?p ?o where {?s ?p ?o}'
+</code> 
+<p>Before we can query data we need to populate our database. Let’s imagine we’re modeling AWS re:Invent and use the bulk loading API to insert some data.<br /> For Property Graph, Neptune supports CSVs stored in <a href="https://aws.amazon.com/s3/" title="">Amazon Simple Storage Service (S3)</a> for loading node, node properties, edges, and edge properties.</p> 
+<p>A typical CSV for vertices looks like this:</p> 
+<code class="lang-csv">~label,name,email,title,~id
+Attendee,George Harrison,george@thebeatles.com,Lead Guitarist,1
+Attendee,John Lennon,john@thebeatles.com,Guitarist,2
+Attendee,Paul McCartney,paul@thebeatles.com,Lead Vocalist,3
+</code> 
+<p>The edges CSV looks something like this:</p> 
+<code class="lang-csv">~label,~from,~to ,~id
+attends,2,ARC307,attends22
+attends,3,SRV422,attends27
+</code> 
+<p>Now to load a similarly structured CSV into Neptune we run something like this:</p> 
+<code class="lang-bash">curl -H 'Content-Type: application/json' \
+https://neptune-endpoint:8182/loader -d '
+{
+&quot;source&quot;: &quot;s3://super-secret-reinvent-data/vertex.csv&quot;,
+&quot;format&quot;: &quot;csv&quot;,
+&quot;region&quot;: &quot;us-east-1&quot;,
+&quot;accessKey&quot;: &quot;AKIATHESEARENOTREAL&quot;,
+&quot;secretKey&quot;: &quot;ThEseARE+AlsoNotRea1K3YSl0l1234coVFefE12&quot;  
+}'
+</code> 
+<p>Which would return:</p> 
+<code class="lang-json">{
+&quot;status&quot; : &quot;200 OK&quot;,
+&quot;payload&quot; : {
+&quot;loadId&quot; : &quot;2cafaa88-5cce-43c9-89cd-c1e68f4d0f53&quot;
+}
+}
+</code> 
+<p>I could take that result and query the loading status: <code>curl https://neptune-endpoint:8182/loader/2cafaa88-5cce-43c9-89cd-c1e68f4d0f53</code></p> 
+<code class="lang-json">{
+&quot;status&quot; : &quot;200 OK&quot;,
+&quot;payload&quot; : {
+&quot;feedCount&quot; : [{&quot;LOAD_COMPLETED&quot; : 1}],
+&quot;overallStatus&quot; : {
+&quot;fullUri&quot; : &quot;s3://super-secret-reinvent-data/stuff.csv&quot;,
+&quot;runNumber&quot; : 1,
+&quot;retryNumber&quot; : 0,
+&quot;status&quot; : &quot;LOAD_COMPLETED&quot;,
+&quot;totalTimeSpent&quot; : 1,
+&quot;totalRecords&quot; : 987,
+&quot;totalDuplicates&quot; : 0,
+&quot;parsingErrors&quot; : 0,
+&quot;datatypeMismatchErrors&quot; : 0,
+&quot;insertErrors&quot; : 0
+}
+}
+}</code> 
+<p>For this particular data serialization format I’d repeat this loading process for my edges as well.</p> 
+<p>For RDF, Neptune supports four serializations: Turtle, N-Triples, N-Quads, and RDF/XML. I could load all of these through the same loading API.</p> 
+<p>Now that I have my data in my database I can run some queries. In Gremlin, we write our queries as Graph Traversals. I’m a big Paul McCartney fan so I want to find all of the sessions he’s attending:<br /> <code>g.V().has(&quot;name&quot;,&quot;Paul McCartney&quot;).out(&quot;attends&quot;).id()</code></p> 
+<p>This defines a graph traversal that finds all of the nodes that have the property “name” with the value “Paul McCartney” (there’s only one!). Next it follows all of the edges from that node that are of the type “attends” and gets the ids of the resulting nodes.</p> 
+<code>
+==&gt;ENT332
+==&gt;SRV422
+==&gt;DVC201
+==&gt;GPSBUS216
+==&gt;ENT323
+</code> 
+<p>Paul looks like a busy guy.</p> 
+<p>Hopefully this gives you a brief overview of the capabilities of graph databases. Graph databases open up a new set of possibilities for a lot of customers and Amazon Neptune makes it easy to store and query your data at scale. I’m excited to see what amazing new products our customers build. Sign up for the <a href="https://pages.awscloud.com/NeptunePreview.html">preview</a> today.</p> 
+<p>– <a href="https://twitter.com/jrhunt/">Randall</a></p> 
+<p>P.S. Major thanks to Brad Bebee and Divij Vaidya for helping to create this post!</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-22144');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/29/ddb_add_1_region_3.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Amazon DynamoDB Update – Global Tables and On-Demand Backup</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -639,91 +871,6 @@ AWS.Blog.commenting('#aws-comment-trigger-21723');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-21723');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Bare Metal Instances with Direct Access to Hardware</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2017-11-28T20:47:46+00:00">28 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2-bare-metal/" title="View all posts in Amazon EC2 Bare Metal"><span property="articleSection">Amazon EC2 Bare Metal</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/top-posts/" title="View all posts in Top Posts*"><span property="articleSection">Top Posts*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/new-amazon-ec2-bare-metal-instances-with-direct-access-to-hardware/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-21776" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=21776&amp;disqus_title=Amazon+EC2+Bare+Metal+Instances+with+Direct+Access+to+Hardware&amp;disqus_url=https://aws.amazon.com/blogs/aws/new-amazon-ec2-bare-metal-instances-with-direct-access-to-hardware/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-21776');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>When customers come to us with new and unique requirements for AWS, we listen closely, ask lots of questions, and do our best to understand and address their needs. When we do this, we make the resulting service or feature generally available; we do not build one-offs or “snowflakes” for individual customers. That model is messy and hard to scale and is not the way we work.</p> 
-<p>Instead, every AWS customer has access to whatever it is that we build, and everyone benefits. <a href="https://aws.amazon.com/blogs/aws/vmware-cloud-on-aws-now-available/">VMware Cloud on AWS</a> is a good example of this strategy in action. They told us that they wanted to run their virtualization stack directly on the hardware, within the <a href="https://aws.amazon.com/" title="">AWS Cloud</a>, giving their customers access to the elasticity, security, and reliability (not to mention the broad array of services) that AWS offers.</p> 
-<p>We knew that other customers also had interesting use cases for bare metal hardware and didn’t want to take the performance hit of nested virtualization. They wanted access to the physical resources for applications that take advantage of low-level hardware features such as <a href="https://www.intel.com/content/www/us/en/architecture-and-technology/resource-director-technology.html">performance counters</a> and <a href="https://www.intel.com/content/www/us/en/virtualization/virtualization-technology/intel-virtualization-technology.html">Intel<sup>&reg;</sup> VT</a> that are not always available or fully supported in virtualized environments, and also for applications intended to run directly on the hardware or licensed and supported for use in non-virtualized environments.</p> 
-<p>Our multi-year effort to move networking, storage, and other EC2 features out of our virtualization platform and into dedicated hardware was already well underway and provided the perfect foundation for a possible solution. This work, as I described in <a href="https://aws.amazon.com/blogs/aws/now-available-compute-intensive-c5-instances-for-amazon-ec2/">Now Available – Compute-Intensive C5 Instances for Amazon EC2</a>, includes a set of dedicated hardware accelerators.</p> 
-<p>Now that we have provided VMware with the bare metal access that they requested, we are doing the same for all AWS customers. I’m really looking forward to seeing what you can do with them!</p> 
-<p><span style="text-decoration: underline"><strong>New Bare Metal Instances</strong></span><br /> Today we are launching a public preview the <strong>i3.metal</strong> instance, the first in a series of EC2 instances that offer the best of both worlds, allowing the operating system to run directly on the underlying hardware while still providing access to all of the benefits of the cloud. The instance gives you direct access to the processor and other hardware, and has the following specifications:</p> 
-<li><strong>Processing</strong> – Two Intel Xeon E5-2686 v4 processors running at 2.3 GHz, with a total of 36 hyperthreaded cores (72 logical processors).</li> 
-<li><strong>Memory</strong> – 512 GiB.</li> 
-<li><strong>Storage</strong> – 15.2 terabytes of local, SSD-based NVMe storage.</li> 
-<li><strong>Network</strong> – 25 Gbps of ENA-based enhanced networking.</li> 
-<p>Bare Metal instances are full-fledged members of the EC2 family and can take advantage of <a href="https://aws.amazon.com/elasticloadbalancing" title="">Elastic Load Balancing</a>, <a href="https://aws.amazon.com/autoscaling" title="">Auto Scaling</a>, <a href="https://aws.amazon.com/cloudwatch/" title="">Amazon CloudWatch</a>, <a href="https://aws.amazon.com/blogs/aws/new-auto-recovery-for-amazon-ec2/">Auto Recovery</a>, and so forth. They can also access the full suite of AWS <a href="https://aws.amazon.com/products/databases/">database</a>, <a href="https://aws.amazon.com/iot/">IoT</a>, <a href="https://aws.amazon.com/mobile/">mobile</a>, <a href="https://aws.amazon.com/products/analytics/">analytics</a>, <a href="https://aws.amazon.com/amazon-ai/">artificial intelligence</a>, and <a href="https://aws.amazon.com/security/">security</a> services.</p> 
-<p><strong><span style="text-decoration: underline">Previewing Now</span></strong><br /> We are launching a public preview of the Bare Metal instances today; please <a href="https://pages.awscloud.com/amazon-ec2-bare-metal-instances-preview.html">sign up now</a> if you want to try them out.</p> 
-<p>You can now bring your specialized applications or your own stack of virtualized components to AWS and run them on Bare Metal instances. If you are using or thinking about using containers, these instances make a great host for <a href="https://coreos.com/">CoreOS</a>.</p> 
-<p>An AMI that works on one of the <a href="https://aws.amazon.com/blogs/aws/now-available-compute-intensive-c5-instances-for-amazon-ec2/">new C5 instances</a> should also work on an I3 Bare Metal Instance. It must have the ENA and NVMe drivers, and must be tagged for ENA.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-21776');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2017/11/28/mq_con_featured.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon MQ – Managed Message Broker Service for ActiveMQ</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2017-11-28T13:07:37+00:00">28 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/messaging/amazon-mq/" title="View all posts in Amazon MQ*"><span property="articleSection">Amazon MQ*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/amazon-mq-managed-message-broker-service-for-activemq/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-21788" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=21788&amp;disqus_title=Amazon+MQ+%26%238211%3B+Managed+Message+Broker+Service+for+ActiveMQ&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-mq-managed-message-broker-service-for-activemq/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-21788');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Messaging holds the parts of a distributed application together, while also adding resiliency and enabling the implementation of highly scalable architectures. For example, <a href="https://aws.amazon.com/blogs/aws/prime-day-2017-powered-by-aws/">earlier this year</a>, <a href="https://aws.amazon.com/sqs/" title="">Amazon Simple Queue Service (SQS)</a> and <a href="https://aws.amazon.com/sns/" title="">Amazon Simple Notification Service (SNS)</a> supported the processing of customer orders on Prime Day, collectively processing 40 billion messages at a rate of 10 million per second, with no customer-visible issues.</p> 
-<p>SQS and SNS have been used extensively for applications that were born in the cloud. However, many of our larger customers are already making use of open-sourced or commercially-licensed message brokers. Their applications are mission-critical, and so is the messaging that powers them. Our customers describe the setup and on-going maintenance of their messaging infrastructure as “painful” and report that they spend at least 10 staff-hours per week on this chore.</p> 
-<p><span style="text-decoration: underline"><strong>New Amazon MQ</strong></span><br /> Today we are launching <a href="https://aws.amazon.com/amazon-mq/" title="">Amazon MQ</a> – a managed message broker service for <a href="http://activemq.apache.org/">Apache ActiveMQ</a> that lets you get started in minutes with just three clicks! As you may know, ActiveMQ is a popular open-source message broker that is fast &amp; feature-rich. It offers queues and topics, durable and non-durable subscriptions, push-based and poll-based messaging, and filtering.</p> 
-<p>As a managed service, <span title="">Amazon MQ</span> takes care of the administration and maintenance of ActiveMQ. This includes responsibility for broker provisioning, patching, failure detection &amp; recovery for high availability, and message durability. With <span title="">Amazon MQ</span>, you get direct access to the ActiveMQ console and industry standard APIs and protocols for messaging, including JMS, NMS, AMQP, STOMP, MQTT, and WebSocket. This allows you to move from any message broker that uses these standards to <span title="">Amazon MQ</span>–along with the supported applications–without rewriting code.</p> 
-<p>You can create a single-instance <span title="">Amazon MQ</span> broker for development and testing, or an active/standby pair that spans AZs, with quick, automatic failover. Either way, you get data replication across AZs and a pay-as-you-go model for the broker instance and message storage.</p> 
-<p><span title="">Amazon MQ</span> is a full-fledged part of the AWS family, including the use of <a href="https://aws.amazon.com/iam/" title="">AWS Identity and Access Management (IAM)</a> for authentication and authorization to use the service API. You can use <a href="https://aws.amazon.com/cloudwatch/" title="">Amazon CloudWatch</a> metrics to keep a watchful eye metrics such as queue depth and initiate <a href="https://aws.amazon.com/autoscaling" title="">Auto Scaling</a> of your consumer fleet as needed.</p> 
-<p><span style="text-decoration: underline"><strong>Launching an Amazon MQ Broker</strong></span><br /> To get started, I open up the <a href="https://console.aws.amazon.com/amazon-mq/home">Amazon MQ Console</a>, select the desired AWS Region, enter a name for my broker, and click on <strong>Next step</strong>:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2017/mq_con_4.png" /></p> 
-<p>Then I choose the instance type, indicate that I want to create a standby , and click on <strong>Create broker</strong> (I can select a VPC and fine-tune other settings in the <strong>Advanced settings</strong> section):</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2017/mq_create_2.png" /></p> 
-<p>My broker will be created and ready to use in 5-10 minutes:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2017/mq_go_for_broker_2.png" /></p> 
-<p>The URLs and endpoints that I use to access my broker are all available at a click:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2017/mq_my_broker_details_3.png" /></p> 
-<p>I can access the ActiveMQ Web Console at the link provided:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2017/mq_mq_console_3.png" /></p> 
-<p>The broker publishes instance, topic, and queue metrics to CloudWatch. Here are the instance metrics:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2017/mq_broker_metrics_1.png" /></p> 
-<p>To learn more, read the <a href="https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/welcome.html">Amazon MQ Developer Guide</a>.</p> 
-<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> <span title="">Amazon MQ</span> is available now and you can start using it today in the <span title="">US East (Northern Virginia)</span>, <span title="">US East (Ohio)</span>, <span title="">US West (Oregon)</span>, <span title="">EU (Ireland)</span>, <span title="">EU (Frankfurt)</span>, and <span title="">Asia Pacific (Sydney)</span> Regions.</p> 
-<p>The <a href="https://aws.amazon.com/free/" title="">AWS Free Tier</a> lets you use a single-AZ micro instance for up to 750 hours and to store up to 1 gigabyte each month, for one year. After that, billing is based on instance-hours and message storage, plus charges Internet data transfer if the broker is accessed from outside of AWS.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-21788');
 });
 </script> 
 </article> 
