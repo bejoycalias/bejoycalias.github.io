@@ -190,6 +190,113 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/CB-GHE-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Announcing AWS CodeBuild Support for GitHub Enterprise as a Source Type and Shallow Cloning</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Karthik Thirugnanasambandam</span></span> | on 
+<time property="datePublished" datetime="2018-01-25T11:08:36+00:00">25 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/codebuild-support-for-github-enterprise/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>Thank you to my colleague&nbsp;<strong>Harvey Bendana</strong> for this blog on how to&nbsp;do shallow cloning on AWS CodeBuild using GitHub Enterprise as a source.</em></p> 
+<p>Today we are announcing support for using GitHub Enterprise as a source type for CodeBuild. You can now initiate build tasks from changes in source code hosted on your own implementation of GitHub Enterprise.</p> 
+<p>We are also announcing support for shallow cloning of a repo when you use CodeCommit, BitBucket, GitHub, or GitHub Enterprise as a source type. Shallow cloning allows you to truncate history of a repo in order to save space and speed up cloning times.</p> 
+<p>In this post, I’ll walk you through how to configure GitHub Enterprise as a source type with a defined clone depth for an AWS CodeBuild project. I’ll also show you all the moving parts associated with a successful implementation.</p> 
+<p><a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> is a fully managed build service. There are no servers to provision and scale, or software to install, configure, and operate. You just specify the location of your source code, choose your build settings, and CodeBuild runs build scripts for compiling, testing, and packaging your code.</p> 
+<p>GitHub Enterprise is the on-premises version of <a href="https://github.com/home">GitHub.com</a>. It makes collaborative coding possible and enjoyable for large-scale enterprise software development teams.</p> 
+<p>Many enterprises choose GitHub Enterprise as their preferred source code/version control repository because it can be hosted in their own trusted network, whether that is an on-premises data center or their own Amazon VPCs.</p> 
+<h3>Requirements</h3> 
+<li>You’ll need an AWS account.</li> 
+<li>You’ll need a GitHub Enterprise implementation with a repo. If you’d like to deploy one inside your own Amazon VPC, check out our <a href="https://aws.amazon.com/quickstart/architecture/github-enterprise/">Quick Start Guide</a>.</li> 
+<li>You’ll need an S3 bucket to store your GitHub Enterprise self-signed SSL certificate.</li> 
+<b>Download your GitHub Enterprise SSL certificate:</b> 
+<p><strong>Note:</strong> The following steps are required only for self-signed certificates. You can forego installation of a certificate if you are using self-signed certificates and default to HTTP communication with your repo. For this post, I am using a self-signed certificate and the Firefox browser. These steps may vary, depending on your browser of choice.</p> 
+<ol> 
+<li>Navigate to your GitHub Enterprise environment and sign in with your credentials.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture1.png" /></p> 
+<p>2. Choose the lock icon in the upper-left corner to view and export your GitHub Enterprise certificate.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture2.png" /></p> 
+<p>3. When you export and download your certificate, make sure you select the format type, which includes the entire certificate chain.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture3.png">https://console.aws.amazon.com/s3</a> and upload your certificate to an S3 bucket in your AWS account.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture4.png" /></p> 
+<p>Now I will show you how to create an AWS CodeBuild project.</p> 
+<b>Create a sample AWS CodeBuild project:</b> 
+<ol> 
+<li>Open the AWS CodeBuild console at <a href="https://console.aws.amazon.com/codebuild">https://console.aws.amazon.com/codebuild</a>.</li> 
+</ol> 
+<p>2. If there are no existing build projects, a welcome page is displayed. Choose <strong>Get started</strong>. If you already have build projects, then choose <strong>Create project</strong>.</p> 
+<p>3. On the&nbsp;<strong>Configure your project</strong>&nbsp;page, type a name for your build project. Build project names must be unique across each AWS account.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture5.png" /></p> 
+<p>4. For <strong>Source provider</strong>, choose <strong>GitHub Enterprise</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture6.png" /></p> 
+<p>5. Generate a personal access token in your GitHub Enterprise environment. Under <strong>Select scopes</strong>, select <strong>repo</strong>. For information, see <a href="https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/">Creating a personal access token for the command line</a> on the GitHub Help website.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture7.png" /></p> 
+<p>6. Enter your personal access token in your CodeBuild project and choose <strong>Save Token</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture8.png" /></p> 
+<p>7. Enter the repository URL and choose a Git clone depth value that makes sense for you. Allowed values are <strong>1, 5, 25, or Full</strong>. For this post, I am using a depth of 1.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture9.png" /></p> 
+<p>8. Select the <strong>Webhook</strong> check box.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture10.png" /></p> 
+<p>9. Continue with the rest of the configuration for your project, choosing options that best suit your build needs. For this post, I am using an AWS CodeBuild managed image running the Ubuntu OS with the base runtime configuration. Enter your build specifications or build commands. I am using a simple build command of <strong>git log .</strong> so that it can be easily found in the CloudWatch logs of the CodeBuild project. It will also be used to demonstrate the shallow clone feature.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture11.png" /></p> 
+<p>10. Next, select <strong>Install certificate from your S3</strong> to install your GitHub Enterprise self-signed certificate from S3. For <strong>Bucket of certificate</strong>, I’ve entered the S3 bucket where I uploaded the certificate. For <strong>Object key of certificate</strong>, I’ve entered the name of the certificate.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture12.png" /></p> 
+<p>11. Lastly, configure artifacts, caching, IAM roles, and VPC configurations. For this post, I chose not to generate any artifacts from this build. From the following screenshot, you’ll see I’ve opted out of cache, requested a new IAM role with the required permissions, and have not defined VPC access. Choose <strong>Continue</strong> to validate and complete the creation of the CodeBuild project.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture13.png" /></p> 
+<p><strong>Note</strong>: If your GitHub Enterprise environment is in an Amazon VPC, configure VPC access for your project. Define the VPC ID, subnet ID, and security group so that your project has access to the EC2 instances hosting your GitHub Enterprise environment.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture14.png" /></p> 
+<p>12. After the project is created, a dialog box displays a CodeBuild payload URL and secret. They are used to create a webhook for the repo in the GitHub Enterprise environment.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture15.png" /></p> 
+<b>Create a webhook in your GitHub Enterprise repo:</b> 
+<p>1. In your GitHub Enterprise repo, navigate to <strong>Settings</strong>, choose <strong>Hooks &amp; services</strong>, and then choose <strong>Add webhook</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture16.png" /></p> 
+<p>2. Paste the payload URL and secret into their respective fields. Under <strong>Which events would you like to trigger this webhook</strong>? choose an option. For this post, I am using <strong>Let me select individual events</strong>. I then chose <strong>Pull request</strong> and <strong>Push</strong> as the two event triggers.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture17.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture18.png" /></p> 
+<p>3. Make sure Active is selected and then choose Add webhook.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture19.png" /></p> 
+<p>4. A webhook has now been created in the GitHub Enterprise repo.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture20.png" /></p> 
+<p>Now I will show you how to test this.</p> 
+<b>Trigger your AWS CodeBuild project by pushing a change to the GitHub Enterprise repo</b> 
+<p>1. Clone the repo to the local file system. For information, see <a href="https://services.github.com/on-demand/github-cli/clone-repo-cli">Clone the Repository Using the Command Line</a> on the GitHub Help website. Now create a feature branch, push a change, and generate a pull request for review, and, ultimately, merge to master. Here is the state of the GitHub Enterprise repo and AWS CodeBuild project before pushing a change:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture21.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture22.png" /></p> 
+<p>2. Use <a href="https://git-scm.com/book/en/v2/Getting-Started-The-Command-Line">Git command line tools</a> to create a new branch in the repo.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture23.png" /></p> 
+<p>3. Update the README.md for the repo with a link to the <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild documentation</a>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture24.png" /></p> 
+<p>4. After the changes have been saved, push them to the feature branch.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture25.png" /></p> 
+<p>5. There is now notification of a new branch in the GitHub Enterprise environment.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture26.png" /></p> 
+<p>6. Generate a pull request from the feature branch in preparation of review and merge to master.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture27.png" /></p> 
+<p>7. The reviewer(s) will then review and merge the pull request, pushing all changes to the master branch.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture28.png" /></p> 
+<p>8. Here is the updated repo:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture29.png" /></p> 
+<p>9. After the change has been pushed successfully, a new build is initiated.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture30.png" /></p> 
+<p>10. In the following screenshot, you’ll see the initiator is <strong>Github-Hookshot/eb0c46</strong> and the source version is <strong>03169095b8f16ac077388471035becb2070aa12c</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture31.png" /></p> 
+<p>11. In the <strong>Recent Deliveries</strong> section, under the configuration of the GitHub Enterprise repo webhook, the CodeBuild project initiator is defined as <strong>User-Agent</strong>. The source version is denoted in the <strong>Payload</strong> output. They match!</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture32.png" /></p> 
+<p>12. A successfully completed build should appear under the CodeBuild project.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture33.png" /></p> 
+<p>13. The entire log output of the CodeBuild project can be viewed in CloudWatch logs. In the following screenshot, the source was downloaded successfully from the GitHub Enterprise repo and the build command of <strong>git log .</strong> was run successfully. Only the most recent commit appears in the git history output. This is because I defined a clone depth of 1.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture34.png" /></p> 
+<p>14. If I query the git history of the repo on the local repository, the output has the full commit history. This is expected because I am doing a full clone locally.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/Picture35.png" /></p> 
+<b>Conclusion</b> 
+<p>In this blog post, I showed you how to configure GitHub Enterprise as a source type for your AWS CodeBuild project with a clone depth of 1. These new features expand the capabilities of AWS CodeBuild and the suite of AWS Developer Tools for CI/CD and DevOps processes.</p> 
+<p>I hope you found this post useful. Feel free to leave your feedback or suggestions in the comments.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/12/automate_to_spot.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Automatic Deployment to New Amazon EC2 On-Demand and Spot Instances Using AWS CodeDeploy, Amazon CloudWatch Events, and AWS Lambda</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1024,235 +1131,6 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-1886');
 });
 </script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Using AWS CodeCommit Pull Requests to request code reviews and discuss code</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
-<time property="datePublished" datetime="2017-11-20T13:27:15+00:00">20 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codecommit/" title="View all posts in AWS CodeCommit*"><span property="articleSection">AWS CodeCommit*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/using-aws-codecommit-pull-requests-to-request-code-reviews-and-discuss-code/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Thank you to Michael Edge, Senior Cloud Architect, for a great blog on CodeCommit pull requests.</p> 
-<p>~~~~~~~</p> 
-<p><a href="http://aws.amazon.com/codecommit">AWS CodeCommit</a> is a fully managed service for securely hosting private Git repositories. CodeCommit now supports pull requests, which allows repository users to review, comment upon, and interactively iterate on code changes. Used as a collaboration tool between team members, pull requests help you to review potential changes to a CodeCommit repository before merging those changes into the repository. Each pull request goes through a simple lifecycle, as follows:</p> 
-<li>The new features to be merged are added as one or more commits to a feature branch. The commits are not merged into the destination branch.</li> 
-<li>The pull request is created, usually from the difference between two branches.</li> 
-<li>Team members review and comment on the pull request. The pull request might be updated with additional commits that contain changes made in response to comments, or include changes made to the destination branch.</li> 
-<li>Once team members are happy with the pull request, it is merged into the destination branch. The commits are applied to the destination branch in the same order they were added to the pull request.</li> 
-<p>Commenting is an integral part of the pull request process, and is used to collaborate between the developers and the reviewer. Reviewers add comments and questions to a pull request during the review process, and developers respond to these with explanations. Pull request comments can be added to the overall pull request, a file within the pull request, or a line within a file.</p> 
-<p>To make the comments more useful, sign in to the AWS Management Console as an AWS Identity and Access Management (IAM) user. The username will then be associated with the comment, indicating the owner of the comment. Pull request comments are a great quality improvement tool as they allow the entire development team visibility into what reviewers are looking for in the code. They also serve as a record of the discussion between team members at a point in time, and shouldn’t be deleted.</p> 
-<p>AWS CodeCommit is also introducing the ability to add comments to a commit, another useful collaboration feature that allows team members to discuss code changed as part of a commit. This helps you discuss changes made in a repository, including why the changes were made, whether further changes are necessary, or whether changes should be merged. As is the case with pull request comments, you can comment on an overall commit, on a file within a commit, or on a specific line or change within a file, and other repository users can respond to your comments. Comments are not restricted to commits, they can also be used to comment on the differences between two branches, or between two tags. Commit comments are separate from pull request comments, i.e. you will not see commit comments when reviewing a pull request – you will only see pull request comments.</p> 
-<b>A pull request example</b> 
-<p>Let’s get started by running through an example. We’ll take a typical pull request scenario and look at how we’d use CodeCommit and the AWS Management Console for each of the steps.</p> 
-<p>To try out this scenario, you’ll need:</p> 
-<li>An AWS CodeCommit repository with some sample code in the master branch. We’ve provided sample code below.</li> 
-<li>Two AWS Identity and Access Management (IAM) users, both with the <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/auth-and-access-control-iam-identity-based-access-control.html#managed-policies">AWSCodeCommitPowerUser managed policy</a> applied to them.</li> 
-<li>Git installed on your local computer, and access configured for AWS CodeCommit.</li> 
-<li>A clone of the AWS CodeCommit repository on your local computer.</li> 
-<p>In the course of this example, you’ll sign in to the AWS CodeCommit console as one IAM user to create the pull request, and as the other IAM user to review the pull request. To learn more about how to set up your IAM users and how to connect to AWS CodeCommit with Git, see the following topics:</p> 
-<li>Information on <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html#id_users_create_console">creating an IAM user</a> with AWS Management Console access.</li> 
-<li>Instructions on how to <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html">access CodeCommit using Git</a>.</li> 
-<li>If you’d like to use the same ‘hello world’ application as used in this article, here is the source code:</li> 
-<code class="lang-java">package com.amazon.helloworld;
-public class Main {
-public static void main(String[] args) {
-System.out.println(&quot;Hello, world&quot;);
-}
-}</code> 
-<p>The scenario below uses the us-east-2 region.</p> 
-<h3>Creating the branches</h3> 
-<p>Before we jump in and create a pull request, we’ll need at least two branches. In this example, we’ll follow a branching strategy similar to the one <a href="https://datasift.github.io/gitflow/IntroducingGitFlow.html">described in GitFlow</a>. We’ll create a new branch for our feature from the main development branch (the default branch). We’ll develop the feature in the feature branch. Once we’ve written and tested the code for the new feature in that branch, we’ll create a pull request that contains the differences between the feature branch and the main development branch. Our team lead (the second IAM user) will review the changes in the pull request. Once the changes have been reviewed, the feature branch will be merged into the development branch.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/pull-request-1a.png" /></p> 
-<p style="text-align: center">Figure 1: Pull request link</p> 
-<p>Sign in to the AWS CodeCommit console with the IAM user you want to use as the developer. You can use an existing repository or you can go ahead and <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-create-repository.html#how-to-create-repository-console">create a new one</a>. We won’t be merging any changes to the master branch of your repository, so it’s safe to use an existing repository for this example. You’ll find the Pull requests link has been added just above the Commits link (see Figure 1), and below Commits you’ll find the Branches link. Click <strong>Branches</strong> and create a new branch called ‘develop’, branched from the ‘master’ branch. Then create a new branch called ‘feature1’, branched from the ‘develop’ branch. You’ll end up with three branches, as you can see in Figure 2. (Your repository might contain other branches in addition to the three shown in the figure).</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture2.png" /></p> 
-<p style="text-align: center">Figure 2: Create a feature branch</p> 
-<p>If you haven’t cloned your repo yet, go to the <strong>Code</strong> link in the CodeCommit console and click the <strong>Connect</strong> button. Follow the instructions to clone your repo (<a href="http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-connect.html">detailed instructions are here</a>). Open a terminal or command line and paste the git clone command supplied in the Connect instructions for your repository. The example below shows cloning a repository named codecommit-demo:</p> 
-<code class="lang-bash">git clone https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo</code> 
-<p>If you’ve previously cloned the repo you’ll need to update your local repo with the branches you created. Open a terminal or command line and make sure you’re in the root directory of your repo, then run the following command:</p> 
-<code class="lang-bash">git remote update origin</code> 
-<p>You’ll see your new branches pulled down to your local repository.</p> 
-<code class="lang-bash">$ git remote update origin
-Fetching origin
-From https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
-* [new branch]      develop    -&gt; origin/develop
-* [new branch]      feature1   -&gt; origin/feature1</code> 
-<p>You can also see your new branches by typing:</p> 
-<code class="lang-bash">git branch --all
-$ git branch --all
-* master
-remotes/origin/develop
-remotes/origin/feature1
-remotes/origin/master</code> 
-<p>Now we’ll make a change to the ‘feature1’ branch. Open a terminal or command line and check out the feature1 branch by running the following command:</p> 
-<code class="lang-bash">git checkout feature1
-$ git checkout feature1
-Branch feature1 set up to track remote branch feature1 from origin.
-Switched to a new branch 'feature1'</code> 
-<h3>Make code changes</h3> 
-<p>Edit a file in the repo using your favorite editor and save the changes. Commit your changes to the local repository, and push your changes to CodeCommit. For example:</p> 
-<code class="lang-bash">git commit -am 'added new feature'
-git push origin feature1
-$ git commit -am 'added new feature'
-[feature1 8f6cb28] added new feature
-1 file changed, 1 insertion(+), 1 deletion(-)
-$ git push origin feature1
-Counting objects: 9, done.
-Delta compression using up to 4 threads.
-Compressing objects: 100% (4/4), done.
-Writing objects: 100% (9/9), 617 bytes | 617.00 KiB/s, done.
-Total 9 (delta 2), reused 0 (delta 0)
-To https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
-2774a53..8f6cb28  feature1 -&gt; feature1</code> 
-<h3>Creating the pull request</h3> 
-<p>Now we have a ‘feature1’ branch that differs from the ‘develop’ branch. At this point we want to merge our changes into the ‘develop’ branch. We’ll create a pull request to notify our team members to review our changes and check whether they are ready for a merge.</p> 
-<p>In the AWS CodeCommit console, click <strong>Pull requests</strong>. Click <strong>Create pull request</strong>. On the next page select ‘develop’ as the destination branch and ‘feature1’ as the source branch. Click <strong>Compare</strong>. CodeCommit will check for merge conflicts and highlight whether the branches can be automatically merged using the fast-forward option, or whether a manual merge is necessary. A pull request can be created in both situations.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture3.png" /></p> 
-<p style="text-align: center">Figure 3: Create a pull request</p> 
-<p>After comparing the two branches, the CodeCommit console displays the information you’ll need in order to create the pull request. In the ‘Details’ section, the ‘Title’ for the pull request is mandatory, and you may optionally provide comments to your reviewers to explain the code change you have made and what you’d like them to review. In the ‘Notifications’ section, there is an option to set up notifications to notify subscribers of changes to your pull request. Notifications will be sent on creation of the pull request as well as for any pull request updates or comments. And finally, you can review the changes that make up this pull request. This includes both the individual commits (a pull request can contain one or more commits, available in the Commits tab) as well as the changes made to each file, i.e. the diff between the two branches referenced by the pull request, available in the Changes tab. After you have reviewed this information and added a title for your pull request, click the <strong>Create</strong> button. You will see a confirmation screen, as shown in Figure 4, indicating that your pull request has been successfully created, and can be merged without conflicts into the ‘develop’ branch.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture4.png" /></p> 
-<p style="text-align: center">Figure 4: Pull request confirmation page</p> 
-<h3>Reviewing the pull request</h3> 
-<p>Now let’s view the pull request from the perspective of the team lead. If you set up notifications for this CodeCommit repository, creating the pull request would have sent an email notification to the team lead, and he/she can use the links in the email to navigate directly to the pull request. In this example, sign in to the AWS CodeCommit console as the IAM user you’re using as the team lead, and click <strong>Pull requests</strong>. You will see the same information you did during creation of the pull request, plus a record of activity related to the pull request, as you can see in Figure 5.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture5.png" /></p> 
-<p style="text-align: center">Figure 5: Team lead reviewing the pull request</p> 
-<h3>Commenting on the pull request</h3> 
-<p>You now perform a thorough review of the changes and make a number of comments using the new pull request comment feature. To gain an overall perspective on the pull request, you might first go to the Commits tab and review how many commits are included in this pull request. Next, you might visit the Changes tab to review the changes, which displays the differences between the feature branch code and the develop branch code. At this point, you can add comments to the pull request as you work through each of the changes. Let’s go ahead and review the pull request. During the review, you can add review comments at three levels:</p> 
-<li>The overall pull request</li> 
-<li>A file within the pull request</li> 
-<li>An individual line within a file</li> 
-<p><strong>The overall pull request</strong><br /> In the Changes tab near the bottom of the page you’ll see a ‘Comments on changes’ box. We’ll add comments here related to the overall pull request. Add your comments as shown in Figure 6 and click the <strong>Save</strong> button.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture6.png" /></p> 
-<p style="text-align: center">Figure 6: Pull request comment</p> 
-<p><strong>A specific file in the pull request</strong><br /> Hovering your mouse over a filename in the Changes tab will cause a blue ‘comments’ icon to appear to the left of the filename. Clicking the icon will allow you to enter comments specific to this file, as in the example in Figure 7. Go ahead and add comments for one of the files changed by the developer. Click the <strong>Save</strong> button to save your comment.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture7.png" /></p> 
-<p style="text-align: center">Figure 7: File comment</p> 
-<p><strong>A specific line in a file in the pull request</strong><br /> A blue ‘comments’ icon will appear as you hover over individual lines within each file in the pull request, allowing you to create comments against lines that have been added, removed or are unchanged. In Figure 8, you add comments against a line that has been added to the source code, encouraging the developer to review the naming standards. Go ahead and add line comments for one of the files changed by the developer. Click the <strong>Save</strong> button to save your comment.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture8.png" /></p> 
-<p style="text-align: center">Figure 8: Line comment</p> 
-<p>A pull request that has been commented at all three levels will look similar to Figure 9. The pull request comment is shown expanded in the ‘Comments on changes’ section, while the comments at file and line level are shown collapsed. A ‘comment’ icon indicates that comments exist at file and line level. Clicking the icon will expand and show the comment. Since you are expecting the developer to make further changes based on your comments, you won’t merge the pull request at this stage, but will leave it open awaiting feedback. Each comment you made results in a notification being sent to the developer, who can respond to the comments. This is great for remote working, where developers and team lead may be in different time zones.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture9.png" /></p> 
-<p style="text-align: center">Figure 9: Fully commented pull request</p> 
-<h3>Adding a little complexity</h3> 
-<p>A typical development team is going to be creating pull requests on a regular basis. It’s highly likely that the team lead will merge other pull requests into the ‘develop’ branch while pull requests on feature branches are in the review stage. This may result in a change to the ‘Mergable’ status of a pull request. Let’s add this scenario into the mix and check out how a developer will handle this.</p> 
-<p>To test this scenario, we could create a new pull request and ask the team lead to merge this to the ‘develop’ branch. But for the sake of simplicity we’ll take a shortcut. Clone your CodeCommit repo to a new folder, switch to the ‘develop’ branch, and make a change to one of the same files that were changed in your pull request. Make sure you change a line of code that was also changed in the pull request. Commit and push this back to CodeCommit. Since you’ve just changed a line of code in the ‘develop’ branch that has also been changed in the ‘feature1’ branch, the ‘feature1’ branch cannot be cleanly merged into the ‘develop’ branch. Your developer will need to resolve this merge conflict.</p> 
-<p>A developer reviewing the pull request would see the pull request now looks similar to Figure 10, with a ‘Resolve conflicts’ status rather than the ‘Mergable’ status it had previously (see Figure 5).</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture10.png" /></p> 
-<p style="text-align: center">Figure 10: Pull request with merge conflicts</p> 
-<h3>Reviewing the review comments</h3> 
-<p>Once the team lead has completed his review, the developer will review the comments and make the suggested changes. As a developer, you’ll see the list of review comments made by the team lead in the pull request Activity tab, as shown in Figure 11. The Activity tab shows the history of the pull request, including commits and comments. You can reply to the review comments directly from the Activity tab, by clicking the Reply button, or you can do this from the Changes tab. The Changes tab shows the comments for the latest commit, as comments on previous commits may be associated with lines that have changed or been removed in the current commit. Comments for previous commits are available to view and reply to in the Activity tab.</p> 
-<p>In the Activity tab, use the shortcut link (which looks like this &lt;/&gt;) to move quickly to the source code associated with the comment. In this example, you will make further changes to the source code to address the pull request review comments, so let’s go ahead and do this now. But first, you will need to resolve the ‘Resolve conflicts’ status.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture11.png" /></p> 
-<p style="text-align: center">Figure 11: Pull request activity</p> 
-<h3>Resolving the ‘Resolve conflicts’ status</h3> 
-<p>The ‘Resolve conflicts’ status indicates there is a merge conflict between the ‘develop’ branch and the ‘feature1’ branch. This will require manual intervention to restore the pull request back to the ‘Mergable’ state. We will resolve this conflict next.</p> 
-<p>Open a terminal or command line and check out the develop branch by running the following command:</p> 
-<code class="lang-bash">git checkout develop
-$ git checkout develop
-Switched to branch 'develop'
-Your branch is up-to-date with 'origin/develop'.</code> 
-<p>To incorporate the changes the team lead made to the ‘develop’ branch, merge the remote ‘develop’ branch with your local copy:</p> 
-<code class="lang-bash">git pull
-$ git pull
-remote: Counting objects: 9, done.
-Unpacking objects: 100% (9/9), done.
-From https://git-codecommit.us-east-2.amazonaws.com/v1/repos/codecommit-demo
-af13c82..7b36f52  develop    -&gt; origin/develop
-Updating af13c82..7b36f52
-Fast-forward
-src/main/java/com/amazon/helloworld/Main.java | 2 +-
-1 file changed, 1 insertion(+), 1 deletion(-)</code> 
-<p>Then checkout the ‘feature1’ branch:</p> 
-<code class="lang-bash">git checkout feature1
-$ git checkout feature1
-Switched to branch 'feature1'
-Your branch is up-to-date with 'origin/feature1'.</code> 
-<p>Now merge the changes from the ‘develop’ branch into your ‘feature1’ branch:</p> 
-<code class="lang-bash">git merge develop
-$ git merge develop
-Auto-merging src/main/java/com/amazon/helloworld/Main.java
-CONFLICT (content): Merge conflict in src/main/java/com/amazon/helloworld/Main.java
-Automatic merge failed; fix conflicts and then commit the result.</code> 
-<p>Yes, this fails. The file Main.java has been changed in both branches, resulting in a merge conflict that can’t be resolved automatically. However, Main.java will now contain markers that indicate where the conflicting code is, and you can use these to resolve the issues manually. Edit Main.java using your favorite IDE, and you’ll see it looks something like this:</p> 
-<code class="lang-java">package com.amazon.helloworld;
-import java.util.*;
-/**
-* This class prints a hello world message
-*/
-public class Main {
-public static void main(String[] args) {
-&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
-Date todaysdate = Calendar.getInstance().getTime();
-System.out.println(&quot;Hello, earthling. Today's date is: &quot; + todaysdate);
-=======
-System.out.println(&quot;Hello, earth&quot;);
-&gt;&gt;&gt;&gt;&gt;&gt;&gt; develop
-}
-}</code> 
-<p>The code between HEAD and ‘===’ is the code the developer added in the ‘feature1’ branch (HEAD represents ‘feature1’ because this is the current checked out branch). The code between ‘===’ and ‘&gt;&gt;&gt; develop’ is the code added to the ‘develop’ branch by the team lead. We’ll resolve the conflict by manually merging both changes, resulting in an updated Main.java:</p> 
-<code class="lang-java">package com.amazon.helloworld;
-import java.util.*;
-/**
-* This class prints a hello world message
-*/
-public class Main {
-public static void main(String[] args) {
-Date todaysdate = Calendar.getInstance().getTime();
-System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysdate);
-}
-}</code> 
-<p>After saving the change you can add and commit it to your local repo:</p> 
-<code class="lang-bash">git add src/
-git commit -m 'fixed merge conflict by merging changes'</code> 
-<h3>Fixing issues raised by the reviewer</h3> 
-<p>Now you are ready to address the comments made by the team lead. If you are no longer pointing to the ‘feature1’ branch, check out the ‘feature1’ branch by running the following command:</p> 
-<code class="lang-bash">git checkout feature1
-$ git checkout feature1
-Branch feature1 set up to track remote branch feature1 from origin.
-Switched to a new branch 'feature1'</code> 
-<p>Edit the source code in your favorite IDE and make the changes to address the comments. In this example, the developer has updated the source code as follows:</p> 
-<code class="lang-java">package com.amazon.helloworld;
-import java.util.*;
-/**
-*  This class prints a hello world message
-*
-* @author Michael Edge
-* @see HelloEarth
-* @version 1.0
-*/
-public class Main {
-public static void main(String[] args) {
-Date todaysDate = Calendar.getInstance().getTime();
-System.out.println(&quot;Hello, earth. Today's date is: &quot; + todaysDate);
-}
-}</code> 
-<p>After saving the changes, commit and push to the CodeCommit ‘feature1’ branch as you did previously:</p> 
-<code class="lang-bash">git commit -am 'updated based on review comments'
-git push origin feature1</code> 
-<h3>Responding to the reviewer</h3> 
-<p>Now that you’ve fixed the code issues you will want to respond to the review comments. In the AWS CodeCommit console, check that your latest commit appears in the pull request Commits tab. You now have a pull request consisting of more than one commit. The pull request in Figure 12 has four commits, which originated from the following activities:</p> 
-<li>8th Nov: the original commit used to initiate this pull request</li> 
-<li>10th Nov, 3 hours ago: the commit by the team lead to the ‘develop’ branch, merged into our ‘feature1’ branch</li> 
-<li>10th Nov, 24 minutes ago: the commit by the developer that resolved the merge conflict</li> 
-<li>10th Nov, 4 minutes ago: the final commit by the developer addressing the review comments</li> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture12.png" /></p> 
-<p style="text-align: center">Figure 12: Pull request with multiple commits</p> 
-<p>Let’s reply to the review comments provided by the team lead. In the Activity tab, reply to the pull request comment and save it, as shown in Figure 13.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture13.png" /></p> 
-<p style="text-align: center">Figure 13: Replying to a pull request comment</p> 
-<p>At this stage, your code has been committed and you’ve updated your pull request comments, so you are ready for a final review by the team lead.</p> 
-<h3>Final review</h3> 
-<p>The team lead reviews the code changes and comments made by the developer. As team lead, you own the ‘develop’ branch and it’s your decision on whether to merge the changes in the pull request into the ‘develop’ branch. You can close the pull request with or without merging using the Merge and Close buttons at the bottom of the pull request page (see Figure 13). Clicking Close will allow you to add comments on why you are closing the pull request without merging. Merging will perform a fast-forward merge, incorporating the commits referenced by the pull request. Let’s go ahead and click the Merge button to merge the pull request into the ‘develop’ branch.</p> 
-<p><img class="aligncenter" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture14.png" /></p> 
-<p style="text-align: center">Figure 14: Merging the pull request</p> 
-<p>After merging a pull request, development of that feature is complete and the feature branch is no longer needed. It’s common practice to delete the feature branch after merging. CodeCommit provides a check box during merge to automatically delete the associated feature branch, as seen in Figure 14. Clicking the <strong>Merge</strong> button will merge the pull request into the ‘develop’ branch, as shown in Figure 15. This will update the status of the pull request to ‘Merged’, and will close the pull request.</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/20/Picture16.png" /></p> 
-<b>Conclusion</b> 
-<p>This blog has demonstrated how pull requests can be used to request a code review, and enable reviewers to get a comprehensive summary of what is changing, provide feedback to the author, and merge the code into production. For more information on pull requests, <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/pull-requests.html">see the documentation</a>.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

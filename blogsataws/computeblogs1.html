@@ -190,6 +190,260 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6-1169x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Task Networking in AWS Fargate</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Peck</span></span> | on 
+<time property="datePublished" datetime="2018-01-26T10:31:06+00:00">26 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/task-networking-in-aws-fargate/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3748" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3748&amp;disqus_title=Task+Networking+in+AWS+Fargate&amp;disqus_url=https://aws.amazon.com/blogs/compute/task-networking-in-aws-fargate/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3748');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/fargate/">AWS Fargate</a> is a technology that allows you to focus on running your application without needing to provision, monitor, or manage the underlying compute infrastructure. You package your application into a <a href="https://aws.amazon.com/what-are-containers/">Docker container</a> that you can then launch using your container orchestration tool of choice.</p> 
+<p>Fargate allows you to use containers without being responsible for <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> instances, similar to how EC2 allows you to run VMs without managing physical infrastructure. Currently, Fargate provides support for Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Support for Amazon Elastic Container Service for Kubernetes (<a href="https://aws.amazon.com/eks">Amazon EKS</a>) will be made available in the near future.</p> 
+<p>Despite offloading the responsibility for the underlying instances, Fargate still gives you deep control over configuration of network placement and policies. This includes the ability to use many networking fundamentals such as Amazon VPC and security groups.</p> 
+<p>This post covers how to take advantage of the different ways of networking your containers in Fargate when using ECS as your orchestration platform, with a focus on how to do networking securely.</p> 
+<p>The first step to running any application in Fargate is defining an ECS task for Fargate to launch. A task is a logical group of one or more Docker containers that are deployed with specified settings. When running a task in Fargate, there are two different forms of networking to consider:</p> 
+<li>Container (local) networking</li> 
+<li>External networking</li> 
+<b>Container Networking</b> 
+<p>Container networking is often used for tightly coupled application components. Perhaps your application has a web tier that is responsible for serving static content as well as generating some dynamic HTML pages. To generate these dynamic pages, it has to fetch information from another application component that has an HTTP API.</p> 
+<p>One potential architecture for such an application is to deploy the web tier and the API tier together as a pair and use local networking so the web tier can fetch information from the API tier.</p> 
+<p>If you are running these two components as two processes on a single EC2 instance, the web tier application process could communicate with the API process on the same machine by using the local loopback interface. The local loopback interface has a special IP address of 127.0.0.1 and hostname of localhost.</p> 
+<p>By making a networking request to this local interface, it bypasses the network interface hardware and instead the operating system just routes network calls from one process to the other directly. This gives the web tier a fast and efficient way to fetch information from the API tier with almost no networking latency.</p> 
+<p>In Fargate, when you launch multiple containers as part of a single task, they can also communicate with each other over the local loopback interface. Fargate uses a special container networking mode called <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">awsvpc</a>, which gives all the containers in a task a shared elastic network interface to use for communication.</p> 
+<p>If you specify a port mapping for each container in the task, then the containers can communicate with each other on that port. For example the following task definition could be used to deploy the web tier and the API tier:</p> 
+<code class="lang-json">{
+&quot;family&quot;: &quot;myapp&quot;
+&quot;containerDefinitions&quot;: [
+{
+&quot;name&quot;: &quot;web&quot;,
+&quot;image&quot;: &quot;my web image url&quot;,
+&quot;portMappings&quot;: [
+{
+&quot;containerPort&quot;: 80
+}
+],
+&quot;memory&quot;: 500,
+&quot;cpu&quot;: 10,
+&quot;esssential&quot;: true
+},
+{
+&quot;name&quot;: &quot;api&quot;,
+&quot;image&quot;: &quot;my api image url&quot;,
+&quot;portMappings&quot;: [
+{
+&quot;containerPort&quot;: 8080
+}
+],
+&quot;cpu&quot;: 10,
+&quot;memory&quot;: 500,
+&quot;essential&quot;: true
+}
+]
+}</code> 
+<p>ECS, with Fargate, is able to take this definition and launch two containers, each of which is bound to a specific static port on the elastic network interface for the task.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide1-1024x592.png" /></a>Because each Fargate task has its own isolated networking stack, there is no need for dynamic ports to avoid port conflicts between different tasks as in other networking modes. The static ports make it easy for containers to communicate with each other. For example, the web container makes a request to the API container using its well-known static port:</p> 
+<code class="lang-bash">curl 127.0.0.1:8080/my-endpoint</code> 
+<p>This sends a local network request, which goes directly from one container to the other over the local loopback interface without traversing the network. This deployment strategy allows for fast and efficient communication between two tightly coupled containers. But most application architectures require more than just internal local networking.</p> 
+<b>External Networking</b> 
+<p>External networking is used for network communications that go outside the task to other servers that are not part of the task, or network communications that originate from other hosts on the internet and are directed to the task.</p> 
+<p>Configuring external networking for a task is done by modifying the settings of the VPC in which you launch your tasks. A VPC is a fundamental tool in AWS for controlling the networking capabilities of resources that you launch on your account.</p> 
+<p>When setting up a VPC, you create one or more subnets, which are logical groups that your resources can be placed into. Each subnet has an Availability Zone and its own route table, which defines rules about how network traffic operates for that subnet. There are two main types of subnets: public and private.</p> 
+<h3>Public subnets</h3> 
+<p>A public subnet is a subnet that has an associated internet gateway. Fargate tasks in that subnet are assigned both private and public IP addresses:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide2-1024x866.png" /></a><br /> A browser or other client on the internet can send network traffic to the task via the internet gateway using its public IP address. The tasks can also send network traffic to other servers on the internet because the route table can route traffic out via the internet gateway.</p> 
+<p>If tasks want to communicate directly with each other, they can use each other’s private IP address to send traffic directly from one to the other so that it stays inside the subnet without going out to the internet gateway and back in.</p> 
+<h3>Private subnets</h3> 
+<p>A private subnet does not have direct internet access. The Fargate tasks inside the subnet don’t have public IP addresses, only private IP addresses. Instead of an internet gateway, a network address translation (NAT) gateway is attached to the subnet:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide4-1024x493.png" /></a></p> 
+<p>There is no way for another server or client on the internet to reach your tasks directly, because they don’t even have an address or a direct route to reach them. This is a great way to add another layer of protection for internal tasks that handle sensitive data. Those tasks are protected and can’t receive any inbound traffic at all.</p> 
+<p>In this configuration, the tasks can still communicate to other servers on the internet via the NAT gateway. They would appear to have the IP address of the NAT gateway to the recipient of the communication. If you run a Fargate task in a private subnet, you must add this NAT gateway. Otherwise, Fargate can’t make a network request to Amazon ECR to download the container image, or communicate with Amazon CloudWatch to store container metrics.</p> 
+<b>Load balancers</b> 
+<p>If you are running a container that is hosting internet content in a private subnet, you need a way for traffic from the public to reach the container. This is generally accomplished by using a load balancer such as an Application Load Balancer or a Network Load Balancer.</p> 
+<p>ECS integrates tightly with AWS load balancers by automatically configuring a service-linked load balancer to send network traffic to containers that are part of the service. When each task starts, the IP address of its elastic network interface is added to the load balancer’s configuration. When the task is being shut down, network traffic is safely drained from the task before removal from the load balancer.</p> 
+<p>To get internet traffic to containers using a load balancer, the load balancer is placed into a public subnet. ECS configures the load balancer to forward traffic to the container tasks in the private subnet:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide5.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide5-1024x647.png" /></a></p> 
+<p>This configuration allows your tasks in Fargate to be safely isolated from the rest of the internet. They can still initiate network communication with external resources via the NAT gateway, and still receive traffic from the public via the Application Load Balancer that is in the public subnet.</p> 
+<p>Another potential use case for a load balancer is for internal communication from one service to another service within the private subnet. This is typically used for a microservice deployment, in which one service such as an internet user account service needs to communicate with an internal service such as a password service. Obviously, it is undesirable for the password service to be directly accessible on the internet, so using an internet load balancer would be a major security vulnerability. Instead, this can be accomplished by hosting an internal load balancer within the private subnet:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6-1024x552.png" /></a></p> 
+<p>With this approach, one container can distribute requests across an Auto Scaling group of other private containers via the internal load balancer, ensuring that the network traffic stays safely protected within the private subnet.</p> 
+<b>Best Practices for Fargate Networking</b> 
+<h4><strong>Determine whether you should use local task networking</strong></h4> 
+<p>Local task networking is ideal for communicating between containers that are tightly coupled and require maximum networking performance between them. However, when you deploy one or more containers as part of the same task they are always deployed together so it removes the ability to independently scale different types of workload up and down.</p> 
+<p>In the example of the application with a web tier and an API tier, it may be the case that powering the application requires only two web tier containers but 10 API tier containers. If local container networking is used between these two container types, then an extra eight unnecessary web tier containers would end up being run instead of allowing the two different services to scale independently.</p> 
+<p>A better approach would be to deploy the two containers as two different services, each with its own load balancer. This allows clients to communicate with the two web containers via the web service’s load balancer. The web service could distribute requests across the eight backend API containers via the API service’s load balancer.</p> 
+<h4><strong>Run internet tasks that require internet access in a public subnet</strong></h4> 
+<p>If you have tasks that require internet access and a lot of bandwidth for communication with other services, it is best to run them in a public subnet. Give them public IP addresses so that each task can communicate with other services directly.</p> 
+<p>If you run these tasks in a private subnet, then all their outbound traffic has to go through an NAT gateway. AWS NAT gateways support up to 10 Gbps of burst bandwidth. If your bandwidth requirements go over this, then all task networking starts to get throttled. To avoid this, you could distribute the tasks across multiple private subnets, each with their own NAT gateway. It can be easier to just place the tasks into a public subnet, if possible.</p> 
+<h4><strong>Avoid using a public subnet or public IP addresses for private, internal tasks</strong></h4> 
+<p>If you are running a service that handles private, internal information, you should not put it into a public subnet or use a public IP address. For example, imagine that you have one task, which is an API gateway for authentication and access control. You have another background worker task that handles sensitive information.</p> 
+<p>The intended access pattern is that requests from the public go to the API gateway, which then proxies request to the background task only if the request is from an authenticated user. If the background task is in a public subnet and has a public IP address, then it could be possible for an attacker to bypass the API gateway entirely. They could communicate directly to the background task using its public IP address, without being authenticated.</p> 
+<b>Conclusion</b> 
+<p>Fargate gives you a way to run containerized tasks directly without managing any EC2 instances, but you still have full control over how you want networking to work. You can set up containers to talk to each other over the local network interface for maximum speed and efficiency. For running workloads that require privacy and security, use a private subnet with public internet access locked down. Or, for simplicity with an internet workload, you can just use a public subnet and give your containers a public IP address.</p> 
+<p>To deploy one of these Fargate task networking approaches, check out some <a href="https://github.com/nathanpeck/aws-cloudformation-fargate">sample CloudFormation templates</a>&nbsp;showing how to configure the VPC, subnets, and load balancers.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3748');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/24/ECS_social_loading.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Building Blocks of Amazon ECS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">tiffany jernigan</span></span> | on 
+<time property="datePublished" datetime="2018-01-24T13:57:33+00:00">24 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/building-blocks-of-amazon-ecs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3710" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3710&amp;disqus_title=Building+Blocks+of+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-blocks-of-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3710');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>So, what’s <a href="https://aws.amazon.com/ecs/">Amazon Elastic Container Service (ECS)</a>? ECS is a managed service for running containers on AWS, designed to make it easy to run applications in the cloud without worrying about configuring the environment for your code to run in. Using ECS, you can easily deploy containers to host a simple website or run complex distributed microservices using thousands of containers.</p> 
+<p>Getting started with ECS isn’t too difficult. To fully understand how it works and how you can use it, it helps to understand the basic building blocks of ECS and how they fit together!</p> 
+<b style="font-size: 2.4rem;color: #153655;margin-bottom: -.6em">Let’s begin with an analogy</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/23/ecs-planet-analogy-white-sm.png" /></p> 
+<p>Imagine you’re in a virtual reality game with blocks and portals, in which your task is to build kingdoms.</p> 
+<p>In your spaceship, you pull up a holographic map of your upcoming destination: <em>Nozama</em>, a golden-orange planet. Looking at its various <u>regions</u>, you see that the nearest one is <em>za-southwest-1</em> (<em>SW</em> <em>Nozama</em>). You set your destination, and use your jump drive to jump to the outer atmosphere of <em>za-southwest-1</em>.</p> 
+<p>As you approach <em>SW Nozama</em>, you see three portals, <em>1a</em>, <em>1b</em>, and <em>1c</em>. Each portal lets you transport directly to an isolated zone (<u>Availability Zone</u>), where you can start construction on your new kingdom (<u>cluster</u>), <em>Royaume</em>.</p> 
+<p>With your supply of blocks, you take the portal to <em>1b</em>, and erect the surrounding walls of your first territory (<u>instance</u>)*.</p> 
+<p>Before you get ahead of yourself, there are some rules to keep in mind. For your territory to be a part of <em>Royaume</em>, the land ordinance requires construction of a building (<u>container</u>), specifically a castle, from which your territory’s lord (<u>agent</u>)* rules.</p> 
+<p>You can then create architectural plans (<u>task definitions</u>) to build your developments (<u>tasks</u>), consisting of up to 10 buildings per plan. A development can be built now within this or any territory, or multiple territories.</p> 
+<p>If you do decide to create more territories, you can either stay here in <em>1b</em> or take a portal to another location in <em>SW Nozama</em> and start building there.</p> 
+<b style="font-size: 2.4rem;color: #153655;margin-bottom: -.6em">Amazon EC2 building blocks</b> 
+<p>We currently provide two launch types: EC2 and <a href="https://aws.amazon.com/fargate/">Fargate</a>. With Fargate, the&nbsp;<a href="https://aws.amazon.com/ec2">Amazon EC2</a>&nbsp;instances are abstracted away and managed for you. Instead of worrying about ECS container instances, you can just worry about tasks. In this post, the infrastructure components used by ECS that&nbsp;are&nbsp;handled by Fargate are marked with a *.</p> 
+<b><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/23/region-az-instance2sm.png" /></b> 
+<b style="color: #153655;margin-bottom: -.6em">Instance*</b> 
+<p><a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Instances.html">EC2 instances</a> are good ol’ virtual machines (VMs). And yes, don’t worry, you can connect to them (via SSH). Because customers have varying needs in memory, storage, and computing power, many different <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html">instance types</a> are offered. Just want to run a small application or try a <a href="https://aws.amazon.com/free/">free trial</a>? Try t2.micro. Want to run memory-optimized workloads? R3 and X1 instances are a couple options. There are many more instance types as well, which cater to various use cases.</p> 
+<h3 style="color: #153655;margin-bottom: -.6em">AMI*</h3> 
+<p>Sorry if you wanted to immediately march forward, but <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instances-and-amis.html">before you create your instance</a>, you need to choose an<a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html"> AMI</a>. An AMI stands for Amazon Machine Image. What does that mean? Basically, an AMI provides the information required to launch an instance: root volume, launch permissions, and volume-attachment specifications. You can <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/finding-an-ami.html">find</a> and choose a Linux or Windows AMI provided by AWS, the user community, the <a href="https://aws.amazon.com/marketplace">AWS Marketplace</a> (for example, the <a href="https://aws.amazon.com/marketplace/pp/B06XS8WHGJ">Amazon ECS-Optimized AMI</a>), or you can create your own.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Region</b> 
+<p>AWS is divided into<a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html"> regions</a> that are geographic areas around the world (for now it’s just Earth, but maybe someday…). These regions have semi-evocative names such as us-east-1 (N. Virginia), us-west-2 (Oregon), eu-central-1 (Frankfurt), ap-northeast-1 (Tokyo), etc.</p> 
+<p>Each region is designed to be completely isolated from the others, and consists of multiple, distinct data centers. This creates a “blast radius” for failure so that even if an entire region goes down, the others aren’t affected. Like many AWS services, to start using ECS, you first need to decide the region in which to operate. Typically, this is the region nearest to you or your users.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Availability Zone</b> 
+<p>AWS regions are subdivided into <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html">Availability Zones</a>. A region has at minimum two zones, and up to a handful. Zones are <a href="https://aws.amazon.com/about-aws/global-infrastructure/">physically isolated from each other</a>, spanning one or more different data centers, but are connected through low-latency, fiber-optic networking, and share some common facilities. EC2 is designed so that the most common failures only affect a single zone to prevent region-wide outages. This means you can achieve high availability in a region by spanning your services across multiple zones and distributing across hosts.</p> 
+<b style="font-size: 2.4rem;color: #153655;margin-bottom: -.6em">Amazon ECS building blocks</b> 
+<b style="color: #153655;margin-bottom: -.6em"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/23/ecs-ec2-instance-sm.png" /></b> 
+<b style="color: #153655;margin-bottom: -.6em">Container</b> 
+<p>Well, without <a href="https://aws.amazon.com/what-are-containers/">containers</a>, ECS wouldn’t exist!</p> 
+<p><strong>Are containers virtual machines?</strong><br /> Nope! Virtual machines virtualize the hardware (benefits), while containers virtualize the operating system (even more benefits!). If you look inside a container, you would see that it is made by processes running on the host, and tied together by kernel constructs like namespaces, cgroups, etc. But you don’t need to bother about that level of detail, at least not in this post!</p> 
+<p><strong>Why containers?</strong><br /> Containers give you the ability to build, ship, and run your code anywhere!</p> 
+<p>Before the cloud, you needed to self-host and therefore had to buy machines in addition to setting up and configuring the operating system (OS), and running your code. In the cloud, with virtualization, you can just skip to setting up the OS and running your code. Containers make the process even easier—you can just run your code.</p> 
+<p>Additionally, all of the dependencies travel in a package with the code, which is called an image. This allows containers to be deployed on any host machine. From the outside, it looks like a host is just holding a bunch of containers. They all look the same, in the sense that they are generic enough to be deployed on any host.</p> 
+<p>With ECS, you can easily run your containerized code and applications across a managed cluster of EC2 instances.</p> 
+<p><strong>Are containers a fairly new technology?</strong><br /> The concept of containerization is not new. Its origins date back to 1979 with the creation of chroot. However, it wasn’t until the early 2000s that containers became a major technology. The most significant milestone to date was the release of <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/docker-basics.html">Docker</a> in 2013, which led to the popularization and widespread adoption of containers.</p> 
+<p><strong>What does ECS use?</strong><br /> While other container technologies exist (LXC, rkt, etc.), because of its massive adoption and use by our customers, ECS was designed first to work natively with Docker containers.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Container instance*</b> 
+<p>Yep, you are back to instances. An instance is just slightly more complex in the ECS realm though. Here, it is an<a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_instances.html"> ECS container instance</a> that is an EC2 instance running the agent, has a <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/instance_IAM_role.html">specifically defined</a> <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/UsingIAM.html">IAM policy and role</a>, and has been registered into your cluster.</p> 
+<p>And as you probably guessed, in these instances, you are running containers.<strong>&nbsp;</strong></p> 
+<h3 style="color: #153655;margin-bottom: -.6em">AMI*</h3> 
+<p>These container instances can use any AMI as long as it has <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/container_instance_AMIs.html">the following specifications</a>: a modern Linux distribution with the agent and the Docker Daemon with any Docker runtime dependencies running on it.</p> 
+<p>Want it more simplified? Well, AWS created the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html">Amazon ECS-Optimized AMI</a> for just that. Not only does that AMI come preconfigured with all of the previously mentioned specifications, it’s tested and includes the recommended <a href="https://github.com/aws/amazon-ecs-init">ecs-init</a> upstart process to run and monitor the agent.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Cluster</b> 
+<p>An <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_clusters.html">ECS cluster</a> is a grouping of (container) instances* (or tasks in Fargate) that lie within a single region, but can span multiple Availability Zones – it’s even a good idea for redundancy. When launching an instance (or tasks in Fargate), unless specified, it registers with the cluster named “default”. If “default” doesn’t exist, it is created. You can also scale and delete your clusters.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Agent*</b> 
+<p>The<a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_agent.html"> Amazon ECS container agent</a> is a <a href="https://golang.org/">Go</a> program that runs in its own container within each EC2 instance that you use with ECS. (It’s also available open source on <a href="https://github.com/aws/amazon-ecs-agent">GitHub</a>!) The agent is the intermediary component that takes care of the communication between the scheduler and your instances. Want to register your instance into a cluster? (Why wouldn’t you? A cluster is both a logical boundary and provider of pool of resources!) Then you need to run the agent on it.</p> 
+<b style="color: #153655;margin-bottom: -.6em">Task</b> 
+<p>When you want to start a container, it has to be part of a task. Therefore, you have to create a task first. Succinctly, tasks are a logical grouping of 1 to <em>N</em> containers that run together on the same instance, with <em>N</em> defined by you, up to 10. Let’s say you want to run a custom blog engine. You could put together a web server, an application server, and an in-memory cache, each in their own container. Together, they form a basic frontend unit.</p> 
+<h3 style="color: #153655;margin-bottom: -.6em">Task definition</h3> 
+<p>Ah, but you cannot create a task directly. You have to create a<a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html"> task definition</a> that tells ECS that “task definition X is composed of this container (and maybe that other container and that other container too!).” It’s kind of like an architectural plan for a city. Some other details it can include are how the containers interact, container CPU and memory constraints, and task permissions using <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html">IAM roles</a>.</p> 
+<p>Then you can tell ECS, “start one task using task definition X.” It might sound like unnecessary planning at first. As soon as you start to deal with multiple tasks, scaling, upgrades, and other “real life” scenarios, you’ll be glad that you have task definitions to keep track of things!</p> 
+<b style="color: #153655;margin-bottom: -.6em">Scheduler*</b> 
+<p>So, the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/scheduling_tasks.html">scheduler</a> schedules… sorry, this should be more helpful, huh? The scheduler is part of the “hosted orchestration layer” provided by ECS. Wait a minute, what do I mean by “hosted orchestration”? Simply put, hosted means that it’s operated by ECS on your behalf, without you having to care about it. Your applications are deployed in containers running on your instances, but the managing of tasks is taken care of by ECS. One less thing to worry about!</p> 
+<p>Also, the scheduler is the component that decides what (which containers) gets to run where (on which instances), according to a number of constraints. Say that you have a custom blog engine to scale for high availability. You could create a service, which by default, spreads tasks across all zones in the chosen region. And if you want each task to be on a different instance, you can use the <em>distinctInstance</em> <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement.html">task placement</a> constraint. ECS makes sure that not only this happens, but if a task fails, it starts again.</p> 
+<h3 style="color: #153655;margin-bottom: -.6em">Service</h3> 
+<p>To ensure that you always have your task running without managing it yourself, you can create a <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html">service</a> based on the task that you defined and ECS ensures that it stays running. A service is a special construct that says, “at any given time, I want to make sure that <em>N</em> tasks using task definition X1 are running.” If <em>N</em>=1, it just means “make sure that this task is running, and restart it if needed!” And with <em>N</em>&gt;1, you’re basically scaling your application until you hit <em>N</em>, while also ensuring each task is running.</p> 
+<b style="font-size: 2.4rem;color: #153655;margin-bottom: -.6em">So, what now?</b> 
+<p>Hopefully you, at the very least, learned a tiny something. All comments are very welcome!</p> 
+<p>Want to discuss ECS with others? Join the <a href="https://join.slack.com/t/amazon-ecs/shared_invite/enQtMjQ3OTk4NTM3ODQyLWViNjhhMDBkM2VmMGRkYzMwOGMxNmU3ODBiYmQyZDk0OTlkMWYxNDJjNzJjMWYyNWY0ZWE4YmMzNmNlNGY0YWU">amazon-ecs</a> slack group, which members of the community created and manage.</p> 
+<p>Also, if you’re interested in learning more about the core concepts of ECS and its relation to EC2, here are some resources:</p> 
+<p><strong>Pages</strong><br /> <a href="https://aws.amazon.com/ecs/">Amazon ECS landing page<br /> </a><a href="https://aws.amazon.com/fargate/">AWS Fargate landing page<br /> </a><a href="https://aws.amazon.com/ecs/getting-started/">Amazon ECS Getting Started</a><br /> <a href="https://github.com/nathanpeck/awesome-ecs">Nathan Peck’s AWSome ECS</a></p> 
+<p><strong>Docs</strong><br /> <a href="https://aws.amazon.com/documentation/ec2/">Amazon EC2</a><br /> <a href="https://aws.amazon.com/documentation/ecs/">Amazon ECS</a></p> 
+<p><strong>Blogs</strong><br /> <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/">AWS Compute Blog</a><br /> <a href="https://aws.amazon.com/blogs/aws/category/ec2-container-service/">AWS Blog</a></p> 
+<p><strong>GitHub code</strong><br /> <a href="https://github.com/aws/amazon-ecs-agent">Amazon ECS container agent</a><br /> <a href="https://github.com/aws/amazon-ecs-cli">Amazon ECS CLI</a></p> 
+<p><strong>AWS videos</strong><br /> <a href="https://www.youtube.com/watch?v=eq4wL2MiNqo&amp;list=PLhr1KZpdzukef_4labkwEs9CbK-MvReKS">Learn Amazon ECS</a><br /> <a href="https://www.youtube.com/user/AmazonWebServices/">AWS videos</a><br /> <a href="https://www.youtube.com/playlist?list=PLhr1KZpdzukeUoelFoS68SRfY6pA_Ib6A">AWS webinars</a></p> 
+<p>&nbsp;</p> 
+<p>— tiffany</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/24/tiffany-120x120bw.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/24/twitter-icon-8-15x15.png">@tiffanyfayj</a></p> 
+<p>&nbsp;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3710');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/ECS_windows_container-two.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Migrating .NET Classic Applications to Amazon ECS Using Windows Containers</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Sundar Narasiman</span></span> | on 
+<time property="datePublished" datetime="2018-01-18T12:46:31+00:00">18 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3685" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3685&amp;disqus_title=Migrating+.NET+Classic+Applications+to+Amazon+ECS+Using+Windows+Containers&amp;disqus_url=https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3685');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post contributed by&nbsp;Sundar Narasiman, Arun Kannan, and Thomas Fuller.</em></p> 
+<p>AWS <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-ecs-support-for-windows-server-containers-ga/">recently announced</a> the general availability of Windows container management for Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Docker containers and Amazon ECS make it easy to run and scale applications on a virtual machine by abstracting the complex cluster management and setup needed.</p> 
+<p>Classic .NET applications are developed with .NET Framework 4.7.1 or older and can run only on a Windows platform. These include Windows Communication Foundation (WCF), ASP.NET Web Forms, and an ASP.NET MVC web app or web API.</p> 
+<b>Why classic ASP.NET?</b> 
+<p>ASP.NET MVC 4.6 and older versions of ASP.NET occupy a significant footprint in the enterprise web application space. As enterprises move towards microservices for new or existing applications, containers are one of the stepping stones for migrating from monolithic to <a href="https://aws.amazon.com/microservices">microservices</a> architectures. Additionally, the support for Windows containers in Windows 10, Windows Server 2016, and Visual Studio Tooling support for Docker simplifies the containerization of ASP.NET MVC apps.</p> 
+<b>Getting started</b> 
+<p>In this post, you pick an ASP.NET 4.6.2 MVC application and get step-by-step instructions for migrating to ECS using Windows containers. The detailed steps, AWS CloudFormation template, Microsoft Visual Studio solution, ECS service definition, and ECS task definition are available in the <a href="https://github.com/aws-samples/aws-ecs-windows-aspnet">aws-ecs-windows-aspnet</a> GitHub repository.</p> 
+<p>To help you getting started running Windows containers, here is the reference architecture for Windows containers on GitHub: <a href="https://github.com/aws-samples/ecs-refarch-cloudformation-windows">ecs-refarch-cloudformation-windows</a>. This reference architecture is the layered CloudFormation stack, in that it calls the other stacks to create the environment. The CloudFormation YAML template in this reference architecture is referenced to create a single JSON CloudFormation stack, which is used in the steps for the migration.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_1.png" /></p> 
+<b>Steps for Migration</b> 
+<p>The code and templates to implement this migration can be found on GitHub: <a href="https://github.com/aws-samples/aws-ecs-windows-aspnet">https://github.com/aws-samples/aws-ecs-windows-aspnet</a>.</p> 
+<ol> 
+<li>Your development environment needs to have the latest version and updates for Visual Studio 2017, Windows 10, and Docker for Windows Stable.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_2.png" /></li> 
+<li>Next, containerize the ASP.NET application and test it locally. The size of Windows container application images is generally larger compared to Linux containers. This is because the base image of the Windows container itself is large in size, typically greater than 9 GB.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_3.png" /></li> 
+<li>After the application is containerized, the container image needs to be pushed to Amazon Elastic Container Registry (<a href="https://aws.amazon.com/ecr">Amazon ECR</a>). Images stored in ECR are compressed to improve pull times and reduce storage costs. In this case, you can see that ECR compresses the image to around 1 GB, for an optimization factor of 90%.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_4.png" /></li> 
+<li>Create a CloudFormation stack using the template in the ‘CloudFormation template’ folder. This creates an ECS service, task definition (referring the containerized ASP.NET application), and other related components mentioned in the ECS reference architecture for Windows containers.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_5.png" /></li> 
+<li>After the stack is created, verify the successful creation of the ECS service, ECS instances, running tasks (with the threshold mentioned in the task definition), and the Application Load Balancer’s successful health check against running containers.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_6.png" /></li> 
+<li>Navigate to the Application Load Balancer URL and see the successful rendering of the containerized ASP.NET MVC app in the browser.</li> 
+</ol> 
+<b>Key Notes</b> 
+<li>Generally, Windows container images occupy large amount of space (in the order of few GBs).</li> 
+<li>All the task definition parameters for Linux containers are not available for Windows containers. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_definitions.html">Windows Task Definitions</a>.</li> 
+<li>An Application Load Balancer can be configured to route requests to one or more ports on each container instance in a cluster. The dynamic port mapping allows you to have multiple tasks from a single service on the same container instance.</li> 
+<li>IAM roles for Windows tasks require extra configuration. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_IAM_roles.html">Windows IAM Roles for Tasks</a>. For this post, configuration was handled by the CloudFormation template.</li> 
+<li>The ECS container agent log file can be accessed for troubleshooting Windows containers: <code class="lang-bash">C:\ProgramData\Amazon\ECS\log\ecs-agent.log</code></li> 
+<b>Summary</b> 
+<p>In this post, you migrated an ASP.NET MVC application to ECS using Windows containers.</p> 
+<p>The logical next step is to automate the activities for migration to ECS and build a fully automated continuous integration/continuous deployment (CI/CD) pipeline for Windows containers. This can be orchestrated by leveraging services such as AWS CodeCommit, AWS CodePipeline, AWS CodeBuild, Amazon ECR, and Amazon ECS. You can learn more about how this is&nbsp;done in the <a href="https://aws.amazon.com/blogs/compute/set-up-a-continuous-delivery-pipeline-for-containers-using-aws-codepipeline-and-amazon-ecs/">Set Up a Continuous Delivery Pipeline for Containers Using AWS CodePipeline and Amazon ECS</a> post.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3685');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_2-782x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Maintaining Transport Layer Security All the Way to Your Container: Using the Network Load Balancer with Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -501,7 +755,7 @@ $ zip deployment.zip main</code>
 --function-name HelloFunction&nbsp;\
 --zip-file fileb://./deployment.zip \
 --runtime go1.x \
---tracing-config Mode=Active
+--tracing-config Mode=Active \
 --role arn:aws:iam::&lt;account-id&gt;:role/&lt;role&gt;&nbsp;\
 --handler main</code> 
 <p>From here, configure the invoking service for your function, in this example API Gateway, to call this function and provide the HTTPS frontend for your API. For more information about how to do this in the API Gateway console, see <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-create-api-as-simple-proxy-for-lambda.html#api-gateway-create-api-as-simple-proxy-for-lambda-build">Create an API with Lambda Proxy Integration</a>. You could also do this in the Lambda console by assigning an API Gateway trigger.</p> 
@@ -1083,374 +1337,6 @@ Status code distribution:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3483');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/ECS_windows_container-two.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Running Windows Containers on Amazon ECS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-12-06T10:33:55+00:00">06 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/running-windows-containers-on-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3464" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3464&amp;disqus_title=Running+Windows+Containers+on+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/running-windows-containers-on-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3464');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post was developed and written by Jeremy Cowan, Thomas Fuller, Samuel Karp, and Akram Chetibi.<br /> </em></p> 
-<p>—</p> 
-<p>Containers have revolutionized the way that developers build, package, deploy, and run applications. Initially, containers only supported code and tooling for Linux applications. With the release of Docker Engine for Windows Server 2016, Windows developers have started to realize the gains that their Linux counterparts have experienced for the last several years.</p> 
-<p>This week, <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-ecs-support-for-windows-server-containers-ga/">we’re adding support</a> for running production workloads in Windows containers using Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Now, Amazon ECS provides an ECS-Optimized&nbsp;Windows Server Amazon Machine Image (AMI). This AMI is based on the EC2 Windows Server 2016&nbsp;AMI, and includes Docker 17.06 Enterprise Edition and the ECS Agent 1.16. This AMI provides improved&nbsp;instance and container launch time performance.&nbsp;It’s based on Windows Server&nbsp;2016 Datacenter and includes Docker 17.06.2-ee-5, along with a new version of the ECS agent that now runs as a native Windows service.<span id="more-3464"></span></p> 
-<p>In this post, I discuss the benefits of this new support, and walk you through getting started running Windows containers with Amazon ECS.</p> 
-<p>When AWS released the Windows Server 2016 Base with Containers AMI, the ECS agent ran as a process that made it difficult to monitor and manage. As a service, the agent can be health-checked, managed, and restarted no differently than other Windows services. The AMI also includes pre-cached images for Windows Server&nbsp;Core 2016 and Windows Server&nbsp;Nano&nbsp;Server 2016. By caching the images in the AMI, launching new Windows containers is significantly faster. When Docker images include a layer that’s already cached on the instance, Docker re-uses that layer instead of pulling it from the Docker registry.</p> 
-<p>The ECS agent and an accompanying ECS PowerShell module used to install, configure, and run the agent come pre-installed on the AMI. This guarantees there is a specific platform version available on the container instance at launch. Because the software is included, you don’t have to download it from the internet. This saves startup time.</p> 
-<p>The Windows-compatible ECS-optimized AMI also reports CPU and memory utilization and reservation metrics to <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch</a>. Using the CloudWatch integration with ECS, you can create alarms that trigger dynamic scaling events to automatically add or remove capacity to your EC2 instances and ECS tasks.</p> 
-<b>Getting started</b> 
-<p>To help you get started running Windows containers on ECS, I’ve forked the <a href="https://github.com/awslabs/ecs-refarch-cloudformation">ECS reference architecture</a>, to build an ECS cluster comprised of Windows instances instead of Linux instances. You can pull the latest version of the <a href="https://github.com/aws-samples/ecs-refarch-cloudformation-windows">reference architecture for Windows</a>.</p> 
-<p>The reference architecture is a layered CloudFormation stack, in that it calls other stacks to create the environment. Within the stack, the ecs-windows-cluster.yaml file contains the instructions for bootstrapping the Windows instances and configuring the ECS cluster. To configure the instances outside of AWS CloudFormation (for example, through the CLI or the console), you can add the following commands to your instance’s user data:</p> 
-<code class="lang-yaml">Import-Module ECSTools
-Initialize-ECSAgent</code> 
-<p>Or</p> 
-<code class="lang-yaml">Import-Module ECSTools
-Initialize-ECSAgent –Cluster MyCluster -EnableIAMTaskRole</code> 
-<p>If you don’t specify a cluster name when you initialize the agent, the instance is joined to the default cluster.</p> 
-<p>Adding <code class="lang-bash">-EnableIAMTaskRole</code> when initializing the agent adds support for IAM roles for tasks. Previously, enabling this setting meant running a complex script and setting an environment variable before you could assign roles to your ECS tasks.</p> 
-<p>When you enable IAM roles for tasks on Windows, it consumes port 80 on the host. If you have tasks that listen on&nbsp;port 80 on the host, I recommend configuring a service for them that uses load balancing. You can use port 80 on the load balancer, and the traffic can be routed to another host port on your container instances. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html">Service Load Balancing</a>.</p> 
-<h3>Create a cluster</h3> 
-<p>To create a new ECS cluster, choose Launch stack, or pull the GitHub project to your local machine and run the following command:</p> 
-<p><code class="lang-bash">aws cloudformation create-stack –template-body file://&lt;path to master-windows.yaml&gt; --stack-name &lt;name&gt;</code></p> 
-<h3>Upload your container image</h3> 
-<p>Now that you have a cluster running, step through how to build and push an image into a container repository. You use a repository hosted in Amazon Elastic Container Registry (<a href="https://aws.amazon.com/ecr">Amazon ECR</a>) for this, but you could also use Docker Hub. To build and push an image to a repository, install Docker on your Windows* workstation. You also create a repository and assign the necessary permissions to the account that pushes your image to Amazon ECR. For detailed instructions, see <a href="http://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html">Pushing an Image</a>.</p> 
-<p><em>* If you are building an image that is based on Windows layers, then you must use a Windows environment to build and push your image to the registry.</em></p> 
-<h3>Write your task definition</h3> 
-<p>Now that your image is built and ready, the next step is to run your Windows containers using a task.</p> 
-<p>Start by creating a new task definition based on the <a href="https://hub.docker.com/r/microsoft/iis">windows-simple-iis</a> image from Docker Hub.</p> 
-<ol> 
-<li>Open the <a href="https://console.aws.amazon.com/ecs/home">ECS console</a>.</li> 
-<li>Choose <strong>Task Definitions</strong>, <strong>Create new task definition</strong>.</li> 
-<li>Scroll to the bottom of the page and choose <strong>Configure via JSON</strong>.</li> 
-<li>Copy and paste the following JSON into that field.</li> 
-<li>Choose <strong>Save, Create</strong>.</li> 
-</ol> 
-<code class="lang-json">{
-&quot;family&quot;: &quot;windows-simple-iis&quot;,
-&quot;containerDefinitions&quot;: [
-{
-&quot;name&quot;: &quot;windows_sample_app&quot;,
-&quot;image&quot;: &quot;microsoft/iis&quot;,
-&quot;cpu&quot;: 100,
-&quot;entryPoint&quot;:[&quot;powershell&quot;, &quot;-Command&quot;],
-&quot;command&quot;:[&quot;New-Item -Path C:\\inetpub\\wwwroot\\index.html -Type file -Value '&lt;html&gt;&lt;head&gt;&lt;title&gt;Amazon ECS Sample App&lt;/title&gt; &lt;style&gt;body {margin-top: 40px; background-color: #333;} &lt;/style&gt; &lt;/head&gt;&lt;body&gt; &lt;div style=color:white;text-align:center&gt;&lt;b&gt;Amazon ECS Sample App&lt;/b&gt; &lt;b&gt;Congratulations!&lt;/b&gt; &lt;p&gt;Your application is now running on a container in Amazon ECS.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;'; C:\\ServiceMonitor.exe w3svc&quot;],
-&quot;portMappings&quot;: [
-{
-&quot;protocol&quot;: &quot;tcp&quot;,
-&quot;containerPort&quot;: 80,
-&quot;hostPort&quot;: 8080
-}
-],
-&quot;memory&quot;: 500,
-&quot;essential&quot;: true
-}
-]
-}</code> 
-<p>You can now go back into the Task Definition page and see <code class="lang-bash">windows-simple-iis</code> as an available task definition.</p> 
-<p>There are a&nbsp;few important aspects of the task definition file to note when working with Windows containers. First, the hostPort is configured as 8080, which is necessary because the ECS agent currently uses port 80 to enable IAM roles for tasks required for least-privilege security configurations.</p> 
-<p>There are also some fairly standard task parameters that are intentionally not included. For example, network mode is not available with Windows at the time of this release, so keep that setting blank to allow Docker to configure WinNAT, the only option available today.</p> 
-<p>Also, some parameters work differently with Windows than they do with Linux. The CPU limits that you define in the task definition are absolute, whereas on Linux they are weights. For information about other task parameters that are supported or possibly different with Windows, see the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_definitions.html#windows_sample_task_defs">documentation</a>.</p> 
-<h3>Run your containers</h3> 
-<p>At this point, you are ready to run containers. There are two options to run containers with ECS:</p> 
-<ol> 
-<li>Task</li> 
-<li>Service</li> 
-</ol> 
-<p>A task is typically a short-lived process that ECS creates. It can’t be configured to actively monitor or scale. A service is meant for longer-running containers and can be configured to use a load balancer, minimum/maximum capacity settings, and a number of other knobs and switches to help ensure that your code keeps running. In both cases, you are able to pick a placement strategy and a specific IAM role for your container.</p> 
-<ol> 
-<li>Select the task definition that you created above and choose Action, Run Task.</li> 
-<li>Leave the settings on the next page to the default values.</li> 
-<li>Select the ECS cluster created when you ran the CloudFormation template.</li> 
-<li>Choose Run Task to start the process of scheduling a Docker container on your ECS cluster.</li> 
-</ol> 
-<p>You can now go to the cluster and watch the status of your task. It may take 5–10 minutes for the task to go from <strong>PENDING</strong> to <strong>RUNNING</strong>, mostly because it takes time to download all of the layers necessary to run the&nbsp;<em>microsoft/iis</em> image. After the status is <strong>RUNNING</strong>, you should see the following results:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-1.png" /></p> 
-<p>You may have noticed that the example task definition is&nbsp;named <em>windows-simple-iis:2</em>. This is because I created a second version of the task definition, which is one of the powerful capabilities of using ECS. You can make the task definitions part of your source code and then version them. You can also roll out new versions and practice blue/green deployment, switching to reduce downtime and improve the velocity of your deployments!</p> 
-<p>After the task has moved to <strong>RUNNING</strong>, you can see your website hosted in ECS. Find the public IP or DNS for your ECS host. Remember that you are hosting on port 8080. Make sure that the security group allows ingress from your client IP address to that port and that your VPC has an internet gateway associated with it. You should see a page that looks like the following:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-2.png" /></p> 
-<p>This is a nice start to deploying a simple single instance task, but what if you had a Web API to be scaled out and in based on usage? This is where you could look at defining a service and collecting CloudWatch data to add and remove both instances of the task. You could also use CloudWatch alarms to add more ECS container instances and keep up with the demand. The former is built into the configuration of your service.</p> 
-<ol> 
-<li>Select the task definition and choose&nbsp;<strong>Create Service</strong>.</li> 
-<li>Associate a load balancer.</li> 
-<li>Set up Auto Scaling.</li> 
-</ol> 
-<p>The following screenshot shows an example where you would add an additional task instance when the <strong>CPU Utilization</strong> CloudWatch metric is over 60% on average over three consecutive measurements. This may not be aggressive enough for your requirements; it’s meant to show you the option to scale tasks the same way you scale ECS instances with an Auto Scaling group. The difference is that these tasks start much faster because all of the base layers are already on the ECS host.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-3.png" /></p> 
-<p>Do not confuse task dynamic scaling with ECS instance dynamic scaling. To add additional hosts, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/cloudwatch_alarm_autoscaling.html">Tutorial: Scaling Container Instances with CloudWatch Alarms</a>.</p> 
-<b>Conclusion</b> 
-<p>This is just scratching the surface of the flexibility that you get from using containers and Amazon ECS. For more information, see the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html">Amazon ECS Developer Guide</a> and <a href="https://aws.amazon.com/ecs/resources">ECS Resources</a>.</p> 
-<p>– Jeremy, Thomas, Samuel, Akram</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3464');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/reinvent_2017_banner_1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">The re:Invent 2017 Containers After-party Guide</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tiffany Jernigan</span></span> and 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-12-05T22:28:10+00:00">05 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/the-reinvent-2017-containers-after-party-guide/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3448" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3448&amp;disqus_title=The+re%3AInvent+2017+Containers+After-party+Guide&amp;disqus_url=https://aws.amazon.com/blogs/compute/the-reinvent-2017-containers-after-party-guide/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3448');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Feeling uncontainable? re:Invent 2017 might be over, but the containers party doesn’t have to stop. Here are some ways you can keep learning about containers on AWS.</p> 
-<b>Learn about containers in Austin and New York</b> 
-<p>Come join AWS this week at <a href="http://events.linuxfoundation.org/events/kubecon-and-cloudnativecon-north-america">KubeCon</a> in Austin, Texas! We’ll be sharing best practices for running Kubernetes on AWS and talking about Amazon ECS, AWS Fargate, and Amazon EKS. Want to take Amazon EKS for a test drive? <a href="https://pages.awscloud.com/amazon-eks-preview.html">Sign up for the preview</a>.</p> 
-<p>We’ll also be talking Containers at the NYC Pop-up Loft during <em>AWS Compute Evolved: Containers Day</em> on December 13th. <a href="https://awscomputeevolvedweekny122017.splashthat.com/">Register to attend</a>.</p> 
-<b>Join an upcoming webinar</b> 
-<p>Didn’t get to attend re:Invent or want to hear a recap? Join our upcoming webinar, <strong>What You Missed at re:Invent 2017</strong>, on December 11th from 12:00 PM – 12:40 PM PT (3:00 PM – 3:40 PM ET). <a href="https://pages.awscloud.com/registration_121117_Containers-on-AWS-What-You-Missed-at-reInvent-2017.html">Register to attend</a>.</p> 
-<b>Start (or finish) a workshop</b> 
-<p>All of the containers workshops given at re:Invent are available online. Get comfortable, fire up your browser, and start building!</p> 
-<li><a href="https://interstella.trade/">Interstella GTC</a></li> 
-<li><a href="http://docs.catsndogs.lol/">Cats ‘n Dogs</a></li> 
-<li><a href="https://github.com/aws-samples/aws-workshop-for-kubernetes">Mastering Kubernetes on AWS</a></li> 
-<li><a href="https://aws.amazon.com/getting-started/container-microservices-tutorial/">Break the Monolith!</a></li> 
-<b>re:Watch your favorite talks</b> 
-<p>All of the keynote and breakouts from re:Invent are available to watch on our <a href="https://www.youtube.com/playlist?list=PLhr1KZpdzukc6GguNSQ9W0ylmx5Rckll7">YouTube playlist</a>. Slides can be found as they are uploaded on the <a href="https://www.slideshare.net/AmazonWebServices/tagged/awsreinvent2017">AWS Slideshare</a>. Just slip into your pajamas, make some popcorn, and start watching!</p> 
-<li><a href="https://www.youtube.com/playlist?list=PLhr1KZpdzukc6GguNSQ9W0ylmx5Rckll7">re:Invent containers breakout recordings</a></li> 
-<li><a href="https://www.slideshare.net/AmazonWebServices/tagged/awsreinvent2017">re:Invent containers slides</a></li> 
-<b>Learn more about what’s new</b> 
-<p>Andy Jassy announced two big updates to the container landscape at re:Invent, AWS Fargate and Amazon EKS. Here are some resources to help you learn more about all the new features and products we announced, why we built them, and how they work.</p> 
-<h3>AWS Fargate</h3> 
-<p>AWS Fargate is a technology that allows you to run containers without having to manage servers or clusters.</p> 
-<li><a href="https://www.youtube.com/watch?v=8i82i9QYUGs">Keynote</a></li> 
-<li><a href="https://aws.amazon.com/about-aws/whats-new/2017/11/introducing-aws-fargate-a-technology-to-run-containers-without-managing-infrastructure">What’s New</a></li> 
-<li><a href="https://aws.amazon.com/blogs/aws/aws-fargate/">AWS News Blog</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/aws-fargate-a-product-overview">Compute Blog</a></li> 
-<li><a href="https://www.youtube.com/watch?v=0SceSgOTyrw">CON 214 | Introduction to AWS Fargate</a></li> 
-<li><a href="https://www.youtube.com/watch?v=CdxdjDpF8Eo">CON 333 | Deep Dive into AWS Fargate</a></li> 
-<li><a href="https://github.com/aws/amazon-ecs-cli/releases/tag/v1.1.0">ECS CLI v1.1.0</a></li> 
-<li><a href="https://aws.amazon.com/fargate">Product Page</a></li> 
-<h3>Amazon Elastic Container Service for Kubernetes (Amazon EKS)</h3> 
-<p>Amazon Elastic Container Service for Kubernetes (Amazon EKS) is a managed service that makes it easy for you to run Kubernetes on AWS without needing to configure and operate your own Kubernetes clusters.</p> 
-<li><a href="https://www.youtube.com/watch?v=gUFtUU7qvSQ">Keynote</a></li> 
-<li><a href="https://aws.amazon.com/about-aws/whats-new/2017/11/introducing-amazon-elastic-container-service-for-kubernetes">What’s New</a></li> 
-<li><a href="https://aws.amazon.com/blogs/aws/amazon-elastic-container-service-for-kubernetes">Blog</a></li> 
-<li><a href="https://www.youtube.com/watch?v=WHTejF3W0s4">CON 215 | Intro to Amazon Elastic Container Service for Kubernetes (EKS)</a></li> 
-<li><a href="https://aws.amazon.com/eks">Product Page</a></li> 
-<p>We hope you had a great re:Invent and look forward to seeing what you build on AWS in 2018!</p> 
-<p>– The AWS Containers Team</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3448');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/SGK_Arch_Diagram_Resized-1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Implementing Dynamic ETL Pipelines Using AWS Step Functions</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> and 
-<span property="author" typeof="Person"><span property="name">Wangechi Doble</span></span> | on 
-<time property="datePublished" datetime="2017-12-05T16:44:24+00:00">05 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-integration/" title="View all posts in Application Integration"><span property="articleSection">Application Integration</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/implementing-dynamic-etl-pipelines-using-aws-step-functions/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3409" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3409&amp;disqus_title=Implementing+Dynamic+ETL+Pipelines+Using+AWS+Step+Functions&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-dynamic-etl-pipelines-using-aws-step-functions/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3409');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5><strong>This post contributed by:<br /> Wangechi Dole, AWS Solutions Architect<em><br /> </em>Milan Krasnansky, ING, Digital Solutions Developer, SGK<em><br /> </em>Rian Mookencherry, Director – Product Innovation, SGK</strong></h5> 
-<p>Data processing and transformation is a common use case you see in our <a href="https://aws.amazon.com/solutions/case-studies/">customer case studies and success stories</a>. Often, customers deal with complex data from a variety of sources that needs to be transformed and customized through a series of steps to make it useful to different systems and stakeholders. This can be difficult due to the ever-increasing volume, velocity, and variety of data. Today, data management challenges cannot be solved with traditional databases.</p> 
-<p>Workflow automation helps you build solutions that are repeatable, scalable, and reliable. You can use <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a> for this. A great example is how <a href="http://www.sgkinc.com/">SGK</a> used Step Functions to automate the ETL processes for their client. With Step Functions, SGK has been able to automate changes within the data management system, substantially reducing the time required for data processing.</p> 
-<p>In this post, SGK shares the details of how they used Step Functions to build a robust data processing system based on highly configurable business transformation rules for ETL processes.</p> 
-<b>SGK: Building dynamic ETL pipelines</b> 
-<p>SGK is a subsidiary of Matthews International Corporation, a diversified organization focusing on brand solutions and industrial technologies. SGK’s Global Content Creation Studio network creates compelling content and solutions that connect brands and products to consumers through multiple assets including photography, video, and copywriting.</p> 
-<p>We were recently contracted to build a sophisticated and scalable data management system for one of our clients. We chose to build the solution on AWS to leverage advanced, managed services that help to improve the speed and agility of development.</p> 
-<p>The data management system served two main functions:</p> 
-<ol> 
-<li>Ingesting a large amount of complex data to facilitate both reporting and product funding decisions for the client’s global marketing and supply chain organizations.</li> 
-<li>Processing the data through normalization and applying complex algorithms and data transformations. The system goal was to provide information in the relevant context—such as strategic marketing, supply chain, product planning, etc. —to the end consumer through automated data feeds or updates to existing ETL systems.</li> 
-</ol> 
-<p>We were faced with several challenges:</p> 
-<li>Output data that needed to be refreshed at least twice a day to provide fresh datasets to both local and global markets. That constant data refresh posed several challenges, especially around data management and replication across multiple databases.</li> 
-<li>The complexity of reporting business rules that needed to be updated on a constant basis.</li> 
-<li>Data that could not be processed as contiguous blocks of typical time-series data. The measurement of the data was done across seasons (that is, combination of dates), which often resulted with up to three overlapping seasons at any given time.</li> 
-<li>Input data that came from 10+ different data sources. Each data source ranged from 1–20K rows with as many as 85 columns per input source.</li> 
-<p>These challenges meant that our small Dev team heavily invested time in frequent configuration changes to the system and data integrity verification to make sure that everything was operating properly. Maintaining this system proved to be a daunting task and that’s when we turned to Step Functions—along with other AWS services—to automate our ETL processes.</p> 
-<h3>Solution overview</h3> 
-<p>Our solution included the following AWS services:</p> 
-<li><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a>: Before Step Functions was available, we were using multiple Lambda functions for this use case and running into memory limit issues. With Step Functions, we can execute steps in parallel simultaneously, in a cost-efficient manner, without running into memory limitations.</li> 
-<li><a href="https://aws.amazon.com/lambda/">AWS Lambda</a>: The Step Functions state machine uses Lambda functions to implement the Task states. Our Lambda functions are implemented in Java 8.</li> 
-<li><a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> provides us with an easy and flexible way to manage business rules. We specify our rules as Keys. These are key-value pairs stored in a DynamoDB table.</li> 
-<li><a href="https://aws.amazon.com/rds/">Amazon RDS</a>: Our ETL pipelines consume source data from our RDS MySQL database.</li> 
-<li><a href="https://aws.amazon.com/redshift/">Amazon Redshift</a>: We use Amazon Redshift for reporting purposes because it integrates with our BI tools. Currently we are using Tableau for reporting which integrates well with Amazon Redshift.</li> 
-<li><a href="https://aws.amazon.com/s3/">Amazon S3</a>: We store our raw input files and intermediate results in S3 buckets.</li> 
-<li><a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a>: Our users expect results at a specific time. We use CloudWatch Events to trigger Step Functions on an automated schedule.</li> 
-<h3>Solution architecture</h3> 
-<p>This solution uses a&nbsp;declarative&nbsp;approach to defining business transformation rules that are applied by the underlying Step Functions state machine as data moves from RDS to Amazon Redshift.&nbsp;An S3 bucket is used to store intermediate results. A CloudWatch Event rule triggers the Step Functions state machine on a schedule. The following diagram illustrates our architecture:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/SGK_Arch_Diagram_Resized-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/SGK_Arch_Diagram_Resized-1.png" /></a></p> 
-<p>Here are more details for the above diagram:</p> 
-<ol> 
-<li>A rule in CloudWatch Events triggers the state machine execution on an automated schedule.</li> 
-<li>The state machine invokes the first Lambda function.</li> 
-<li>The Lambda function deletes all existing records in Amazon Redshift. Depending on the dataset, the Lambda function can create a new table in Amazon Redshift to hold the data.</li> 
-<li>The same Lambda function then retrieves Keys from a DynamoDB table. Keys represent specific marketing campaigns or seasons and map to specific records in RDS.</li> 
-<li>The state machine executes the second Lambda function using the Keys from DynamoDB.</li> 
-<li>The second Lambda function retrieves the referenced dataset from RDS. The records retrieved represent the entire dataset needed for a specific marketing campaign.</li> 
-<li>The second Lambda function executes in parallel for each Key retrieved from DynamoDB and stores the output in CSV format temporarily in S3.</li> 
-<li>Finally, the Lambda function uploads the data into Amazon Redshift.</li> 
-</ol> 
-<p>To understand the above data processing workflow, take a closer look at the Step Functions state machine for this example.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/SGK_statemacine_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/SGK_statemacine_1.png" /></a></p> 
-<p>We walk you through the state machine in more detail in the following sections.</p> 
-<h3>Walkthrough</h3> 
-<p>To get started, you need to:</p> 
-<li>Create a schedule in CloudWatch Events</li> 
-<li>Specify conditions for RDS data extracts</li> 
-<li>Create Amazon Redshift input files</li> 
-<li>Load data into Amazon Redshift</li> 
-<p><strong>Step 1: Create a schedule in CloudWatch Events</strong><br /> Create rules in CloudWatch Events to trigger the Step Functions state machine on an automated schedule. The following is an example cron expression to automate your schedule:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/EventSource_resized.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/EventSource_resized.png" /></a></p> 
-<p>In this example, the cron expression invokes the Step Functions state machine at 3:00am and 2:00pm (UTC) every day.</p> 
-<p><strong>Step 2: Specify conditions for RDS data extracts</strong><br /> We use DynamoDB to store Keys that determine which rows of data to extract from our RDS MySQL database. An example Key is MCS2017, which stands for, Marketing Campaign Spring 2017. Each campaign has a specific start and end date and the corresponding dataset is stored in RDS MySQL. A record in RDS contains about 600 columns, and each Key can represent up to 20K records.</p> 
-<p>A given day can have multiple campaigns with different start and end dates running simultaneously. In the following example DynamoDB item, three campaigns are specified for the given date.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/campaigns_resized.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/05/campaigns_resized.png" /></a></p> 
-<p>The state machine example shown above&nbsp;uses Keys 31, 32, and 33 in the first ChoiceState and Keys 21 and 22 in the second ChoiceState. These keys represent marketing campaigns for a given day. For example, on Monday, there are only two campaigns requested. The ChoiceState with Keys 21 and 22 is executed. If three campaigns are requested on Tuesday, for example, then ChoiceState with Keys 31, 32, and 33 is executed. MCS2017 can be represented by Key 21 and Key 33 on Monday and Tuesday, respectively. This approach gives us the flexibility to add or remove campaigns dynamically.</p> 
-<p><strong>Step 3: Create Amazon Redshift input files</strong><br /> When the state machine begins execution, the first Lambda function is invoked as the resource for FirstState, represented in the Step Functions state machine as follows:</p> 
-<code class="lang-json">&quot;Comment&quot;: ” AWS Amazon States Language.&quot;, 
-&quot;StartAt&quot;: &quot;FirstState&quot;,
- &quot;States&quot;: { 
-&quot;FirstState&quot;: {
- &quot;Type&quot;: &quot;Task&quot;,
- &quot;Resource&quot;: &quot;arn:aws:lambda:xx-xxxx-x:XXXXXXXXXXXX:function:Start&quot;,
-&quot;Next&quot;: &quot;ChoiceState&quot; 
-} </code> 
-<p>As described in the solution architecture, the purpose of this Lambda function is to delete existing data in Amazon Redshift and retrieve keys from DynamoDB. In our use case, we found that deleting existing records was more efficient and less time-consuming than finding the delta and updating existing records. On average, an Amazon Redshift table can contain about 36 million cells, which translates to roughly 65K records. The following is the code snippet for the first Lambda function in Java 8:</p> 
-<code class="lang-java">public class LambdaFunctionHandler implements RequestHandler&lt;Map&lt;String,Object&gt;,Map&lt;String,String&gt;&gt; {
-Map&lt;String,String&gt; keys= new HashMap&lt;&gt;();
-public Map&lt;String, String&gt; handleRequest(Map&lt;String, Object&gt; input, Context context){
-Properties config = getConfig(); 
-// 1. Cleaning Redshift Database
-new RedshiftDataService(config).cleaningTable(); 
-// 2. Reading data from Dynamodb
-List&lt;String&gt; keyList = new DynamoDBDataService(config).getCurrentKeys();
-for(int i = 0; i &lt; keyList.size(); i++) {
-keys.put(”key&quot; + (i+1), keyList.get(i)); 
-}
-keys.put(”key&quot; + T,String.valueOf(keyList.size()));
-// 3. Returning the key values and the key count from the “for” loop
-return (keys);
-}</code> 
-<p>The following JSON represents ChoiceState.</p> 
-<code class="lang-json">&quot;ChoiceState&quot;: {
-&quot;Type&quot; : &quot;Choice&quot;,
-&quot;Choices&quot;: [ 
-{ 
-&quot;Variable&quot;: &quot;$.keyT&quot;,
-&quot;StringEquals&quot;: &quot;3&quot;,
-&quot;Next&quot;: &quot;CurrentThreeKeys&quot; 
-}, 
-{ 
-&quot;Variable&quot;: &quot;$.keyT&quot;,
-&quot;StringEquals&quot;: &quot;2&quot;,
-&quot;Next&quot;: &quot;CurrentTwooKeys&quot; 
-} 
-], 
-&quot;Default&quot;: &quot;DefaultState&quot;
-}
-</code> 
-<p>The variable $.keyT represents the number of keys retrieved from DynamoDB. This variable determines which of the parallel branches should be executed. At the time of publication, Step Functions does not support dynamic parallel state. Therefore, choices under ChoiceState are manually created and assigned hardcoded StringEquals values. These values represent the number of parallel executions for the second Lambda function.</p> 
-<p>For example, if $.keyT equals 3, the second Lambda function is executed three times in parallel with keys, $key1, $key2 and $key3 retrieved from DynamoDB. Similarly, if $.keyT equals two, the second Lambda function is executed twice in parallel. &nbsp;The following JSON represents this parallel execution:</p> 
-<code class="lang-json">&quot;CurrentThreeKeys&quot;: { 
-&quot;Type&quot;: &quot;Parallel&quot;,
-&quot;Next&quot;: &quot;NextState&quot;,
-&quot;Branches&quot;: [ 
-{ 
-&quot;StartAt&quot;: “key31&quot;,
-&quot;States&quot;: { 
-“key31&quot;: { 
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;InputPath&quot;: &quot;$.key1&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:xx-xxxx-x:XXXXXXXXXXXX:function:Execution&quot;,
-&quot;End&quot;: true 
-} 
-} 
-}, 
-{ 
-&quot;StartAt&quot;: “key32&quot;,
-&quot;States&quot;: { 
-“key32&quot;: { 
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;InputPath&quot;: &quot;$.key2&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:xx-xxxx-x:XXXXXXXXXXXX:function:Execution&quot;,
-&quot;End&quot;: true 
-} 
-} 
-}, 
-{ 
-&quot;StartAt&quot;: “key33&quot;,
-&quot;States&quot;: { 
-“key33&quot;: { 
-&quot;Type&quot;: &quot;Task&quot;,
-&quot;InputPath&quot;: &quot;$.key3&quot;,
-&quot;Resource&quot;: &quot;arn:aws:lambda:xx-xxxx-x:XXXXXXXXXXXX:function:Execution&quot;,
-&quot;End&quot;: true 
-} 
-} 
-} 
-] 
-} </code> 
-<p><code class="lang-json"></code></p> 
-<p><strong>Step 4: Load data into Amazon Redshift</strong><br /> The second Lambda function in the state machine extracts records from RDS associated with keys retrieved for DynamoDB. It processes the data then loads into an Amazon Redshift table. The following is code snippet for the second Lambda function in Java 8.</p> 
-<code class="lang-java">public class LambdaFunctionHandler implements RequestHandler&lt;String, String&gt; {
-public static String key = null;
- public String handleRequest(String input, Context context) { 
-key=input; 
-//1. Getting basic configurations for the next classes + s3 client Properties
-config = getConfig(); 
-AmazonS3 s3 = AmazonS3ClientBuilder.defaultClient(); 
-// 2. Export query results from RDS into S3 bucket 
-new RdsDataService(config).exportDataToS3(s3,key); 
-// 3. Import query results from S3 bucket into Redshift 
-new RedshiftDataService(config).importDataFromS3(s3,key); 
-System.out.println(input); 
-return &quot;SUCCESS&quot;; 
-} 
-}</code> 
-<p>After the data is loaded into Amazon Redshift, end users can visualize it using their preferred business intelligence tools.</p> 
-<h3>Lessons learned</h3> 
-<li>At the time of publication, the 1.5–GB memory hard limit for Lambda functions was inadequate for processing our complex workload. Step Functions gave us the flexibility to chunk our large datasets and process them in parallel, saving on costs and time.</li> 
-<li>In our previous implementation, we assigned each key a dedicated Lambda function along with CloudWatch rules for schedule automation. This approach proved to be inefficient and quickly became an operational burden. Previously, we processed each key sequentially, with each key adding about five minutes to the overall processing time. For example, processing three keys meant that the total processing time was three times longer. With Step Functions, the entire state machine executes in about five minutes.</li> 
-<li>Using DynamoDB with Step Functions gave us the flexibility to manage keys efficiently. In our previous implementations, keys were hardcoded in Lambda functions, which became difficult to manage due to frequent updates. DynamoDB is a great way to store dynamic data that changes frequently, and it works perfectly with our serverless architectures.</li> 
-<b>Conclusion</b> 
-<p>With Step Functions, we were able to fully automate the frequent configuration updates to our dataset resulting in significant cost savings, reduced risk to data errors due to system downtime, and more time for us to focus on new product development rather than support related issues. We hope that you have found the information useful and that it can serve as a jump-start to building your own ETL processes on AWS with managed AWS services.</p> 
-<p>For more information about how Step Functions makes it easy to coordinate the components of distributed applications and microservices in any workflow, see the <a href="https://aws.amazon.com/step-functions/getting-started/">use case examples</a> and then build your first state machine in under five minutes in the <a href="http://console.aws.amazon.com/states/home">Step Functions console</a>.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3409');
 });
 </script> 
 </article> 

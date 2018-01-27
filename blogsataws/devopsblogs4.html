@@ -190,6 +190,108 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS Lambda and Amazon DynamoDB in an Automated Approach to Managing AWS CloudFormation Template Parameters and Mappings</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
+<time property="datePublished" datetime="2017-04-04T10:15:33+00:00">04 APR 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/custom-lookup-using-aws-lambda-and-amazon-dynamodb/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> gives you an easy way to codify the creation and management of related AWS resources. The optional <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html">Mappings</a> and <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html">Parameters</a> sections of CloudFormation templates help you organize and parameterize your templates so you can quickly customize your stack. As organizations adopt Infrastructure as Code best practices, the number of mappings and parameters can quickly grow. In this blog post, we’ll discuss how <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> and <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> can be used to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
+<h3>Solution overview</h3> 
+<p>There are three parts to the solution described in this post. You’ll find sample code for this solution in this <a href="https://github.com/awslabs/custom-lookup-lambda">AWS Labs GitHub repository</a>.</p> 
+<ol> 
+<li><strong>DynamoDB table</strong>: Used as a central location to store and update all key-value pairs used in the ‘Mappings’ and ‘Parameters’ sections of the CloudFormation template. This could be a centralized table for the whole organization, with a partition key consisting of the team name and environment (for example, development, test, production) and a sort key for the application name. For more information about the types of keys supported by DynamoDB, see <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html#HowItWorks.CoreComponents.PrimaryKey">Core Components</a> in the Amazon DynamoDB Developer Guide.</li> 
+</ol> 
+<p>Here is the sample data in the table. “teamname-environment” is the partition key and “appname” is the sort key.</p> 
+<code class="lang-json">{
+&quot;teamname-environment&quot;: &quot;team1-dev&quot;,
+&quot;appname&quot;: &quot;app1&quot;,
+&quot;mappings&quot;: {
+&quot;elbsubnet1&quot;: &quot;subnet-123456&quot;,
+&quot;elbsubnet2&quot;: &quot;subnet-234567&quot;,
+&quot;appsubnet1&quot;: &quot;subnet-345678&quot;,
+&quot;appsubnet2&quot;: &quot;subnet-456789&quot;,
+&quot;vpc&quot;: &quot;vpc-123456&quot;,
+&quot;appname&quot;:&quot;app1&quot;,
+&quot;costcenter&quot;:&quot;123456&quot;,
+&quot;teamname&quot;:&quot;team1&quot;,
+&quot;environment&quot;:&quot;dev&quot;,
+&quot;certificate&quot;:&quot;arn-123456qwertyasdfgh&quot;,
+&quot;compliancetype&quot;:&quot;pci&quot;,
+&quot;amiid&quot;:&quot;ami-123456&quot;,
+&quot;region&quot;:&quot;us-west-1&quot;,
+&quot;publichostedzoneid&quot;:&quot;Z234asdf1234asdf&quot;,
+&quot;privatehostedzoneid&quot;:&quot;Z345SDFGCVHD123&quot;,
+&quot;hostedzonename&quot;:&quot;demo.internal&quot;
+}
+}
+</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-3.43.48-PM.png" /><br /> &nbsp;</p> 
+<ol start="2"> 
+<li><strong>Lambda function:</strong> Accepts the inputs of the primary keys, looks up the DynamoDB table, and returns all the key-value data.</li> 
+<li><strong>Custom lookup resource:</strong> Makes a call to the Lambda function, with the inputs of primary keys (accepted by the Lambda function) and retrieves the key-value data. All CloudFormation templates can duplicate this&nbsp;generic custom resource.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/custom-lookup-workflow.png" /></p> 
+<p>&nbsp;</p> 
+<p>The diagram shows the interaction of services and resources in this solution.</p> 
+<ol> 
+<li>Users create a DynamoDB table and, using the DynamoDB console, AWS SDK, or AWS CLI, insert the mappings, parameters, and key-value data.</li> 
+<li>CloudFormation templates have a custom resource, which calls a Lambda function. The combination of team name and application environment (“teamname-environment”) is the partition key input. Application Name (“appname”) is the sort key input to the Lambda function.</li> 
+<li>The Lambda function queries the DynamoDB table based on the inputs.</li> 
+<li>DynamoDB responds to the Lambda function with the results.</li> 
+<li>The Lambda function responds to the custom resource in the CloudFormation stack, with the key-value data.</li> 
+<li>The key-value data retrieved by the custom resource is then used by other resources in the stack using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html">GetAtt Intrinsic function</a>.</li> 
+</ol> 
+<p>&nbsp;</p> 
+<b>Using the sample code</b> 
+<p>To use the sample code for this solution, follow these steps:</p> 
+<ol> 
+<li>Clone the repository.</li> 
+</ol> 
+<code class="lang-bash">git clone https://github.com/awslabs/custom-lookup-lambda.git
+cd custom-lookup-lambda
+</code> 
+<ol start="2"> 
+<li>The values in the sample-mappings.json file will be inserted into DynamoDB. Each record in sample-mappings.json corresponds to an item in DynamoDB. The mappings object contains the mapping.</li> 
+<li>This solution uses Python as a <a href="http://docs.aws.amazon.com/lambda/latest/dg/python-programming-model-handler-types.html">programming model</a> for AWS Lambda. If you haven’t set up your local development environment for Python, follow <a href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/create-deploy-python-common-steps.html#python-common-setup-venv">these steps</a>, and then install the <a href="https://pypi.python.org/pypi/awscli/1.11.63">awscli python package</a>.</li> 
+</ol> 
+<code class="lang-bash">pip install awscli
+</code> 
+<ol start="4"> 
+<li>To prepare your access keys or assume-role to make calls to AWS, configure the AWS Command Line Interface as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>. The IAM user or the assumed role used to make API calls must have, at minimum, <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this access</a>. You can attach <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this policy</a> to the IAM user or IAM group if you are using access keys, or to the IAM role if you are assuming a role. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-using.html#attach-managed-policy-console">Attaching Managed Policies</a> in the IAM User Guide.</li> 
+<li>Run insertrecord.sh to create the DynamoDB table named custom-lookup and insert the items in sample-mappings.json.</li> 
+</ol> 
+<code class="lang-bash">./insertrecord.sh</code> 
+<p>This script does the following:</p> 
+<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
+<li>Executes the Python script to create the DynamoDB table (custom-lookup) and puts the data in sample-mappings.json.</li> 
+<ol start="6"> 
+<li>Run deployer.sh to package and create the Lambda function.</li> 
+</ol> 
+<code class="lang-bash">./deployer.sh</code> 
+<p>This script does the following:</p> 
+<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
+<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html">CloudFormation package cli</a> to package the Lambda function (as coded in lambda-cloudformation.yaml).</li> 
+<li>Uploads the packaged code to the S3 bucket (as prompted when you execute this script).</li> 
+<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html">CloudFormation deploy cli </a>to deploy the Lambda function. lambda-cloudformation.yaml also <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html">exports</a> the Lambda function’s<a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html"> Amazon Resource Name (ARN)</a> using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-lambda-function.html#w1ab2c19c12d587c13">GetAtt intrinsic function</a>, which can be <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html">imported</a> by other stacks.</li> 
+<ol start="7"> 
+<li>Using sample-stack.yaml, create a stack that makes a call to the Lambda function created in step 6. The function queries the DynamoDB table and produces as output the values corresponding to team1-dev and app1.</li> 
+</ol> 
+<code class="lang-bash">aws cloudformation deploy --template-file sample-stack.yaml --stack-name sample-stack
+</code> 
+<ol start="8"> 
+<li>Examine the output in the AWS CloudFormation console. You should see the values retrieved from the DynamoDB table. The Fn::GetAtt function allows you to use the values retrieved by the custom resource Lambda function.</li> 
+</ol> 
+<p>For example, if the custom resource Lambda function is called using resource name as CUSTOMLOOKUP in the sample-stack, the value of key=amiid will be used in the stack using !GetAtt CUSTOMLOOKUP.amiid. Likewise, the value of key=vpc will be used in the stack using !GetAtt CUSTOMLOOKUP.vpc and so on.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-2.53.28-PM.png" /></p> 
+<b>Conclusion</b> 
+<p>In this blog post, we showed how to use an AWS CloudFormation custom resource backed by an AWS Lambda function to query Amazon DynamoDB to retrieve key-value data, thereby replacing the Mappings and Parameter sections of the CloudFormation template. This solution provides a more automated approach to managing template parameters and mappings. You can use the DynamoDB table to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Implementing DevSecOps Using AWS CodePipeline</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1023,37 +1125,6 @@ AWS.Blog.commenting('#aws-comment-trigger-451');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-451');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS OpsWorks at re:Invent 2016</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Daniel Huesch</span></span> | on 
-<time property="datePublished" datetime="2016-11-23T18:29:47+00:00">23 NOV 2016</time> | 
-<a href="https://aws.amazon.com/blogs/devops/aws-opsworks-at-reinvent-2016/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-439" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=439&amp;disqus_title=AWS+OpsWorks+at+re%3AInvent+2016&amp;disqus_url=https://aws.amazon.com/blogs/devops/aws-opsworks-at-reinvent-2016/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-439');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS re:Invent 2016 is right around the corner. Here’s an overview of where you can meet the AWS OpsWorks team and learn about the service.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=7979">DEV305 – Configuration Management in the Cloud<br /> 12/1/16 (Thursday) 11:00 AM – Venetian, Level 3, Murano 3205</a></strong></p> 
-<p>To ensure that your application operates in a predictable manner in both your test and production environments, you must vigilantly maintain the configuration of your resources. By leveraging configuration management solutions, Dev and Ops engineers can define the state of their resources across their entire lifecycle. In this session, we will show you how to use AWS OpsWorks, AWS CodeDeploy, and AWS CodePipeline to build a reliable and consistent development pipeline that assures your production workloads behave in a predictable manner.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=11763">DEV305-R – [REPEAT] Configuration Management in the Cloud<br /> 12/2/16 (Friday) 9:00 AM – Venetian, Level 1, Sands 202</a></strong></p> 
-<p>This is a repeat session of the talk from the previous day if you were unable to attend that one.</p> 
-<p><strong>LD148 – Live Demo: Configuration Management with AWS OpsWorks<br /> 12/1/16 (Thursday) 4:50 PM – Venetian, Hall C, AWS Booth</strong></p> 
-<p>Join this session at the AWS Booth for a live demo and the opportunity to meet the AWS OpsWorks service team.</p> 
-<p>AWS re:Invent is a great opportunity to talk with AWS teams. As in previous years, you will find OpsWorks team members at the AWS booth. Drop by and ask for a demo!</p> 
-<p>Didn’t register before the conference sold out? All sessions will be recorded and posted on <a href="https://www.youtube.com/user/AmazonWebServices">YouTube</a> after the conference and all slide decks will be posted on <a href="http://www.slideshare.net/featured/category/technology">SlideShare.net</a>.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-439');
 });
 </script> 
 </article> 

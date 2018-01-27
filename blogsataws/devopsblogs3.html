@@ -190,6 +190,300 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Continuous Delivery of Nested AWS CloudFormation Stacks Using AWS CodePipeline</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
+<time property="datePublished" datetime="2017-06-27T23:30:29+00:00">27 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/continuous-delivery-of-nested-aws-cloudformation-stacks-using-aws-codepipeline/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In <a href="https://aws.amazon.com/blogs/aws/codepipeline-update-build-continuous-delivery-workflows-for-cloudformation-stacks/" target="_blank" rel="noopener noreferrer">CodePipeline Update – Build Continuous Delivery Workflows for CloudFormation Stacks</a>, Jeff Barr discusses infrastructure as code and how to use <a href="https://aws.amazon.com/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline</a> for continuous delivery. In this blog post, I discuss the continuous delivery of nested CloudFormation stacks using AWS CodePipeline, with <a href="https://aws.amazon.com/codecommit/" target="_blank" rel="noopener noreferrer">AWS CodeCommit</a> as the source repository and <a href="https://aws.amazon.com/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild</a> as a build and <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/aws-codepipeline-adds-support-for-unit-testing/" target="_blank" rel="noopener noreferrer">testing tool</a>. I deploy the stacks using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html" target="_blank" rel="noopener noreferrer">CloudFormation change sets</a> following a <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/approvals.html" target="_blank" rel="noopener noreferrer">manual approval process</a>.</p> 
+<p>Here’s how to do it:</p> 
+<p>In AWS CodePipeline, create a pipeline with four stages:</p> 
+<li>Source (AWS CodeCommit)</li> 
+<li>Build and Test (AWS CodeBuild and AWS CloudFormation)</li> 
+<li>Staging (AWS CloudFormation and manual approval)</li> 
+<li>Production (AWS CloudFormation and manual approval)</li> 
+<p><span id="more-1238"></span></p> 
+<p>Pipeline stages, the actions in each stage, and transitions between stages are shown in the following diagram.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Pipeline_vertical_design-2-362x1024.png" /></p> 
+<p>CloudFormation templates, test scripts, and the build specification are stored in AWS CodeCommit repositories. These files are used in the Source stage of the pipeline in AWS CodePipeline.</p> 
+<p>The <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-stack.html" target="_blank" rel="noopener noreferrer">AWS::CloudFormation::Stack</a> resource type is used to create child stacks from a master stack. The CloudFormation stack resource requires the templates of the child stacks to be stored in the S3 bucket. The location of the template file is provided as a URL in the properties section of the resource definition.</p> 
+<p>The following template creates three child stacks:</p> 
+<li>Security (IAM, security groups).</li> 
+<li>Database (an RDS instance).</li> 
+<li>Web stacks (EC2 instances in an Auto Scaling group, elastic load balancer).</li> 
+<code class="lang-yaml">Description: Master stack which creates all required nested stacks
+Parameters:
+&nbsp; TemplatePath:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: S3Bucket Path where the templates are stored
+&nbsp; VPCID:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::VPC::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid VPC Id
+&nbsp; PrivateSubnet1:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ1
+&nbsp; PrivateSubnet2:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of private subnet in AZ2
+&nbsp; PublicSubnet1:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ1
+&nbsp; PublicSubnet2:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Subnet::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid SubnetId of public subnet in AZ2
+&nbsp; S3BucketName:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Name of the S3 bucket to allow access to the Web Server IAM Role.
+&nbsp; KeyPair:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::KeyPair::KeyName&quot;
+&nbsp; &nbsp; Description: Enter a valid KeyPair Name
+&nbsp; AMIId:
+&nbsp; &nbsp; Type: &quot;AWS::EC2::Image::Id&quot;
+&nbsp; &nbsp; Description: Enter a valid AMI ID to launch the instance
+&nbsp; WebInstanceType:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter one of the possible instance type for web server
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - t2.large
+&nbsp; &nbsp; &nbsp; - m4.large
+&nbsp; &nbsp; &nbsp; - m4.xlarge
+&nbsp; &nbsp; &nbsp; - c4.large
+&nbsp; WebMinSize:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Minimum number of instances in auto scaling group
+&nbsp; WebMaxSize:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Maximum number of instances in auto scaling group
+&nbsp; DBSubnetGroup:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid DB Subnet Group
+&nbsp; DBUsername:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid Database master username
+&nbsp; &nbsp; MinLength: 1
+&nbsp; &nbsp; MaxLength: 16
+&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z][a-zA-Z0-9]*&quot;
+&nbsp; DBPassword:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter a valid Database master password
+&nbsp; &nbsp; NoEcho: true
+&nbsp; &nbsp; MinLength: 1
+&nbsp; &nbsp; MaxLength: 41
+&nbsp; &nbsp; AllowedPattern: &quot;[a-zA-Z0-9]*&quot;
+&nbsp; DBInstanceType:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Enter one of the possible instance type for database
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - db.t2.micro
+&nbsp; &nbsp; &nbsp; - db.t2.small
+&nbsp; &nbsp; &nbsp; - db.t2.medium
+&nbsp; &nbsp; &nbsp; - db.t2.large
+&nbsp; Environment:
+&nbsp; &nbsp; Type: String
+&nbsp; &nbsp; Description: Select the appropriate environment
+&nbsp; &nbsp; AllowedValues:
+&nbsp; &nbsp; &nbsp; - dev
+&nbsp; &nbsp; &nbsp; - test
+&nbsp; &nbsp; &nbsp; - uat
+&nbsp; &nbsp; &nbsp; - prod
+Resources:
+&nbsp; SecurityStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/security-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; S3BucketName:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: S3BucketName
+&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: SecurityStack
+&nbsp; DatabaseStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/database-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; DBSubnetGroup:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBSubnetGroup
+&nbsp; &nbsp; &nbsp; &nbsp; DBUsername:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBUsername
+&nbsp; &nbsp; &nbsp; &nbsp; DBPassword:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBPassword
+&nbsp; &nbsp; &nbsp; &nbsp; DBServerSecurityGroup:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBServerSG
+&nbsp; &nbsp; &nbsp; &nbsp; DBInstanceType:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: DBInstanceType
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: &nbsp; DatabaseStack
+&nbsp; ServerStack:
+&nbsp; &nbsp; Type: &quot;AWS::CloudFormation::Stack&quot;
+&nbsp; &nbsp; Properties:
+&nbsp; &nbsp; &nbsp; TemplateURL:
+&nbsp; &nbsp; &nbsp; &nbsp; Fn::Sub: &quot;https://s3.amazonaws.com/${TemplatePath}/server-stack.yml&quot;
+&nbsp; &nbsp; &nbsp; Parameters:
+&nbsp; &nbsp; &nbsp; &nbsp; VPCID:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: VPCID
+&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet1:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet1
+&nbsp; &nbsp; &nbsp; &nbsp; PrivateSubnet2:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PrivateSubnet2
+&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet1:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet1
+&nbsp; &nbsp; &nbsp; &nbsp; PublicSubnet2:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: PublicSubnet2
+&nbsp; &nbsp; &nbsp; &nbsp; KeyPair:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: KeyPair
+&nbsp; &nbsp; &nbsp; &nbsp; AMIId:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: AMIId
+&nbsp; &nbsp; &nbsp; &nbsp; WebSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebSG
+&nbsp; &nbsp; &nbsp; &nbsp; ELBSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.ELBSG
+&nbsp; &nbsp; &nbsp; &nbsp; DBClientSG:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.DBClientSG
+&nbsp; &nbsp; &nbsp; &nbsp; WebIAMProfile:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Fn::GetAtt: SecurityStack.Outputs.WebIAMProfile
+&nbsp; &nbsp; &nbsp; &nbsp; WebInstanceType:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebInstanceType
+&nbsp; &nbsp; &nbsp; &nbsp; WebMinSize:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMinSize
+&nbsp; &nbsp; &nbsp; &nbsp; WebMaxSize:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: WebMaxSize
+&nbsp; &nbsp; &nbsp; &nbsp; Environment:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Ref: Environment
+&nbsp; &nbsp; &nbsp; Tags:
+&nbsp; &nbsp; &nbsp; &nbsp; - Key: Name
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Value: ServerStack
+Outputs:
+&nbsp; WebELBURL:
+&nbsp; &nbsp; Description: &quot;URL endpoint of web ELB&quot;
+&nbsp; &nbsp; Value:
+&nbsp; &nbsp; &nbsp; Fn::GetAtt: ServerStack.Outputs.WebELBURL
+</code> 
+<p>During the Validate stage, AWS CodeBuild checks for changes to the AWS CodeCommit source repositories. It uses the <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ValidateTemplate.html" target="_blank" rel="noopener noreferrer">ValidateTemplate</a> API to validate the CloudFormation template and copies the child templates and configuration files to the appropriate location in the S3 bucket.</p> 
+<p>The following AWS CodeBuild build specification validates the CloudFormation templates listed under the TEMPLATE_FILES environment variable and copies them to the S3 bucket specified in the TEMPLATE_BUCKET environment variable in the AWS CodeBuild project. Optionally, you can use the TEMPLATE_PREFIX environment variable to specify a path inside the bucket. This updates the configuration files to use the location of the child template files. The location of the template files is provided as a parameter to the master stack.</p> 
+<code class="lang-yaml">version: 0.1
+environment_variables:
+&nbsp; plaintext:
+&nbsp; &nbsp; CHILD_TEMPLATES: |
+&nbsp; &nbsp; &nbsp; security-stack.yml
+&nbsp; &nbsp; &nbsp; server-stack.yml
+&nbsp; &nbsp; &nbsp; database-stack.yml
+&nbsp; &nbsp; TEMPLATE_FILES: |
+&nbsp; &nbsp; &nbsp; master-stack.yml
+&nbsp; &nbsp; &nbsp; security-stack.yml
+&nbsp; &nbsp; &nbsp; server-stack.yml
+&nbsp; &nbsp; &nbsp; database-stack.yml
+&nbsp; &nbsp; CONFIG_FILES: |
+&nbsp; &nbsp; &nbsp; config-prod.json
+&nbsp; &nbsp; &nbsp; config-test.json
+&nbsp; &nbsp; &nbsp; config-uat.json
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; npm install jsonlint -g
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating CFN templates&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for cfn_template in $TEMPLATE_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CloudFormation template file $cfn_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws cloudformation validate-template --template-body file://$cfn_template
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Validating CFN parameters config file $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; jsonlint -q $conf
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Copying child stack templates to S3&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for child_template in $CHILD_TEMPLATES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$child_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; aws s3 cp &quot;$child_template&quot; &quot;s3://$TEMPLATE_BUCKET/$TEMPLATE_PREFIX/$child_template&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
+&nbsp; &nbsp; &nbsp; &nbsp; done
+&nbsp; &nbsp; &nbsp; - echo &quot;Updating template configurtion files to use the appropriate values&quot;
+&nbsp; &nbsp; &nbsp; - |
+&nbsp; &nbsp; &nbsp; &nbsp; for conf in $CONFIG_FILES; do
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if [ &quot;X$TEMPLATE_PREFIX&quot; = &quot;X&quot; ]; then
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET\&quot; in $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET/&quot; $conf
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo &quot;Replacing \&quot;TEMPLATE_PATH_PLACEHOLDER\&quot; for \&quot;$TEMPLATE_BUCKET/$TEMPLATE_PREFIX\&quot; in $conf&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sed -i -e &quot;s/TEMPLATE_PATH_PLACEHOLDER/$TEMPLATE_BUCKET\/$TEMPLATE_PREFIX/&quot; $conf
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fi
+&nbsp; &nbsp; &nbsp; &nbsp; done
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - master-stack.yml
+&nbsp; &nbsp; - config-*.json
+</code> 
+<p>After the template files are copied to S3, CloudFormation creates a test stack and triggers AWS CodeBuild as a test action.</p> 
+<p>Then the AWS CodeBuild build specification executes <code class="lang-bash">validate-env.py</code>, the Python script used to determine whether resources created using the nested CloudFormation stacks conform to the specifications provided in the CONFIG_FILE.</p> 
+<code class="lang-yaml">version: 0.1
+environment_variables:
+&nbsp; plaintext:
+&nbsp; &nbsp; CONFIG_FILE: env-details.yml
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - pip install --upgrade pip
+&nbsp; &nbsp; &nbsp; - pip install boto3 --upgrade
+&nbsp; &nbsp; &nbsp; - pip install pyyaml --upgrade
+&nbsp; &nbsp; &nbsp; - pip install yamllint --upgrade
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating config file $CONFIG_FILE&quot;
+&nbsp; &nbsp; &nbsp; - yamllint $CONFIG_FILE
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Validating resources...&quot;
+&nbsp; &nbsp; &nbsp; - python validate-env.py
+&nbsp; &nbsp; &nbsp; - exit $?</code> 
+<p>Upon successful completion of the test action, CloudFormation deletes the test stack and proceeds to the UAT stage in the pipeline.</p> 
+<p>During this stage, CloudFormation creates a change set against the UAT stack and then executes the change set. This updates the UAT environment and makes it available for acceptance testing. The process continues to a manual approval action. After the QA team validates the UAT environment and provides an approval, the process moves to the Production stage in the pipeline.</p> 
+<p>During this stage, CloudFormation creates a change set for the nested production stack and the process continues to a manual approval step. Upon approval (usually by a designated executive), the change set is executed and the production deployment is completed.<br /> &nbsp;</p> 
+<h3>Setting up a continuous delivery pipeline</h3> 
+<p>&nbsp;<br /> I used a CloudFormation template to set up my continuous delivery pipeline. The <a href="https://github.com/awslabs/codepipeline-nested-cfn/blob/master/codepipeline-cfn-codebuild.yml" target="_blank" rel="noopener noreferrer">codepipeline-cfn-codebuild.yml</a> template, available from GitHub, sets up a full-featured pipeline.</p> 
+<p>When I use the template to create my pipeline, I specify the following:</p> 
+<li>AWS CodeCommit repositories.</li> 
+<li>SNS topics to send approval notifications.</li> 
+<li>S3 bucket name where the artifacts will be stored.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/Stack_Parameters.png" /></p> 
+<p>The CFNTemplateRepoName points to the AWS CodeCommit repository where CloudFormation templates, configuration files, and build specification files are stored.</p> 
+<p>My repo contains following files:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/RepoContent.png" /></p> 
+<p>The continuous delivery pipeline is ready just seconds after clicking <strong>Create Stack</strong>. After it’s created, the pipeline executes each stage. Upon manual approvals for the UAT and Production stages, the pipeline successfully enables continuous delivery.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/CodePipeline_Flow_1.png" /><br /> &nbsp;</p> 
+<h3>Implementing a change in nested stack</h3> 
+<p>&nbsp;<br /> To make changes to a child stack in a nested stack (for example, to update a parameter value or add or change resources), update the master stack. The changes must be made in the appropriate template or configuration files and then checked in to the AWS CodeCommit repository. This triggers the following deployment process:</p> 
+<h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/01/DeployChanges-517x1024.png" /></h3> 
+<p>&nbsp;</p> 
+<h3>Conclusion</h3> 
+<p>&nbsp;<br /> In this post, I showed how you can use AWS CodePipeline, AWS CloudFormation, AWS CodeBuild, and a manual approval process to create a continuous delivery pipeline for both infrastructure as code and application deployment.</p> 
+<p>For more information about AWS CodePipeline, see the <a href="https://aws.amazon.com/documentation/codepipeline/" target="_blank" rel="noopener noreferrer">AWS CodePipeline documentation</a>. You can <a href="http://docs.aws.amazon.com/codepipeline/latest/userguide/getting-started-codepipeline.html" target="_blank" rel="noopener noreferrer">get started</a> in just a few clicks. All CloudFormation templates, AWS CodeBuild build specification files, and the Python script that performs the validation are available in <a href="https://github.com/awslabs/codepipeline-nested-cfn" target="_blank" rel="noopener noreferrer">codepipeline-nested-cfn</a> GitHub repository.</p> 
+<hr /> 
+<h3>About the author</h3> 
+<p>&nbsp;<br /> <strong><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Create an AMI Builder with AWS CodeBuild and HashiCorp Packer – Part 2</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1295,108 +1589,6 @@ by
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/07/OpsWorks-CloudWatchLogs.png" /></p> 
 <p>It’s that simple. OpsWorks creates log groups and log streams for you, and starts streaming your system and application logs within a few minutes.</p> 
 <p>For more information, see <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/monitoring-cloudwatch-logs.html">Using Amazon CloudWatch Logs with AWS OpsWorks Stacks</a> in the <em>AWS OpsWorks User Guide</em>.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Using AWS Lambda and Amazon DynamoDB in an Automated Approach to Managing AWS CloudFormation Template Parameters and Mappings</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Anuj Sharma</span></span> | on 
-<time property="datePublished" datetime="2017-04-04T10:15:33+00:00">04 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/custom-lookup-using-aws-lambda-and-amazon-dynamodb/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> gives you an easy way to codify the creation and management of related AWS resources. The optional <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html">Mappings</a> and <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html">Parameters</a> sections of CloudFormation templates help you organize and parameterize your templates so you can quickly customize your stack. As organizations adopt Infrastructure as Code best practices, the number of mappings and parameters can quickly grow. In this blog post, we’ll discuss how <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> and <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> can be used to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
-<h3>Solution overview</h3> 
-<p>There are three parts to the solution described in this post. You’ll find sample code for this solution in this <a href="https://github.com/awslabs/custom-lookup-lambda">AWS Labs GitHub repository</a>.</p> 
-<ol> 
-<li><strong>DynamoDB table</strong>: Used as a central location to store and update all key-value pairs used in the ‘Mappings’ and ‘Parameters’ sections of the CloudFormation template. This could be a centralized table for the whole organization, with a partition key consisting of the team name and environment (for example, development, test, production) and a sort key for the application name. For more information about the types of keys supported by DynamoDB, see <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html#HowItWorks.CoreComponents.PrimaryKey">Core Components</a> in the Amazon DynamoDB Developer Guide.</li> 
-</ol> 
-<p>Here is the sample data in the table. “teamname-environment” is the partition key and “appname” is the sort key.</p> 
-<code class="lang-json">{
-&quot;teamname-environment&quot;: &quot;team1-dev&quot;,
-&quot;appname&quot;: &quot;app1&quot;,
-&quot;mappings&quot;: {
-&quot;elbsubnet1&quot;: &quot;subnet-123456&quot;,
-&quot;elbsubnet2&quot;: &quot;subnet-234567&quot;,
-&quot;appsubnet1&quot;: &quot;subnet-345678&quot;,
-&quot;appsubnet2&quot;: &quot;subnet-456789&quot;,
-&quot;vpc&quot;: &quot;vpc-123456&quot;,
-&quot;appname&quot;:&quot;app1&quot;,
-&quot;costcenter&quot;:&quot;123456&quot;,
-&quot;teamname&quot;:&quot;team1&quot;,
-&quot;environment&quot;:&quot;dev&quot;,
-&quot;certificate&quot;:&quot;arn-123456qwertyasdfgh&quot;,
-&quot;compliancetype&quot;:&quot;pci&quot;,
-&quot;amiid&quot;:&quot;ami-123456&quot;,
-&quot;region&quot;:&quot;us-west-1&quot;,
-&quot;publichostedzoneid&quot;:&quot;Z234asdf1234asdf&quot;,
-&quot;privatehostedzoneid&quot;:&quot;Z345SDFGCVHD123&quot;,
-&quot;hostedzonename&quot;:&quot;demo.internal&quot;
-}
-}
-</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-3.43.48-PM.png" /><br /> &nbsp;</p> 
-<ol start="2"> 
-<li><strong>Lambda function:</strong> Accepts the inputs of the primary keys, looks up the DynamoDB table, and returns all the key-value data.</li> 
-<li><strong>Custom lookup resource:</strong> Makes a call to the Lambda function, with the inputs of primary keys (accepted by the Lambda function) and retrieves the key-value data. All CloudFormation templates can duplicate this&nbsp;generic custom resource.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/custom-lookup-workflow.png" /></p> 
-<p>&nbsp;</p> 
-<p>The diagram shows the interaction of services and resources in this solution.</p> 
-<ol> 
-<li>Users create a DynamoDB table and, using the DynamoDB console, AWS SDK, or AWS CLI, insert the mappings, parameters, and key-value data.</li> 
-<li>CloudFormation templates have a custom resource, which calls a Lambda function. The combination of team name and application environment (“teamname-environment”) is the partition key input. Application Name (“appname”) is the sort key input to the Lambda function.</li> 
-<li>The Lambda function queries the DynamoDB table based on the inputs.</li> 
-<li>DynamoDB responds to the Lambda function with the results.</li> 
-<li>The Lambda function responds to the custom resource in the CloudFormation stack, with the key-value data.</li> 
-<li>The key-value data retrieved by the custom resource is then used by other resources in the stack using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html">GetAtt Intrinsic function</a>.</li> 
-</ol> 
-<p>&nbsp;</p> 
-<b>Using the sample code</b> 
-<p>To use the sample code for this solution, follow these steps:</p> 
-<ol> 
-<li>Clone the repository.</li> 
-</ol> 
-<code class="lang-bash">git clone https://github.com/awslabs/custom-lookup-lambda.git
-cd custom-lookup-lambda
-</code> 
-<ol start="2"> 
-<li>The values in the sample-mappings.json file will be inserted into DynamoDB. Each record in sample-mappings.json corresponds to an item in DynamoDB. The mappings object contains the mapping.</li> 
-<li>This solution uses Python as a <a href="http://docs.aws.amazon.com/lambda/latest/dg/python-programming-model-handler-types.html">programming model</a> for AWS Lambda. If you haven’t set up your local development environment for Python, follow <a href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/create-deploy-python-common-steps.html#python-common-setup-venv">these steps</a>, and then install the <a href="https://pypi.python.org/pypi/awscli/1.11.63">awscli python package</a>.</li> 
-</ol> 
-<code class="lang-bash">pip install awscli
-</code> 
-<ol start="4"> 
-<li>To prepare your access keys or assume-role to make calls to AWS, configure the AWS Command Line Interface as described <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">here</a>. The IAM user or the assumed role used to make API calls must have, at minimum, <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this access</a>. You can attach <a href="https://github.com/awslabs/custom-lookup-lambda/blob/master/sample-user-policy.json">this policy</a> to the IAM user or IAM group if you are using access keys, or to the IAM role if you are assuming a role. For more information, see <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-using.html#attach-managed-policy-console">Attaching Managed Policies</a> in the IAM User Guide.</li> 
-<li>Run insertrecord.sh to create the DynamoDB table named custom-lookup and insert the items in sample-mappings.json.</li> 
-</ol> 
-<code class="lang-bash">./insertrecord.sh</code> 
-<p>This script does the following:</p> 
-<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
-<li>Executes the Python script to create the DynamoDB table (custom-lookup) and puts the data in sample-mappings.json.</li> 
-<ol start="6"> 
-<li>Run deployer.sh to package and create the Lambda function.</li> 
-</ol> 
-<code class="lang-bash">./deployer.sh</code> 
-<p>This script does the following:</p> 
-<li>Installs <a href="https://pypi.python.org/pypi/boto3">boto3</a> and <a href="https://pypi.python.org/pypi/requests">requests</a> Python packages through <a href="https://pypi.python.org/pypi/pip">pip</a>.</li> 
-<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html">CloudFormation package cli</a> to package the Lambda function (as coded in lambda-cloudformation.yaml).</li> 
-<li>Uploads the packaged code to the S3 bucket (as prompted when you execute this script).</li> 
-<li>Uses <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html">CloudFormation deploy cli </a>to deploy the Lambda function. lambda-cloudformation.yaml also <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html">exports</a> the Lambda function’s<a href="http://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html"> Amazon Resource Name (ARN)</a> using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-lambda-function.html#w1ab2c19c12d587c13">GetAtt intrinsic function</a>, which can be <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html">imported</a> by other stacks.</li> 
-<ol start="7"> 
-<li>Using sample-stack.yaml, create a stack that makes a call to the Lambda function created in step 6. The function queries the DynamoDB table and produces as output the values corresponding to team1-dev and app1.</li> 
-</ol> 
-<code class="lang-bash">aws cloudformation deploy --template-file sample-stack.yaml --stack-name sample-stack
-</code> 
-<ol start="8"> 
-<li>Examine the output in the AWS CloudFormation console. You should see the values retrieved from the DynamoDB table. The Fn::GetAtt function allows you to use the values retrieved by the custom resource Lambda function.</li> 
-</ol> 
-<p>For example, if the custom resource Lambda function is called using resource name as CUSTOMLOOKUP in the sample-stack, the value of key=amiid will be used in the stack using !GetAtt CUSTOMLOOKUP.amiid. Likewise, the value of key=vpc will be used in the stack using !GetAtt CUSTOMLOOKUP.vpc and so on.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/03/29/Screen-Shot-2017-03-26-at-2.53.28-PM.png" /></p> 
-<b>Conclusion</b> 
-<p>In this blog post, we showed how to use an AWS CloudFormation custom resource backed by an AWS Lambda function to query Amazon DynamoDB to retrieve key-value data, thereby replacing the Mappings and Parameter sections of the CloudFormation template. This solution provides a more automated approach to managing template parameters and mappings. You can use the DynamoDB table to simplify updates, reuse, quick lookups, and reporting for these mappings and parameters.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
