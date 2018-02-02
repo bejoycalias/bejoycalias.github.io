@@ -190,6 +190,262 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Managing AWS Lambda Function Concurrency</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2017-12-11T10:50:02+00:00">11 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/managing-aws-lambda-function-concurrency/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3483" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3483&amp;disqus_title=Managing+AWS+Lambda+Function+Concurrency&amp;disqus_url=https://aws.amazon.com/blogs/compute/managing-aws-lambda-function-concurrency/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3483');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>One of the key benefits of <a href="https://aws.amazon.com/serverless/">serverless applications</a> is the ease in which they can scale to meet traffic demands or requests, with little to no need for capacity planning. In <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, which is the core of the serverless platform at AWS, the unit of scale is a <a href="https://docs.aws.amazon.com/lambda/latest/dg/concurrent-executions.html">concurrent execution</a>. This refers to the number of executions of your function code that are happening at any given time.</p> 
+<p>Thinking about concurrent executions as a unit of scale is a fairly unique concept. In this post, I dive deeper into this and talk about how you can make use of per function concurrency limits in Lambda.<br /> <span id="more-3483"></span></p> 
+<b>Understanding concurrency in Lambda</b> 
+<p>Instead of diving right into the guts of how Lambda works, here’s an appetizing analogy: <strong>a magical pizza</strong>.<br /> Yes, a magical pizza!</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/pizza.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/pizza-300x300.png" /></a></p> 
+<p>This magical pizza has some unique properties:</p> 
+<li>It has a fixed maximum number of slices, such as 8.</li> 
+<li>Slices automatically re-appear after they are consumed.</li> 
+<li>When you take a slice from the pizza, it does not re-appear until it has been completely consumed.</li> 
+<li>One person can take multiple slices at a time.</li> 
+<li>You can easily ask to have the number of slices increased, but they remain fixed at any point in time otherwise.</li> 
+<p>Now that the magical pizza’s properties are defined, here’s a hypothetical situation of some friends sharing this pizza.</p> 
+<p>Shawn, Kate, Daniela, Chuck, Ian and Avleen get together every Friday to share a pizza and catch up on their week. As there is just six of them, they can easily all enjoy a slice of pizza at a time. As they finish each slice, it re-appears in the pizza&nbsp;pan&nbsp;and they can take another slice again. Given the magical properties of their pizza, they can continue to eat all they want, but with two very important constraints:</p> 
+<li>If any of them take too many slices at once, the others may not get as much as they want.</li> 
+<li>If they take too many slices, they might also eat too much and get sick.</li> 
+<p>One particular week, some of the friends are hungrier than the rest, taking two slices at a time instead of just one. If more than two of them try to take two pieces at a time, this can cause contention for pizza slices. Some of them would wait hungry for the slices to re-appear. They could ask for a pizza with more slices, but then run the same risk again later if more hungry friends join than planned for.</p> 
+<p>What can they do?</p> 
+<p>If the friends agreed to accept a limit for the maximum number of slices they each eat concurrently, both of these issues are avoided. Some could have a maximum of 2 of the 8 slices, or other concurrency limits that were more or less. Just so long as they kept it at or under eight total slices to be eaten at one time. This would keep any from going hungry or eating too much. The six friends can happily enjoy their magical pizza without worry!</p> 
+<b>Concurrency in Lambda</b> 
+<p>Concurrency in Lambda actually works similarly to the magical pizza model. Each AWS Account has an overall <a href="https://docs.aws.amazon.com/lambda/latest/dg/API_GetAccountSettings.html">AccountLimit</a> value that is fixed at any point in time, but can be easily increased as needed, just like the count of slices in the pizza. <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/aws-lambda-raises-default-concurrent-execution-limit/">As of May 2017</a>, the default limit is 1000 “slices” of concurrency per AWS Region.</p> 
+<p>Also like the magical pizza, each concurrency “slice” can only be consumed individually one at a time. After consumption, it becomes available to be consumed again. Services invoking Lambda functions can consume multiple slices of concurrency at the same time, just like the group of friends can take multiple slices of the pizza.</p> 
+<p>Let’s take our example of the six friends and bring it back to AWS services that commonly invoke Lambda:</p> 
+<li>Amazon S3</li> 
+<li>Amazon Kinesis</li> 
+<li>Amazon DynamoDB</li> 
+<li>Amazon Cognito</li> 
+<p>In a single account with the default concurrency limit of 1000 concurrent executions, any of these four services could invoke enough functions to consume the entire limit or some part of it. Just like with the pizza example, there is the possibility for two issues to pop up:</p> 
+<li>One or more of these services could invoke enough functions to consume a majority of the available concurrency capacity. This could cause others to be starved for it, causing failed invocations.</li> 
+<li>A service could consume too much concurrent capacity and cause a downstream service or database to be overwhelmed, which could cause failed executions.</li> 
+<p>For Lambda functions that are launched in a VPC, you have the potential to consume the available IP addresses in a subnet or the maximum number of elastic network interfaces to which your account has access. For more information, see <a href="https://docs.aws.amazon.com/lambda/latest/dg/vpc.html">Configuring a Lambda Function to Access Resources in an Amazon VPC</a>. For information about elastic network interface limits, see <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Appendix_Limits.html#vpc-limits-enis">Network Interfaces</a> section in the Amazon VPC Limits topic.</p> 
+<p>One way to solve both of these problems is applying a concurrency limit to the Lambda functions in an account.</p> 
+<b>Configuring per function concurrency limits</b> 
+<p>You can now set a concurrency limit on individual Lambda functions in an account. The concurrency limit that you set reserves a portion of your account level concurrency for a given function. All of your functions’ concurrent executions count against this account-level limit by default.</p> 
+<p>If you set a concurrency limit for a specific function, then that function’s concurrency limit allocation is deducted from the shared pool and assigned to that specific function. AWS also reserves 100 units of concurrency for all functions that don’t have a specified concurrency limit set. This helps to make sure that future functions have capacity to be consumed.</p> 
+<p>Going back to the example of the consuming services, you could set throttles for the functions as follows:</p> 
+<p>Amazon S3 function = 350<br /> Amazon Kinesis function = 200<br /> Amazon DynamoDB function = 200<br /> Amazon Cognito function = 150<br /> Total = 900</p> 
+<p>With the 100 reserved for all non-concurrency reserved functions, this totals the account limit of 1000.</p> 
+<p>Here’s how this works. To start, create a basic Lambda function that is invoked via <a href="https://aws.amazon.com/api-gateway">Amazon API Gateway</a>. This Lambda function returns a single “Hello World” statement with an added sleep time between 2 and 5 seconds. The sleep time simulates an API providing some sort of capability that can take a varied amount of time. The goal here is to show how an API that is underloaded can reach its concurrency limit, and what happens when it does.<br /> <strong>To create the example function</strong></p> 
+<ol> 
+<li>Open the <a href="https://console.aws.amazon.com/lambda/home">Lambda console</a>.</li> 
+<li>Choose <strong>Create Function</strong>.</li> 
+<li>For <strong>Author from scratch</strong>, enter the following values: 
+<ol> 
+<li>For <strong>Name</strong>, enter a value (such as concurrencyBlog01).</li> 
+<li>For <strong>Runtime</strong>, choose <strong>Python 3.6</strong>.</li> 
+<li>For <strong>Role</strong>, choose <strong>Create new role from template</strong> and enter a name aligned with this function, such as concurrencyBlogRole.</li> 
+</ol> </li> 
+<li>Choose <strong>Create function</strong>.</li> 
+<li>The function is created with some basic example code. Replace that code with the following:</li> 
+</ol> 
+<code class="lang-python">
+import time
+from random import randint
+seconds = randint(2, 5)
+def lambda_handler(event, context):
+time.sleep(seconds)
+return {&quot;statusCode&quot;: 200,
+&quot;body&quot;: (&quot;Hello world, slept &quot; + str(seconds) + &quot; seconds&quot;),
+&quot;headers&quot;:
+{
+&quot;Access-Control-Allow-Headers&quot;: &quot;Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token&quot;,
+&quot;Access-Control-Allow-Methods&quot;: &quot;GET,OPTIONS&quot;,
+}}
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/code-editor.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/code-editor.png" /></a>
+</code> 
+<ol start="6"> 
+<li>Under <strong>Basic settings</strong>, set <strong>Timeout</strong> to 10 seconds. While this function should only ever take up to 5-6 seconds (with the 5-second max sleep), this gives you a little bit of room if it takes longer.</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/basic-settings.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/basic-settings.png" /></a></p> 
+<ol start="7"> 
+<li>Choose <strong>Save</strong> at the top right.</li> 
+</ol> 
+<p>At this point, your function is configured for this example. Test it and confirm this in the console:</p> 
+<ol> 
+<li>Choose <strong>Test</strong>.</li> 
+<li>Enter a name (it doesn’t matter for this example).</li> 
+<li>Choose <strong>Create</strong>.</li> 
+<li>In the console, choose <strong>Test</strong> again.</li> 
+<li>You should see output similar to the following:</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/test-success.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/test-success.png" /></a></p> 
+<p>Now configure API Gateway so that you have an HTTPS endpoint to test against.</p> 
+<ol> 
+<li>In the Lambda console, choose <strong>Configuration</strong>.</li> 
+<li>Under <strong>Triggers</strong>, choose <strong>API Gateway</strong>.</li> 
+<li>Open the API Gateway icon now shown as attached to your Lambda function:</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/triggers.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/triggers.png" /></a></p> 
+<ol start="4"> 
+<li>Under <strong>Configure triggers</strong>, leave the default values for <strong>API Name</strong> and <strong>Deployment stage</strong>. For <strong>Security</strong>, choose <strong>Open</strong>.</li> 
+<li>Choose <strong>Add, Save</strong>.</li> 
+</ol> 
+<p>API Gateway is now configured to invoke Lambda at the Invoke URL shown under its configuration. You can take this URL and test it in any browser or command line, using tools such as “curl”:</p> 
+<code class="lang-bash">
+$ curl https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
+Hello world, slept 2 seconds
+</code> 
+<h3>Throwing load at the function</h3> 
+<p>Now start throwing some load against your API Gateway + Lambda function combo. Right now, your function is only limited by the total amount of concurrency available in an account. For this example account, you might have 850 unreserved concurrency out of a full account limit of 1000 due to having configured a few concurrency limits already (also the 100 concurrency saved for all functions without configured limits). You can find all of this information on the main <strong>Dashboard</strong> page of the Lambda console:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/lambda-dash.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/lambda-dash.png" /></a></p> 
+<p>For generating load in this example, use an open source tool called “hey” (<a href="https://github.com/rakyll/hey">https://github.com/rakyll/hey</a>), which works similarly to ApacheBench (<a href="https://httpd.apache.org/docs/2.4/programs/ab.html">ab</a>). You test from an Amazon EC2 instance running the default Amazon Linux AMI from the EC2 console. For more help with configuring an EC2 instance, follow the steps in the <a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:">Launch Instance Wizard</a>.</p> 
+<p>After the EC2 instance is running, SSH into the host and run the following:</p> 
+<code class="lang-bash">
+sudo yum install go
+go get -u github.com/rakyll/hey
+</code> 
+<p>“hey” is easy to use. For these tests, specify a total number of tests (5,000) and a concurrency of 50 against the API Gateway URL as follows(replace the URL here with your own):</p> 
+<code class="lang-bash">
+$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
+</code> 
+<p>The output from “hey” tells you interesting bits of information:</p> 
+<code class="lang-bash">
+$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
+Summary:
+Total: 381.9978 secs
+Slowest: 9.4765 secs
+Fastest: 0.0438 secs
+Average: 3.2153 secs
+Requests/sec: 13.0891
+Total data: 140024 bytes
+Size/request: 28 bytes
+Response time histogram:
+0.044 [1] |
+0.987 [2] |
+1.930 [0] |
+2.874 [1803] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+3.817 [1518] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+4.760 [719] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+5.703 [917] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+6.647 [13] |
+7.590 [14] |
+8.533 [9] |
+9.477 [4] |
+Latency distribution:
+10% in 2.0224 secs
+25% in 2.0267 secs
+50% in 3.0251 secs
+75% in 4.0269 secs
+90% in 5.0279 secs
+95% in 5.0414 secs
+99% in 5.1871 secs
+Details (average, fastest, slowest):
+DNS+dialup: 0.0003 secs, 0.0000 secs, 0.0332 secs
+DNS-lookup: 0.0000 secs, 0.0000 secs, 0.0046 secs
+req write: 0.0000 secs, 0.0000 secs, 0.0005 secs
+resp wait: 3.2149 secs, 0.0438 secs, 9.4472 secs
+resp read: 0.0000 secs, 0.0000 secs, 0.0004 secs
+Status code distribution:
+[200] 4997 responses
+[502] 3 responses
+</code> 
+<p>You can see a helpful histogram and latency distribution. Remember that this Lambda function has a random sleep period in it and so isn’t entirely representational of a real-life workload. Those three 502s warrant digging deeper, but could be due to Lambda cold-start timing and the “second” variable being the maximum of 5, causing the Lambda functions to time out. AWS X-Ray and the Amazon CloudWatch logs generated by both API Gateway and Lambda could help you troubleshoot this.</p> 
+<h3>Configuring a concurrency reservation</h3> 
+<p>Now that you’ve established that you can generate this load against the function, I show you how to limit it and protect a backend resource from being overloaded by all of these requests.</p> 
+<ol> 
+<li>In the console, choose <strong>Configure</strong>.</li> 
+<li>Under <strong>Concurrency</strong>, for <strong>Reserve concurrency</strong>, enter 25.</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png" /></a></p> 
+<ol start="3"> 
+<li>Click on <strong>Save</strong> in the top right corner.</li> 
+</ol> 
+<p>You could also set this with the AWS CLI using the Lambda&nbsp;<a href="https://docs.aws.amazon.com/cli/latest/reference/lambda/put-function-concurrency.html">put-function-concurrency</a> command or see your current concurrency configuration via Lambda get-function. Here’s an example command:</p> 
+<code class="lang-bash">
+$ aws lambda get-function --function-name concurrencyBlog01 --output json --query Concurrency
+{
+&quot;ReservedConcurrentExecutions&quot;: 25
+}
+</code> 
+<p>Either way, you’ve set the Concurrency Reservation to 25 for this function. This acts as both a limit and a reservation in terms of making sure that you can execute 25 concurrent functions at all times. Going above this results in the throttling of the Lambda function. Depending on the invoking service, throttling can result in a number of different outcomes, as shown in the documentation on <a href="https://docs.aws.amazon.com/lambda/latest/dg/concurrent-executions.html">Throttling Behavior</a>. This change has also reduced your unreserved account concurrency for other functions by 25.</p> 
+<p>Rerun the same load generation as before and see what happens. Previously, you tested at 50 concurrency, which worked just fine. By limiting the Lambda functions to 25 concurrency, you should see rate limiting kick in. Run the same test again:</p> 
+<code class="lang-bash">
+$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
+</code> 
+<p>While this test runs, refresh the <strong>Monitoring</strong> tab on your function detail page. You see the following warning message:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/warning.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/warning.png" /></a></p> 
+<p>This is great! It means that your throttle is working as configured and you are now protecting your downstream resources from too much load from your Lambda function.</p> 
+<p>Here is the output from a new “hey” command:</p> 
+<code class="lang-bash">
+$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
+Summary:
+Total: 379.9922 secs
+Slowest: 7.1486 secs
+Fastest: 0.0102 secs
+Average: 1.1897 secs
+Requests/sec: 13.1582
+Total data: 164608 bytes
+Size/request: 32 bytes
+Response time histogram:
+0.010 [1] |
+0.724 [3075] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+1.438 [0] |
+2.152 [811] |∎∎∎∎∎∎∎∎∎∎∎
+2.866 [11] |
+3.579 [566] |∎∎∎∎∎∎∎
+4.293 [214] |∎∎∎
+5.007 [1] |
+5.721 [315] |∎∎∎∎
+6.435 [4] |
+7.149 [2] |
+Latency distribution:
+10% in 0.0130 secs
+25% in 0.0147 secs
+50% in 0.0205 secs
+75% in 2.0344 secs
+90% in 4.0229 secs
+95% in 5.0248 secs
+99% in 5.0629 secs
+Details (average, fastest, slowest):
+DNS+dialup: 0.0004 secs, 0.0000 secs, 0.0537 secs
+DNS-lookup: 0.0002 secs, 0.0000 secs, 0.0184 secs
+req write: 0.0000 secs, 0.0000 secs, 0.0016 secs
+resp wait: 1.1892 secs, 0.0101 secs, 7.1038 secs
+resp read: 0.0000 secs, 0.0000 secs, 0.0005 secs
+Status code distribution:
+[502] 3076 responses
+[200] 1924 responses
+</code> 
+<p>This looks fairly different from the last load test run. A large percentage of these requests failed fast due to the concurrency throttle failing them (those with the 0.724 seconds line). The timing shown here in the histogram represents the entire time it took to get a response between the EC2 instance and API Gateway calling Lambda and being rejected. It’s also important to note that this example was configured with an <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-api-migration.html">edge-optimized endpoint</a> in API Gateway. You see under <strong>Status code distribution</strong> that 3076 of the 5000 requests failed with a 502, showing that the backend service from API Gateway and Lambda failed the request.</p> 
+<b>Other uses</b> 
+<p>Managing function concurrency can be useful in a few other ways beyond just limiting the impact on downstream services and providing a reservation of concurrency capacity. Here are two other uses:</p> 
+<li>Emergency kill switch</li> 
+<li>Cost controls</li> 
+<h3>Emergency kill switch</h3> 
+<p>On occasion, due to issues with applications I’ve managed in the past, I’ve had a need to disable a certain function or capability of an application. By setting the concurrency reservation and limit of a Lambda function to zero, you can do just that.</p> 
+<p>With the reservation set to zero every invocation of a Lambda function results in being throttled. You could then work on the related parts of the infrastructure or application that aren’t working, and then reconfigure the concurrency limit to allow invocations again.</p> 
+<h3>Cost controls</h3> 
+<p>While I mentioned how you might want to use concurrency limits to control the downstream impact to services or databases that your Lambda function might call, another resource that you might be cautious about is money. Setting the concurrency throttle is another way to help control costs during development and testing of your application.</p> 
+<p>You might want to prevent against a function performing a recursive action too quickly or a development workload generating too high of a concurrency. You might also want to protect development resources connected to this function from generating too much cost, such as APIs that your Lambda function calls.</p> 
+<b>Conclusion</b> 
+<p>Concurrent executions as a unit of scale are a fairly unique characteristic about Lambda functions. Placing limits on how many concurrency “slices” that your function can consume can prevent a single function from consuming all of the available concurrency in an account. Limits can also prevent a function from overwhelming a backend resource that isn’t as scalable.</p> 
+<p>Unlike monolithic applications or even microservices where there are mixed capabilities in a single service, Lambda functions encourage a sort of “nano-service” of <a href="https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html">small business logic</a> directly related to the integration model connected to the function. I hope you’ve enjoyed this post and configure your concurrency limits today!</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3483');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/ECS_windows_container-two.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Running Windows Containers on Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1461,122 +1717,6 @@ return response
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3166');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Event-Driven Computing with Amazon SNS and AWS Compute, Storage, Database, and Networking Services</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> | on 
-<time property="datePublished" datetime="2017-11-16T12:51:46+00:00">16 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-elastic-file-system-efs/" title="View all posts in Amazon Elastic File System (EFS)*"><span property="articleSection">Amazon Elastic File System (EFS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/database/amazon-elasticache/" title="View all posts in Amazon ElastiCache*"><span property="articleSection">Amazon ElastiCache*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/analytics/amazon-elasticsearch-service/" title="View all posts in Amazon Elasticsearch Service*"><span property="articleSection">Amazon Elasticsearch Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-glacier/" title="View all posts in Amazon Glacier*"><span property="articleSection">Amazon Glacier*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/database/amazon-redshift/" title="View all posts in Amazon Redshift*"><span property="articleSection">Amazon Redshift*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-route-53/" title="View all posts in Amazon Route 53*"><span property="articleSection">Amazon Route 53*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-queue-service-sqs/" title="View all posts in Amazon Simple Queue Service (SQS)*"><span property="articleSection">Amazon Simple Queue Service (SQS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/auto-scaling/" title="View all posts in Auto Scaling*"><span property="articleSection">Auto Scaling*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codepipeline/" title="View all posts in AWS CodePipeline*"><span property="articleSection">AWS CodePipeline*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/aws-direct-connect/" title="View all posts in AWS Direct Connect*"><span property="articleSection">AWS Direct Connect*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-elastic-beanstalk/" title="View all posts in AWS Elastic Beanstalk*"><span property="articleSection">AWS Elastic Beanstalk*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/analytics/aws-glue/" title="View all posts in AWS Glue*"><span property="articleSection">AWS Glue*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/aws-snowball/" title="View all posts in AWS Snowball*"><span property="articleSection">AWS Snowball*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/elastic-load-balancing/" title="View all posts in Elastic Load Balancing*"><span property="articleSection">Elastic Load Balancing*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/event-driven-computing-with-amazon-sns-compute-storage-database-and-networking-services/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3282" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3282&amp;disqus_title=Event-Driven+Computing+with+Amazon+SNS+and+AWS+Compute%2C+Storage%2C+Database%2C+and+Networking+Services&amp;disqus_url=https://aws.amazon.com/blogs/compute/event-driven-computing-with-amazon-sns-compute-storage-database-and-networking-services/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3282');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>Contributed by Otavio&nbsp;Ferreira,&nbsp;Manager, Software Development, AWS Messaging</em></p> 
-<p>Like other developers around the world, you may be tackling increasingly complex business problems. A key success factor, in that case, is the ability to break down a large project scope into smaller, more manageable components. A service-oriented architecture guides you toward designing systems as a collection of loosely coupled, independently scaled, and highly reusable services. Microservices take this even further. To improve performance and scalability, they promote fine-grained interfaces and lightweight protocols.</p> 
-<p>However, the communication among isolated microservices can be challenging. Services are often deployed onto independent servers and don’t share any compute or storage resources. Also, you should avoid hard dependencies among microservices, to preserve maintainability and reusability.</p> 
-<p>If you apply the <a href="https://aws.amazon.com/pub-sub-messaging/">pub/sub design pattern</a>, you can effortlessly decouple and independently scale out your microservices and serverless architectures. A pub/sub messaging service, such as <a href="https://aws.amazon.com/sns/">Amazon SNS</a>, promotes event-driven computing that statically decouples event publishers from subscribers, while dynamically allowing for the exchange of messages between them. An event-driven architecture also introduces the responsiveness needed to deal with complex problems, which are often unpredictable and asynchronous.<span id="more-3282"></span></p> 
-<b>What is event-driven computing?</b> 
-<p>Given the context of microservices, event-driven computing is a model in which subscriber services automatically perform work in response to events triggered by publisher services. This paradigm can be applied to automate workflows while decoupling the services that collectively and independently work to fulfil these workflows. <a href="https://aws.amazon.com/sns/">Amazon SNS</a> is an event-driven computing hub, in the AWS Cloud, that has native integration with several AWS publisher and subscriber services.</p> 
-<b>Which AWS services publish events to SNS natively?</b> 
-<p>Several AWS services have been integrated as SNS publishers and, therefore, can natively trigger event-driven computing for a variety of use cases. In this post, I specifically cover AWS compute, storage, database, and networking services, as depicted below.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide01.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide01.png" /></a></p> 
-<b>Compute services</b> 
-<li><a href="https://aws.amazon.com/autoscaling/"><strong>Auto Scaling:</strong></a> Helps you ensure that you have the correct number of Amazon EC2 instances available to handle the load for your application. You can configure Auto Scaling lifecycle hooks to trigger events, as Auto Scaling resizes your EC2 cluster.As an example, you may want to warm up the local cache store on newly launched EC2 instances, and also download log files from other EC2 instances that are about to be terminated. To make this happen, set an SNS topic as your Auto Scaling group’s notification target, then subscribe two Lambda functions to this SNS topic. The first function is responsible for handling scale-out events (to warm up cache upon provisioning), whereas the second is in charge of handling scale-in events (to download logs upon termination). 
-<li><a href="http://docs.aws.amazon.com/autoscaling/latest/userguide/ASGettingNotifications.html">Getting SNS Notifications When Your Auto Scaling Group Scales</a></li> 
-<li><a href="http://docs.aws.amazon.com/autoscaling/latest/userguide/lifecycle-hooks.html">Auto Scaling Lifecycle Hooks</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide02.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide02.png" /></a></p> 
-<li><strong><a href="https://aws.amazon.com/elasticbeanstalk/">AWS Elastic Beanstalk:</a></strong> An easy-to-use service for deploying and scaling web applications and web services developed in a number of programming languages. You can configure event notifications for your Elastic Beanstalk environment so that notable events can be automatically published to an SNS topic, then pushed to topic subscribers.As an example, you may use this event-driven architecture to coordinate your continuous integration pipeline (such as Jenkins CI). That way, whenever an environment is created, Elastic Beanstalk publishes this event to an SNS topic, which triggers a subscribing Lambda function, which then kicks off a CI job against your newly created Elastic Beanstalk environment. 
-<li><a href="http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/using-features.managing.sns.html">Configuring Amazon SNS Notifications with Elastic Beanstalk</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide03.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide03.png" /></a></p> 
-<li><a href="https://aws.amazon.com/elasticloadbalancing/"><strong>Elastic Load Balancing:</strong> </a>Automatically distributes incoming application traffic across Amazon EC2 instances, containers, or other resources identified by IP addresses.You can configure CloudWatch alarms on Elastic Load Balancing metrics, to automate the handling of events derived from Classic Load Balancers. As an example, you may leverage this event-driven design to automate latency profiling in an Amazon ECS cluster behind a Classic Load Balancer. In this example, whenever your ECS cluster breaches your load balancer latency threshold, an event is posted by CloudWatch to an SNS topic, which then triggers a subscribing Lambda function. This function runs a task on your ECS cluster to trigger a latency profiling tool, hosted on the cluster itself. This can enhance your latency troubleshooting exercise by making it timely. 
-<li><a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/classic/elb-cloudwatch-metrics.html">CloudWatch Metrics and SNS Notifications for Your Classic Load Balancer</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide04.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide04.png" /></a></p> 
-<b>Storage services</b> 
-<li><strong><a href="https://aws.amazon.com/s3/">Amazon S3:</a>&nbsp;</strong>Object storage built to store and retrieve any amount of data.You can enable S3 event notifications, and automatically get them posted to SNS topics, to automate a variety of workflows. For instance, imagine that you have an S3 bucket to store incoming resumes from candidates, and a fleet of EC2 instances to encode these resumes from their original format (such as Word or text) into a portable format (such as PDF).In this example, whenever new files are uploaded to your input bucket, S3 publishes these events to an SNS topic, which in turn pushes these messages into subscribing SQS queues. Then, encoding workers running on EC2 instances poll these messages from the SQS queues; retrieve the original files from the input S3 bucket; encode them into PDF; and&nbsp;finally store them in an output S3 bucket. 
-<li><a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html">Configuring Amazon S3 Event Notifications</a></li> 
-<li><a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/ways-to-add-notification-config-to-bucket.html">Configuring Amazon S3 Buckets for Amazon SNS Notifications</a> (Walkthrough)</li> 
-<li><a href="https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/">Messaging Fan-out Pattern for Serverless Architectures Using Amazon SNS</a> (Multimedia Encoding Example)</li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide05.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide05.png" /></a></p> 
-<li><a href="https://aws.amazon.com/efs/"><strong>Amazon EFS:</strong></a> Provides simple and scalable file storage, for use with Amazon EC2 instances, in the AWS Cloud.You can configure CloudWatch alarms on EFS metrics, to automate the management of your EFS systems. For example, consider a highly parallelized genomics analysis application that runs against an EFS system. By default, this file system is instantiated on the “General Purpose” performance mode. Although this performance mode allows for lower latency, it might eventually impose a scaling bottleneck. Therefore, you may leverage an event-driven design to handle it automatically.Basically, as soon as the EFS metric “Percent I/O Limit” breaches 95%, CloudWatch could post this event to an SNS topic, which in turn would push this message into a subscribing Lambda function. This function automatically creates a new file system, this time on the “Max I/O” performance mode, then switches the genomics analysis application to this new file system. As a result, your application starts experiencing higher I/O throughput rates. 
-<li><a href="http://docs.aws.amazon.com/efs/latest/ug/performance.html">Amazon EFS Performance</a></li> 
-<li><a href="http://docs.aws.amazon.com/efs/latest/ug/monitoring_automated_manual.html">Amazon EFS Monitoring Tools</a></li> 
-<li><a href="http://docs.aws.amazon.com/efs/latest/ug/creating_alarms.html">Creating CloudWatch Alarms and SNS Topics to Monitor Amazon EFS</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide06.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide06.png" /></a></p> 
-<li><a href="https://aws.amazon.com/glacier/"><strong>Amazon Glacier:</strong></a> A secure, durable, and low-cost cloud storage service for data archiving and long-term backup.You can set a notification configuration on an Amazon Glacier vault so that when a job completes, a message is published to an SNS topic. Retrieving an archive from Amazon Glacier is a two-step asynchronous operation, in which you first initiate a job, and then download the output after the job completes. Therefore, SNS helps you eliminate polling your Amazon Glacier vault to check whether your job has been completed, or not. As usual, you may subscribe SQS queues, Lambda functions, and HTTP endpoints to your SNS topic, to be notified when your Amazon Glacier job is done. 
-<li><a href="http://docs.aws.amazon.com/amazonglacier/latest/dev/configuring-notifications.html">Configuring Vault Notifications in Amazon Glacier</a></li> 
-<li><a href="http://docs.aws.amazon.com/amazonglacier/latest/dev/downloading-an-archive-two-steps.html">Retrieving Amazon Glacier Archives</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide07.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide07.png" /></a></p> 
-<li><a href="https://aws.amazon.com/snowball/"><strong>AWS Snowball:</strong></a> A petabyte-scale data transport solution that uses secure appliances to transfer large amounts of data.You can leverage Snowball notifications to automate workflows related to importing data into and exporting data from AWS. More specifically, whenever your Snowball job status changes, Snowball can publish this event to an SNS topic, which in turn can broadcast the event to all its subscribers.As an example, imagine a Geographic Information System (GIS) that distributes high-resolution satellite images to users via Web browser. In this example, the GIS vendor could capture up to 80 TB of satellite images; create a Snowball job to import these files from an on-premises system to an S3 bucket; and provide an SNS topic ARN to be notified upon job status changes in Snowball. After Snowball changes the job status from “Importing” to “Completed”, Snowball publishes this event to the specified SNS topic, which delivers this message to a subscribing Lambda function, which finally creates a CloudFront web distribution for the target S3 bucket, to serve the images to end users. 
-<li><a href="http://docs.aws.amazon.com/snowball/latest/ug/notifications.html">Snowball Notifications with Amazon SNS</a> (AWS Snowball User Guide)</li> 
-<li><a href="http://docs.aws.amazon.com/snowball/latest/api-reference/API_Notification.html">Snowball Notifications with Amazon SNS</a> (AWS Snowball API Reference)</li> 
-<li><a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/GettingStarted.html">Getting Started with CloudFront</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide08.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide08.png" /></a></p> 
-<b>Database services</b> 
-<li><a href="https://aws.amazon.com/rds/"><strong>Amazon RDS:</strong></a> Makes it easy to set up, operate, and scale a relational database in the cloud.RDS leverages SNS to broadcast notifications when RDS events occur. As usual, these notifications can be delivered via any protocol supported by SNS, including SQS queues, Lambda functions, and HTTP endpoints.As an example, imagine that you own a social network website that has experienced organic growth, and needs to scale its compute and database resources on demand. In this case, you could provide an SNS topic to listen to RDS DB instance events. When the “Low Storage” event is published to the topic, SNS pushes this event to a subscribing Lambda function, which in turn leverages the RDS API to increase the storage capacity allocated to your DB instance. The provisioning itself takes place within the specified DB maintenance window. 
-<li><a href="http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Events.html">Using Amazon RDS Event Notifications via Amazon SNS</a></li> 
-<li><a href="http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ListEvents.html">Viewing Amazon RDS Events</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide09.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide09.png" /></a></p> 
-<li><a href="https://aws.amazon.com/elasticache/"><strong>Amazon ElastiCache:</strong></a> A web service that makes it easy to deploy, operate, and scale an in-memory data store or cache in the cloud.ElastiCache can publish messages using Amazon SNS when significant events happen on your cache cluster. This feature can be used to refresh the list of servers on client machines connected to individual cache node endpoints of a cache cluster. For instance, an ecommerce website fetches product details from a cache cluster, with the goal of offloading a relational&nbsp;database and speeding up page load times. Ideally, you want to make sure that each web server always has an updated list of cache servers to which to connect.To automate this node discovery process, you can get your ElastiCache cluster to publish events to an SNS topic. Thus, when ElastiCache event “AddCacheNodeComplete” is published, your topic then pushes this event to all subscribing HTTP endpoints that serve your ecommerce website, so that these HTTP servers can update their list of cache nodes. 
-<li><a href="http://docs.aws.amazon.com/AmazonElastiCache/latest/UserGuide/ElastiCacheSNS.html">ElastiCache Event Notifications via Amazon SNS</a></li> 
-<li><a href="http://docs.aws.amazon.com/AmazonElastiCache/latest/UserGuide/ECEvents.SNS.html">Managing ElastiCache Notifications with Amazon SNS</a></li> 
-<li><a href="http://docs.aws.amazon.com/AmazonElastiCache/latest/UserGuide/ECEvents.Viewing.html">Viewing ElastiCache Events</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide10.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide10.png" /></a></p> 
-<li><a href="https://aws.amazon.com/redshift/"><strong>Amazon Redshift:</strong></a> A fully managed data warehouse that makes it simple to analyze data using standard SQL and BI (Business Intelligence) tools.Amazon Redshift uses SNS to broadcast relevant events so that data warehouse workflows can be automated. As an example, imagine a news website that sends clickstream data to a Kinesis Firehose stream, which then loads the data into Amazon Redshift, so that popular news and reading preferences might be surfaced on a BI tool. At some point though, this Amazon Redshift cluster might need to be resized, and the cluster enters a&nbsp;ready-only mode. Hence, this Amazon Redshift event is published to an SNS topic, which delivers this event to a subscribing Lambda function, which finally deletes the corresponding Kinesis Firehose delivery stream, so that clickstream data uploads can be put on hold.At a later point, after Amazon Redshift publishes the event that the maintenance window has been closed, SNS notifies a subscribing Lambda function accordingly, so that this function can re-create the Kinesis Firehose delivery stream, and resume clickstream data uploads to Amazon Redshift. 
-<li><a href="http://docs.aws.amazon.com/redshift/latest/mgmt/working-with-event-notifications.html">Amazon Redshift Event Notifications with Amazon SNS</a></li> 
-<li><a href="http://docs.aws.amazon.com/redshift/latest/mgmt/manage-event-notifications-console.html">Managing Event Notifications Using the Amazon Redshift Console</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide11.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide11.png" /></a></p> 
-<li><a href="https://aws.amazon.com/dms/"><strong>AWS DMS:</strong></a> Helps you migrate databases to AWS quickly and securely. The source database remains fully operational during the migration, minimizing downtime to applications that rely on the database.DMS also uses SNS to provide notifications when DMS events occur, which can automate database migration workflows. As an example, you might create data replication tasks to migrate an on-premises MS SQL database, composed of multiple tables, to MySQL. Thus, if replication tasks fail due to incompatible data encoding in the source tables, these events can be published to an SNS topic, which can push these messages into a subscribing SQS queue. Then, encoders running on EC2 can poll these messages from the SQS queue, encode the source tables into a compatible character set, and restart the corresponding replication tasks in DMS. This is an event-driven approach to a self-healing database migration process. 
-<li><a href="http://docs.aws.amazon.com/dms/latest/userguide/CHAP_Events.html">Working with DMS Event Notifications via Amazon SNS</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide12.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide12.png" /></a></p> 
-<b>Networking services</b> 
-<li><a href="https://aws.amazon.com/route53/"><strong>Amazon Route 53:</strong></a> A highly available and scalable cloud-based DNS (Domain Name System). Route 53 health checks monitor the health and performance of your web applications, web servers, and other resources.You can set CloudWatch alarms and get automated Amazon SNS notifications when the status of your Route 53 health check changes. As an example, imagine an online payment gateway that reports the health of its platform to merchants worldwide, via a status page. This page is hosted on EC2 and fetches platform health data from DynamoDB. In this case, you could configure a CloudWatch alarm for your Route 53 health check, so that when the alarm threshold is breached, and the payment gateway is no longer considered healthy, then CloudWatch publishes this event to an SNS topic, which pushes this message to a subscribing Lambda function, which finally updates the DynamoDB table that populates the status page. This event-driven approach avoids any kind of manual update to the status page visited by merchants. 
-<li><a href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-monitor-view-status.html">Monitoring Route 53 Health Check Status and Getting Notifications via Amazon SNS</a></li> 
-<li><a href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-creating.html">Creating and Updating Route 53 Health Checks with Notifications</a></li> 
-</ul> </li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide13.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide13.png" /></a></p> 
-<li><a href="https://aws.amazon.com/directconnect/"><strong>AWS Direct Connect (AWS DX):</strong></a> Makes it easy to establish a dedicated network connection from your premises to AWS, which can reduce your network costs, increase bandwidth throughput, and provide a more consistent network experience than Internet-based connections.You can monitor physical DX connections using CloudWatch alarms, and send SNS messages when alarms change their status. As an example, when a DX connection state shifts to 0 (zero), indicating that the connection is down, this event can be published to an SNS topic, which can fan out this message to impacted servers through HTTP endpoints, so that they might reroute their traffic through a different connection instead. This is an event-driven approach to connectivity resilience. 
-<li><a href="http://docs.aws.amazon.com/directconnect/latest/UserGuide/monitoring-cloudwatch.html">Monitoring Direct Connect with Amazon CloudWatch and Amazon SNS</a></li> 
-</ul> </li> 
-<b><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide14.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/event_driven_sns_compute_slide14.png" /></a>More event-driven computing on AWS</b> 
-<p>In addition to SNS, event-driven computing is also addressed by <a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-track-and-respond-to-changes-to-your-aws-resources/">Amazon CloudWatch Events</a>, which delivers a near real-time stream of system events that describe changes in AWS resources. With CloudWatch Events, you can route each event type to one or more targets, including:</p> 
-<li>SNS topics</li> 
-<li><a href="https://aws.amazon.com/sqs/">Amazon SQS</a> queues</li> 
-<li><a href="https://aws.amazon.com/ec2/">Amazon EC2</a> instances</li> 
-<li><a href="https://aws.amazon.com/ecs/">Amazon ECS</a> tasks</li> 
-<li><a href="https://aws.amazon.com/kinesis/streams/">Amazon Kinesis Streams</a></li> 
-<li><a href="https://aws.amazon.com/kinesis/firehose/">Amazon Kinesis Firehose</a> delivery streams</li> 
-<li><a href="https://aws.amazon.com/lambda/">AWS Lambda</a> functions</li> 
-<li><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> state machines</li> 
-<li><a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a> pipelines</li> 
-<p>Many AWS services publish events to CloudWatch. As an example, you can get CloudWatch Events to capture events on your ETL (Extract, Transform, Load) jobs running on <a href="https://aws.amazon.com/glue/">AWS Glue</a> and push failed ones to an SQS queue, so that you can retry them later.</p> 
-<b>Conclusion</b> 
-<p><a href="https://aws.amazon.com/sns/">Amazon SNS</a> is a pub/sub messaging service that can be used as an event-driven computing hub to AWS customers worldwide. By capturing events natively triggered by AWS services, such as EC2, S3 and RDS, you can automate and optimize all kinds of workflows, namely scaling, testing, encoding, profiling, broadcasting, discovery, failover, and much more. Business use cases presented in this post ranged from recruiting websites, to scientific research, geographic systems, social networks, retail websites, and news portals.</p> 
-<p>Start now by visiting Amazon SNS in the <a href="https://console.aws.amazon.com/sns/">AWS Management Console</a>, or by trying the AWS 10-Minute Tutorial, <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">Send Fan-out Event Notifications with Amazon SNS and Amazon SQS</a>.</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3282');
 });
 </script> 
 </article> 

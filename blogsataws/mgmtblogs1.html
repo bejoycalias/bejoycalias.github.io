@@ -190,6 +190,388 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to secure infrequently used EC2 instances with AWS Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Spencer Glazier</span></span> | on 
+<time property="datePublished" datetime="2018-01-31T17:47:06+00:00">31 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/how-to-secure-infrequently-used-ec2-instances-with-aws-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Many organizations have predictable spikes in the usage of their applications and services. For example, retailers see large spikes in usage during Black Friday or Cyber Monday. The beauty of Amazon Elastic Compute Cloud (Amazon EC2) is that it allows customers to quickly scale up their compute power to meet these demands. However, some customers might require more time-consuming setup for their software running on EC2 instances. Instead of creating and terminating instances to meet demand, these customers turn off instances and then turn them on again when they are needed. Eventually the patches on those instances become out of date, and they require updates.</p> 
+<p>In this blog, I cover how to leverage AWS Step Functions and AWS Systems Manager Maintenance Windows to start an EC2 instance, apply any outstanding patches using Patch Manager, then stop the EC2 instance. I also cover the necessary steps to manage these resources using AWS CloudFormation. A Maintenance Window lets you define a schedule for when to perform potentially disruptive actions on your instances, such as patching an operating system (OS), updating drivers, or installing software. Each Maintenance Window has a schedule, a duration, a set of registered targets, and a set of registered tasks. AWS Step Functions are part of the AWS Serverless Platform. They make it simple to orchestrate AWS Lambda functions for serverless applications. Finally, CloudFormation gives developers and systems administrators an easy way to create and manage a collection of related AWS resources, provisioning and updating them in an orderly and predictable fashion.</p> 
+<p><span id="more-2436"></span></p> 
+<p><strong>Availability</strong></p> 
+<p>Although AWS Systems Manager is currently available in all AWS Regions, CloudFormation support for Systems Manager is only available in some Regions. For a list of available Regions, please check the CloudFormationResourceSpecification.json for a given Region, which can be seen <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-resource-specification.html" target="_blank" rel="noopener noreferrer">here</a>. Similarly, Step Functions are only available in some Regions as well. The list of available Regions can be seen <a title="undefined" href="https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/" target="_blank" rel="noopener noreferrer">here</a>.</p> 
+<p><strong>Setup</strong></p> 
+<p>CloudFormation works on your behalf to manage AWS resources. The CloudFormation template for this post, which outlines the resources that will be provisioned into an AWS CloudFormation stack, can be run as-is, there is no additional setup required to get started. The template creates the following resources:</p> 
+<li>An EC2 instance 
+<li>The instance we are going to patch</li> 
+</ul> </li> 
+<li>A Systems Manager Maintenance Window 
+<li>A Maintenance Window representing a timeframe in which to run our patching operation</li> 
+</ul> </li> 
+<li>A Systems Manager Maintenance Window target 
+<li>A target on which the task will act, in this case it will be our EC2 instance</li> 
+</ul> </li> 
+<li>A Systems Manager Maintenance Window task 
+<li>The task that we want to execute, in this case an AWS Step Function</li> 
+</ul> </li> 
+<li>A series of AWS Lambda functions 
+<li>One Lambda function for each of the following actions: start, stop, patch, and poll our instance as well as poll the patching activity</li> 
+</ul> </li> 
+<li>An AWS Step Function 
+<li>Manages the workflow of the Lambda Functions</li> 
+</ul> </li> 
+<li>IAM roles 
+<li>Give proper access to all of the above mentioned resources</li> 
+</ul> </li> 
+<p>Here is a link (<a title="undefined" href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/InstancePatchingWithSSMTemplate.json" target="_blank" rel="noopener noreferrer">JSON</a>)/(<a title="undefined" href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/InstancePatchingWithSSMTemplate.yaml" target="_blank" rel="noopener noreferrer">YAML</a>) to the sample template. I will walk through each piece of the template step-by-step. I’ll discuss some of the common issues to look out for when trying to run this template on your own account.</p> 
+<h3><strong>CloudFormation template walkthrough</strong></h3> 
+<p><strong>IAM roles</strong></p> 
+<p>A Maintenance Window executes a set of tasks on a schedule without requiring user interaction through the AWS Management Console or the AWS SDK/CLI. For this blog post, the task will be a Step Function. The Maintenance Window will require an IAM role that grants it the appropriate permissions to execute the Step Function. Also, the Lambda functions and Step Function require their own roles based on the resources they are accessing. These are the IAM roles created for this blog post:</p> 
+<li>InstanceStateActionRoleForLambda 
+<li>The InstanceStateActionRoleForLambda provides the necessary access to allow the Starter, Stopper, and InstancePoller Lambda functions to call an EC2 instance.</li> 
+</ul> </li> 
+<li>InstancePatchingRoleForLambda 
+<li>The InstancePatchingRoleForLambda provides the necessary access to allow the Patcher and PatchPoller Lambda functions to call Systems Manager.</li> 
+</ul> </li> 
+<li>StepFunctionRole 
+<li>The StepFunctionRole allows your Step Function to call each of the Lambda functions.</li> 
+</ul> </li> 
+<p><strong>Lambda functions</strong></p> 
+<p>Here is a list and short description of the Lambda functions created for this blog post:</p> 
+<li>InstancePatcherLambda 
+<li>Uses AWS Systems Manager&nbsp;Patch Manager&nbsp;to&nbsp;scan and install any patches based on the Patch Baseline that applies to the instance (the Patch Baseline associated with the instance’s Patch Group, if defined, otherwise the default Patch Baseline for the instance’s operating system).</li> 
+</ul> </li> 
+<li>InstancePatchPollerLambda 
+<li>Polls Systems Manager to verify the status of the patching command.</li> 
+</ul> </li> 
+<li>InstanceStarterFunction 
+<li>Starts the EC2 instance.</li> 
+</ul> </li> 
+<li>InstanceStopperLambda 
+<li>Stops the EC2 instance.</li> 
+</ul> </li> 
+<li>InstancePollerLambda 
+<li>Polls Amazon EC2 to verify whether the instance is running or stopped.</li> 
+</ul> </li> 
+<p><strong>Step Function</strong></p> 
+<p>The Step Function organizes each of the Lambda functions into a workflow. The steps are laid out in a specific order, which reliably coordinates each component and steps through the workflow of the application. Also, in the Step Functions console, you can watch the Step Function operate and see each step as it moves through the workflow.</p> 
+<p><strong>Maintenance Window</strong></p> 
+<p>To set up a Maintenance Window using CloudFormation, you need three resources, and they must be created in the following order: a Maintenance Window, a Maintenance Window target, and a Maintenance Window task. The DependsOn attribute of CloudFormation allows us to order the creation of our resources. In the provided template, you can see that each of the Maintenance Window resources uses DependsOn to ensure this ordering. See the following excerpt:</p> 
+<p><code class="language-yaml">MaintenanceWindow:<br /> Type: 'AWS::SSM::MaintenanceWindow'<br /> Properties:<br /> Name: 'LambdaMW'<br /> AllowUnassociatedTargets: 'true'<br /> Schedule: 'rate(30 minutes)'<br /> Duration: '2'<br /> Cutoff: '1'<br /> DependsOn: TestInstance<br /> </code></p> 
+<p><strong>AMIInfo/AMIInfoFunction</strong></p> 
+<p>These two resources are used only for convenience, they perform a lookup that generates the AMI-ID for the EC2 instance that we create in the stack. For more information <a title="undefined" href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/walkthrough-custom-resources-lambda-lookup-amiids.html" target="_blank" rel="noopener noreferrer">see the documentation</a>.</p> 
+<h3><strong>Activity walkthrough</strong></h3> 
+<p>&nbsp;</p> 
+<p><strong>Create the CloudFormation stack</strong></p> 
+<p>Follow these steps to create the CloudFormation stack for this walkthrough.</p> 
+<ol> 
+<li>Open the <strong>AWS CloudFormation</strong> console at <a title="undefined" href="https://console.aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/cloudformation</a>.</li> 
+<li>Choose <strong>Create Stack</strong>.</li> 
+<li>On the <strong>Select Template</strong> page, choose <strong>Specify an Amazon S3 template URL</strong> and give the following S3 URL: https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/InstancePatchingWithSSMTemplate.yaml.</li> 
+<li>For <strong>Stack Name</strong>, give an appropriate name, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Options</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Review</strong> page, select <strong>I acknowledge that AWS CloudFormation might create IAM resources with custom names</strong> and choose <strong>Create</strong>.</li> 
+</ol> 
+<p>You can view the progress of CloudFormation progress by selecting your stack and choosing the <strong>Events</strong> tab. Once CloudFormation has built each resource, it will show <em>CREATE_COMPLETE</em> as the Status for the stack.</p> 
+<p>Follow these steps to view the Maintenance Window created in this walkthrough.</p> 
+<ol> 
+<li>Open the <strong>AWS Systems Manager</strong> console at <a title="undefined" href="https://console.aws.amazon.com/systems-manager" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/systems-manager</a>.</li> 
+<li>Navigate to <strong>Explore Maintenance Windows</strong>.</li> 
+<li>Choose the Maintenance Window named <em>SSMStepFunctionDemo</em>.</li> 
+<li>Choose the <strong>View Details</strong> button.</li> 
+<li>Choose the <strong>History</strong> tab.</li> 
+</ol> 
+<p>It is possible that on the first Maintenance Window execution you might see a status message stating that there were no tasks to execute. This happens because the Maintenance Window is set to run every 30 minutes. When it gets created, it attempts to run immediately, but since there is no task associated with it, the execution returns Success with the above status. The schedule of a Maintenance Window can be in the form of a <a title="undefined" href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html" target="_blank" rel="noopener noreferrer">cron or rate expression</a> and since our Maintenance Window uses a rate expression, it will not run again for another 30 minutes. This issue also occurs for cron expressions that run in explicit intervals, for example <em>cron(0/15 * * * ? *)</em>. We can restart it by disabling and re-enabling the Maintenance Window.</p> 
+<p>Here are the steps for restarting a Maintenance Window created in this walkthrough.</p> 
+<ol> 
+<li>Choose the Maintenance Window you want to restart.</li> 
+<li>Choose <strong>Actions</strong> then choose <strong>Disable maintenance window</strong>.</li> 
+<li>Choose <strong>Actions</strong> again then choose <strong>Enable maintenance window</strong>.</li> 
+</ol> 
+<p>Here are the steps for viewing the Step Function created in this walkthrough.</p> 
+<ol> 
+<li>Open the <strong>AWS CloudFormation</strong> console at <a title="undefined" href="https://console.aws.amazon.com/cloudformation" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/cloudformation</a>.</li> 
+<li>Choose the <strong>CloudFormation</strong> stack created previously.</li> 
+<li>Select the <strong>Resources</strong> tab, search for the <strong>StateMachine</strong> created by <strong>CloudFormation</strong>. Take note of the name of the StateMachine, it will look something like this <em>SSMStepFunctionDemo-YCIADKH4IGYU</em>.</li> 
+<li>Open the <strong>AWS State Machine</strong> console at <a title="undefined" href="https://console.aws.amazon.com/states" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/states</a>.</li> 
+<li>Choose the <strong>StateMachine</strong> with the name from <strong>step #3</strong>.</li> 
+<li>Under the list of executions for the <strong>StateMachine</strong> find the currently running execution, then click on the link for that execution in the <strong>Name</strong> column.</li> 
+</ol> 
+<p>You can now watch as the Step Function executes each of the Lambda functions created through CloudFormation. Note that the actual updating of the patches can take some time, at least 10 to 15 minutes.</p> 
+<p><strong>Viewing patching results</strong></p> 
+<p>Now that the execution of the Step Function is complete, we can view the results of the Patching activity.</p> 
+<p>Here are the steps to view the Maintenance Window patching results:</p> 
+<ol> 
+<li>Open the <strong>StateMachine</strong> execution from the previous step.</li> 
+<li>Under the <strong>Visual Workflow</strong> tab, Choose the step labeled Patch Instance.</li> 
+<li>Under <strong>Execution Details</strong> on the right, Choose the Output tab.</li> 
+<li>Copy the value of <strong>commandId</strong>.</li> 
+<li>Open the <strong>AWS Systems Manager</strong> console at <a title="undefined" href="https://console.aws.amazon.com/systems-manager" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/systems-manager</a>.</li> 
+<li>Choose <strong>Explore Run Command</strong>.</li> 
+<li>Choose the search bar at the top of the table to add a filter.</li> 
+<li>Select <strong>Command Id</strong> as the filter and paste in the Command Id you copied from step #4.</li> 
+<li>Select the <strong>Command</strong>.</li> 
+<li>In the <strong>Output</strong> tab at the bottom,&nbsp;click <strong>View Output</strong>.</li> 
+</ol> 
+<p>The output will display various pieces of information including which patches were installed, the snapshot ID for the patching snapshot, and the patch baseline used.</p> 
+<p><strong>Verifying that the instance has stopped</strong></p> 
+<p>After the execution of the Step Function is complete, it will stop the instance. We can see this by viewing the instance in the EC2 console.</p> 
+<ol> 
+<li>Open the <strong>EC2</strong> console at <a title="undefined" href="https://console.aws.amazon.com/ec2" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/ec2</a>.</li> 
+<li>Choose the <strong>Instances</strong> link under the <strong>Instances</strong> tab on the left.</li> 
+<li>Find the <strong>EC2 instance</strong> with the Name <em>ssm-stepfunction-demo</em>.</li> 
+</ol> 
+<h3><strong>Conclusion</strong></h3> 
+<p>In this post, I have shown you how to use CloudFormation to create a Maintenance Window that executes a Step Function, which&nbsp;uses Patch Manager to patch&nbsp;long running instances that we don’t want to keep on at all times. You can use CloudFormation to easily deploy Maintenance Windows across multiple Regions to ensure that resources are properly patched and that the states of your resources are as you expect. This also greatly reduces the burden of keeping Maintenance Windows in sync across Regions, guaranteeing that the Maintenance Windows are all operating in the same manner.</p> 
+<p>For further information regarding using some of the AWS services in this blog post see the following user guides:</p> 
+<p><a title="undefined" href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-maintenance.html" target="_blank" rel="noopener noreferrer">Maintenance Window User Guide</a><br /> <a title="undefined" href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-patch.html" target="_blank" rel="noopener noreferrer">Patch Manager User Guide</a><br /> <a title="undefined" href="http://docs.aws.amazon.com/step-functions/latest/dg/welcome.html" target="_blank" rel="noopener noreferrer">Step Functions User Guide</a><br /> <a title="undefined" href="http://docs.aws.amazon.com/lambda/latest/dg/welcome.html" target="_blank" rel="noopener noreferrer">Lambda User Guide</a><br /> <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html" target="_blank" rel="noopener noreferrer">CloudFormation User Guide</a></p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/phonetoolicon.jpeg" /></p> 
+<p>&nbsp;</p> 
+<p>Spencer Glazier is a Software Development Engineer on the AWS Systems Manager team. He’s passionate about delivering products and services that enables customers to do more, faster and cheaper. In his free time he enjoys&nbsp;getting up early to run along the narrow streets of Seattle and spending time with his family.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Analyzing Bitcoin Data: AWS CloudFormation Support for AWS Glue</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
+<time property="datePublished" datetime="2018-01-30T10:14:22+00:00">30 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/analytics/" title="View all posts in Analytics*"><span property="articleSection">Analytics*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/analytics/aws-glue/" title="View all posts in AWS Glue*"><span property="articleSection">AWS Glue*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/analyzing-bitcoin-data-aws-cloudformation-support-for-aws-glue/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>The AWS CloudFormation team has been busy in the last couple of months, adding support for new resource types for recently released AWS services. In this post, I take a deep dive into using AWS Glue with CloudFormation.</p> 
+<p><strong>About AWS Glue</strong></p> 
+<p><a href="https://aws.amazon.com/glue/">AWS Glue</a> was first announced at re:Invent in 2016, and was made generally available in August 2017. AWS Glue is a serverless extract, transform and load (<a href="https://en.wikipedia.org/wiki/Extract,_transform,_load">ETL</a>) service. ETL is a critical step in operationalizing data analytics, since data cleansing and reformatting is almost always necessary when creating everything from data marts, warehouses, data lakes, machine learning algorithms, metrics dashboards, operational reports, and many other data science projects.</p> 
+<p>Data science projects can be very time-consuming from an experimentation and discovery perspective. When a promising candidate project emerges, implementing the necessary production compute and storage resources can cause significant delays. It’s necessary that the business leverage the resources in a repeatable and ongoing basis.</p> 
+<p><strong>Analyzing historical price data for bitcoin: Planning</strong></p> 
+<p>Your company wants to pursue a new service relating to cryptocurrency analysis, and your IT team gets asked to produce a database with historical price information for bitcoin, to feed other analysis processes. Rather than require a significant upfront investment in building the database and the necessary tooling for ongoing analysis and model development, you can leverage AWS Glue and open source development tools like <a href="https://spark.apache.org/">Apache Spark</a>, Python and <a href="https://zeppelin.apache.org/">Apache Zeppelin</a> to enable quick experimentation and further product development. Further, you want to automate the operationalization of this data analysis platform as quickly as possible, and AWS CloudFormation helps with this automation.</p> 
+<p><span id="more-2555"></span></p> 
+<p>Start with getting historical bitcoin price data. You can choose to consume the data directly from currency exchanges, or you can find an existing dataset that includes past data. There are many sources of public data sets for such projects, as outlined in 18 places to find data sets for data science projects. One of my favorite sources for such data sets is <a href="https://www.kaggle.com/">Kaggle</a>, where you can also learn from other scientists’ projects and findings, as well as participate in data science competitions sponsored by companies and academic institutions.</p> 
+<p>The dataset <a href="https://www.kaggle.com/mczielinski/bitcoin-historical-data">from the Bitcoin Historical Data</a> page will fit our needs (see Figure 1 below); it includes historical data from January 2012 to today, from several exchanges.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/29/datasample.png" /></p> 
+<p><strong>Figure 1. A sample of the CSV data provided for the coinbase exchange.</strong></p> 
+<p>&nbsp;</p> 
+<p><strong>Setting up our Bitcoin Price Database</strong></p> 
+<ol> 
+<li>If you’ve never used Kaggle, you are asked to set up a free account.</li> 
+<li>Download the data as a zip file from <a href="https://www.kaggle.com/mczielinski/bitcoin-historical-data">Bitcoin Historical Data</a>.</li> 
+<li>Expand the zip file locally and locate the file for the coinbase exchange.</li> 
+<li>Set up an Amazon S3 bucket and put the file there.</li> 
+</ol> 
+<p>Armed with this data, now get the data to a point that you can inspect it, query it, and plan for further development and experiments.</p> 
+<ol> 
+<li>Create a new file in your favorite editor.</li> 
+<li>Copy and paste the following CloudFormation template into the file (see Figure 2 below).</li> 
+<li>Save it, and create a new stack with the console (I used the US East N. Virginia region), the CLI, or the API.</li> 
+</ol> 
+<code class="lang-yaml">---
+#===============================================================================
+# Template: CoinbaseCrawler.yaml
+#
+# Purpose:  Creates resources to populate bitcoin historical data from
+#           the Coinbase exchange into an AWS Glue Catalog
+#===============================================================================
+AWSTemplateFormatVersion: &quot;2010-09-09&quot;
+Description: &quot;Populate Bitcoin historical data from Coinbase into AWS Glue&quot;
+Resources:
+#=============================================================================
+# IAM Role and Policies for AWS Glue. Reusable across other ETL crawlers
+#=============================================================================
+ETLRole:
+Type: AWS::IAM::Role
+Properties:
+AssumeRolePolicyDocument:
+Version: &quot;2012-10-17&quot;
+Statement:
+-
+Effect: &quot;Allow&quot;
+Principal:
+Service:
+- &quot;glue.amazonaws.com&quot;
+Action:
+- &quot;sts:AssumeRole&quot;
+Path: &quot;/&quot;
+Policies:
+-
+PolicyName: &quot;root&quot;
+PolicyDocument:
+Version: &quot;2012-10-17&quot;
+Statement:
+-
+Effect: &quot;Allow&quot;
+Action: &quot;*&quot;
+Resource: &quot;*&quot;
+#=============================================================================
+# BitcoinPriceDB: May reuse it if we want to compare data from other
+# exchanges, like bitflyer, coincheck, and bitstamp
+#=============================================================================
+BitcoinPriceDB:
+Type: AWS::Glue::Database
+Properties:
+CatalogId: !Ref AWS::AccountId
+DatabaseInput:
+Name: &quot;bitcoin-price-db&quot;
+Description: &quot;Historical Bitcoin Price Data&quot;
+#=============================================================================
+# CoinbaseCrawler: Grab data from the coinbase csv into the BitcoinPriceDB
+# NOTE: You MUST change the S3 Targets Path to point to your own bucket and
+# folder!!!
+#=============================================================================
+CoinbaseCrawler:
+Type: AWS::Glue::Crawler
+Properties:
+Name: &quot;coinbase-crawler&quot;
+Description: &quot;Populate table with Bitcoin historical data from Coinbase&quot;
+Role: !GetAtt ETLRole.Arn
+DatabaseName: !Ref BitcoinPriceDB
+TablePrefix: &quot;coinbase_&quot;
+Targets:
+S3Targets:
+- Path: s3://cfnda-bitcoin-historical-data/coinbase
+SchemaChangePolicy:
+UpdateBehavior: &quot;UPDATE_IN_DATABASE&quot;
+DeleteBehavior: &quot;DEPRECATE_IN_DATABASE&quot;
+Schedule:
+ScheduleExpression: &quot;cron(0/5 * ? * MON-FRI *)&quot;
+</code> 
+<p><strong>Figure 2. The CloudFormation template for the AWS Glue crawler from bitcoin data.</strong></p> 
+<p>You set up everything with CloudFormation early in the process, so eventually operationalizing the solution in a production environment becomes fast and repeatable.&nbsp;The template helps you:</p> 
+<li>Designate S3 as the storage data lake</li> 
+<li>Create an IAM role to use AWS Glue</li> 
+<li>Extract the data</li> 
+<li>Create a database</li> 
+<li>Load the data into a table that you can query with <a href="https://aws.amazon.com/athena/">Amazon Athena</a> or later visualize with <a href="https://aws.amazon.com/quicksight/">Amazon QuickSight</a>.</li> 
+<p>Note the following from the template code:</p> 
+<li>The template creates the minimal resources for setting up your database. This include the IAM role (<em>ETLRole</em> in the code example), the database itself, which can be used in Athena or QuickSight for further analysis, and the crawler. The crawler does the work of extracting the data from the CSV file that you downloaded and populates the table in the database.</li> 
+<li>When creating the database (<em>BitcoinPriceDB</em> in the code example), ensure that you only use lowercase characters in the string for the Database Input/Name attribute (<em>bitcoin-price-db</em>, in the code example).</li> 
+<li>For the crawler, specify your bucket in the Targets/S3Targets/Path attribute (<em>s3://cfnda-bitcoin-historical-data/</em>coinbase in the code example). Put your own bucket and folder path where you uploaded your copy of the coinbase file that you got from Kaggle in the previous steps.</li> 
+<li>For this example, the template sets up a schedule for the crawler to run every five minutes on weekdays. For your experiment, you may either omit the Schedule/ScheduleExpression stanza and run the crawler manually from the AWS Glue console, or use your own cron expression (see some examples in <a href="https://docs.aws.amazon.com/glue/latest/dg/monitor-data-warehouse-schedule.html">Time-Based Schedules for Jobs and Crawlers</a>,keeping in mind that you are charged per the rates on <a href="https://aws.amazon.com/glue/pricing/">AWS Glue Pricing</a>).</li> 
+<li>For this quick example, it makes sense to put everything in one template, with the benefit of quickly deleting all resources by deleting the stack. For a long-term project, you may want to create these resources in separate templates, as you only need to create the role and database one time. To look at the data from the other bitcoin exchanges provided in the Kaggle dataset, reuse the crawler code in separate templates and stacks for biflyer, coincheck, and bit stamp, which are also provided in the same dataset.</li> 
+<p>After creating the stack, which should take about 40 seconds, check the AWS Glue console where your database and crawler show up on the respective lists immediately. After the crawler runs (in about 5 minutes, per your scheduled cron expression), the table also shows up. After the table creation is complete, you can view the schema from the AWS Glue console (see Figure 3), or execute SQL queries against it using the Athena console (see Figure 4).</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/29/glue-coinbase-table-schema-1024x543.png" /></p> 
+<p><strong>Figure 3. Schema for the coinbase historical pricing table, created with the AWS Glue crawler.</strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/29/athena-coinbase-table-preview-1024x576.png" /></p> 
+<p><strong>Figure 4. Sample query results from the coinbase historical pricing table, using the Athena Query Editor.</strong></p> 
+<p>&nbsp;</p> 
+<p><strong>Suggested next steps</strong></p> 
+<p>Now that you’ve figured out how to ingest the data to a place where you can query it, you can begin to compare the data with other exchanges from the dataset. You can also merge it with other data, reformat the data to make it easier to consume, and further enable data experiments.</p> 
+<p>For example, maybe you want to merge the data with other events or logs, but those events lack enough structure to build tables from them and join them with your existing tables.&nbsp;Using AWS Glue <a href="https://docs.aws.amazon.com/glue/latest/dg/add-classifier.html">classifiers</a>, you can use grok expressions to add structure to these additional data sources.</p> 
+<p>Another example that considers the current data schema would be transforming the UNIX time format field to a conventional date field.&nbsp;AWS Glue allows for the creation of <a href="https://docs.aws.amazon.com/glue/latest/dg/add-job.html">jobs</a> that can do such transforms on fields.&nbsp;It also allows you to use <a href="http://spark.apache.org/docs/2.2.0/api/python/pyspark.html">PySpark</a> (Python-based <a href="http://spark.apache.org/">Spark</a> scripts) to do such transformations.&nbsp;You can later operationalize those scripts as jobs in AWS Glue, and have them run periodically or based on a trigger, perhaps to get updated data.</p> 
+<p>You can write and debug your own scripts, from your local IDE, by creating development endpoints in AWS Glue.&nbsp;Further, you can develop scripts and conduct experiments using <a href="https://zeppelin.apache.org/">Apache Zeppelin</a> notebooks, deploying a server with the Zeppelin software ready to use.&nbsp;Not surprisingly, AWS Glue uses CloudFormation to deploy these Zeppelin servers.&nbsp;For more information about setting up your local IDE, see <a href="https://docs.aws.amazon.com/glue/latest/dg/dev-endpoint-tutorial-pycharm.html">Tutorial: Set Up PyCharm Professional with a Development Endpoint</a> to link your AWS Glue endpoint with JetBrains’ <a href="https://www.jetbrains.com/pycharm/">PyCharm Professional</a>, or see <a href="https://docs.aws.amazon.com/glue/latest/dg/dev-endpoint-tutorial-EC2-notebook.html">Tutorial: Set Up an Apache Zeppelin Notebook on Amazon EC2</a> on how to create a Zeppelin notebook server on an Amazon EC2 instance right from the AWS Glue console, using CloudFormation to deploy the server.</p> 
+<p>Visit the <a href="https://aws.amazon.com/cloudformation/">CloudFormation</a> details page and <a href="https://aws.amazon.com/documentation/cloudformation/">CloudFormation documentation</a> for more information, as well as the full list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported resources</a>.</p> 
+<p>&nbsp;</p> 
+<h3>About the Author</h3> 
+<table style="height: 164px" width="1242"> 
+<tbody> 
+<tr> 
+<td width="63"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" /></td> 
+<td width="391"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.</strong>&nbsp;He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
+</tr> 
+</tbody> 
+</table> 
+<p></p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Update: AWS Guard Duty, Amazon Inspector, and Service Discovery, plus 40 resource updates</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
+<time property="datePublished" datetime="2018-01-30T10:14:06+00:00">30 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-update-aws-guard-duty-amazon-inspector-and-service-discovery-plus-40-resource-updates/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>AWS CloudFormation recently added support for these recently released AWS services:</p> 
+<li><a href="https://aws.amazon.com/guardduty/"><strong>AWS Guard Duty</strong></a> is an automated threat-detection service that can be quickly enabled, does not require agents to be installed, and monitors unusual account usage using sources like AWS CloudTrail logs, DNS logs, and other sources. With the new AWS CloudFormation resource support, you can create <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-detector.html">detectors</a>, whitelisted <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-ipset.html">IP sets</a>, and identify known malicious IP addresses via <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-threatintelset.html">ThreatIntelSets</a>.</li> 
+<li><a href="https://aws.amazon.com/inspector/"><strong>Amazon Inspector</strong></a> is a low-impact, low-cost, agent-based vulnerability scanner.Use it, for example, to automate vulnerability assessments and make them part of your deployment process.&nbsp;With the new AWS CloudFormation resource support, you can take tagged resources and build a <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-resourcegroup.html">resource group</a>, then use the resource group to create an <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-assessmenttarget.html">assessment target</a>.&nbsp;Finally, you can create an <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-assessmenttemplate.html">assessment template</a>, which is similar to a policy document and determines which rules the service uses to analyze the target hosts, as well as a duration for the assessment run.</li> 
+<li><a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-route-53-releases-auto-naming-api-name-service-management/"><strong>Amazon Route 53 Auto Naming for Service Discovery</strong></a> and the new AWS::ServiceDiscovery resources in CloudFormation make it easy to consume the recently released Route 53 Auto Naming API calls.It can be used, for example, if you’re creating microservices in Amazon ECS and you want to leverage Route 53 to register new service instances and aid in the management and discovery of service names. This is important for <a href="https://aws.amazon.com/ecs/">Amazon ECS</a> deployments, and it helps enable blue/green deployment patterns.&nbsp;With the new AWS CloudFormation resources, you can create either <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-publicdnsnamespace.html">public</a> or <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-privatednsnamespace.html">private</a> DNS namespaces, then create named <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-service.html">services</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-instance.html">service instances</a> for your microservices.&nbsp;If you’re interested in using these new resources, I recommend checking out this <a href="https://www.slideshare.net/AmazonWebServices/introducing-service-discovery-for-amazon-ecs-con403-reinvent-2017">deck</a> from a session at the AWS re:Invent 2017 conference.</li> 
+<p>Beyond supporting these new services, 40 of the 248 existing supported resources have been updated recently, adding 50 new property types for these resources. The following list summarizes these recent changes, ordered by service name:</p> 
+<p><span id="more-2568"></span></p> 
+<p><strong>Amazon API Gateway</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-deployment.html">AWS::ApiGateway::Deployment</a>, a&nbsp;<em>StageName</em> property has been deprecated on the StageDescription property type</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-method.html">AWS::ApiGateway::Method</a>, an&nbsp;<em>OpeationName</em> property was added to assign a friendly name to an API Gateway method; a&nbsp;<em>RequestValidatorId</em> property was added to associate a request validator with a method; a&nbsp;<em>ContentHandling</em> property was added for <em>Integration</em> and <em>IntegrationResponse</em> property types to specify how to handle request payload content type conversions</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-apikey.html">AWS::ApiGateway::ApiKey</a>, a&nbsp;<em>CustomerID</em> property was added to specify an AWS Marketplace customer identifier; a&nbsp;<em>GenerateDistinctID</em> property was added to indicate whether the key identifier is different from the created API key value</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-authorizer.html">AWS::ApiGateway::Authorizer</a>, an&nbsp;<em>AuthType</em> property was added to specify a customer-defined field that is used in Swagger imports and exports without functional impact</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-domainname.html">AWS::ApiGateway::DomainName</a>, an&nbsp;<em>EndpointConfiguration</em> property was added to specify the endpoint types of an API Gateway domain name; a&nbsp;<em>RegionalCertificateArn</em> property was added to reference a certificate for use by the regional endpoint for a domain name</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-restapi.html">AWS::ApiGateway::RestApi</a>, an&nbsp;<em>EndpointConfiguration</em> property was added to specify the endpoint types of a REST API</li> 
+<p><strong>AWS Auto Scaling</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-applicationautoscaling-scalabletarget.html">AWS::ApplicationAutoScaling::ScalableTarget</a>, a&nbsp;<em>ScheduledActions</em> property was added to specify scheduled actions</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-as-group.html">AWS::AutoScaling::AutoScalingGroup</a>, a&nbsp;<em>LifecycleHookSpecificationList</em> property was added to specify actions to perform when Auto Scaling launches or terminates instances</li> 
+<p><strong>AWS Cloud9</strong></p> 
+<li><a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloud9-environmentec2.html">AWS::Cloud9::EnvironmentEC2</a>&nbsp;creates an Amazon EC2 development environment in AWS Cloud9</li> 
+<p><strong>AWS CodeBuild</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codebuild-project.html">AWS::CodeBuild::Project</a>, a <em>BadgeEnabled</em> property was added to generate a publicly accessible URL for a project’s build badge; a <em>Cache</em> property was added to configure cache settings for build dependencies; a <em>VpcConfig</em> property was added to enable AWS CodeBuild to access resources in an Amazon VPC; a <em>Type</em> property was added in the EnvironmentVariable property type to specify the type of environment variable</li> 
+<p><strong>AWS CodeDeploy</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codedeploy-application.html">AWS::CodeDeploy::Application</a>, a <em>ComputePlatform</em> property was added to specify an AWS Lambda compute platform for AWS CodeDeploy to deploy an application to</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codedeploy-deploymentgroup.html">AWS::CodeDeploy::DeploymentGroup</a>, a <em>TargetGroupInfoList</em> property was added to the <em>LoadBalancerInfo</em> property type to specify information about a target group in Elastic Load Balancing to use in a deployment; a <em>DeploymentType</em> property was added to the <em>DeploymentStyle</em> property type to specify a blue/green deployment on a Lambda compute platform</li> 
+<p><strong>Amazon CloudFront</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cloudfront-distribution.html">AWS::CloudFront::Distribution</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with an Amazon CloudFront distribution; <em>OriginKeepAliveTimeout</em> and <em>OriginReadTimeout</em> properties were added to the <em>CustomOriginConfig</em> property type to specify a custom keep-alive timeout and a custom origin read timeout respectively; an <em>IPV6Enabled</em> property was added to the <em>DistributionConfig</em> property type to specify whether Amazon CloudFront responds to IPv6 DNS requests an IPv6 address for your distribution</li> 
+<li>Use the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudfront-cloudfrontoriginaccessidentity.html">AWS::CloudFront::CloudFrontOriginAccessIdentity</a> resource to specify the origin access identity to associate with the origin of an Amazon CloudFront distribution</li> 
+<li>Use the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudfront-streamingdistribution.html">AWS::CloudFront::StreamingDistribution</a> resource to specify an Adobe Real-Time Messaging protocol (RTMP) streaming distribution for Amazon CloudFront</li> 
+<p><strong>Amazon EC2</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html">AWS::EC2::SecurityGroup</a>, <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-security-group-egress.html">AWS::EC2::SecurityGroupEgress</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group-ingress.html">AWS::EC2::SecurityGroupIngress</a> resources, a <em>Description</em> property was added to specify the description of security group rules</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html">AWS::EC2::Subnet</a>, an <em>Ipv6CidrBlock</em> property now supports <em>No Interruption</em> updates</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpn-gateway.html">AWS::EC2::VPNGateway</a>, an <em>AmazonSideAsn</em> property was added to specify a private Autonomous System Number (ASN) for the Amazon side of a Border Gateway Protocol (BGP) session</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpn-connection.html">AWS::EC2::VPNConnection</a>, a <em>VpnTunnelOptionsSpecifications</em> property was added to configure tunnel options for a VPN connection</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-spotfleet.html">AWS::EC2::SpotFleet</a>, the <em>SpotPrice</em> property in <em>SpotFleetRequestConfigData</em> property type is now optional</li> 
+<p><strong>Amazon Elastic Container Registry</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecr-repository.html">AWS::ECR::Repository</a>, a <em>LifecyclePolicy</em> property was added to specify a lifecycle policy for an Amazon ECR repository</li> 
+<p><strong>Amazon Elastic Container Service</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-taskdefinition.html">AWS::ECS::TaskDefinition</a>, a <em>LinuxParameters</em> property was added to the <em>ContainerDefinition</em> property type to specify Linux-specific options for an Amazon ECS container; a <em>Cpu</em> property was added to specify the number of CPU units needed for the task; an <em>ExecutionRoleArn</em> property was added to specify the Amazon Resource Name (ARN) of the execution role; Memory property was added to specify the amount of memory in MiB needed for the task; and a <em>RequiresCompatibilities</em> property was added to specify the launch type the task requires</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html">AWS::ECS::Service</a>, a <em>LaunchType</em> property was added to specify the launch type on which to run the service; a <em>NetworkConfiguration</em> property was added to specify the network configuration for the service; a <em>PlatformVersion</em> property was added to specify the platform version on which to run your service</li> 
+<p><strong>AWS Elastic Beanstalk</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-beanstalk-configurationtemplate.html">AWS::ElasticBeanstalk::ConfiguraionTemplate</a>, and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk-environment.html">AWS::ElasticBeanstalk::Environment</a>, a <em>ResourceName</em> property was added to the <em>ConfigurationOptionSetting</em> and <em>OptionSetting</em> property types, to specify a resource name for a time-based scaling configuration option</li> 
+<p><strong>Amazon ElastiCache</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticache-replicationgroup.html">AWS::ElastiCache::ReplicationGroup</a>, an <em>AtRestEncryptionEnabled</em> property was added to enable encryption at rest; an <em>AuthToken</em> property was added to specify a password that is used to access a password-protected server; and a <em>TransitEncryptionEnabled</em> property was added to enable in-transit encryption</li> 
+<p><strong>Elastic Load Balancing</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html">AWS::ElasticLoadBalancingV2::TargetGroup</a>, use the <em>TargetGroupName</em> attribute with the <em>Fn::GetAtt</em> function to get the name of an Elastic Load Balancing target group</li> 
+<p><strong>Amazon ElasticSearch Service</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticsearch-domain.html">AWS::Elasticsearch::Domain</a>, a <em>VPCOptions</em> property was added to specify a VPC configuration for the domain</li> 
+<p><strong>Amazon EMR</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-emr-cluster.html">AWS::EMR::Cluster</a>, a <em>CustomAmiId</em> property was added to specify a custom Amazon Linux AMI for a cluster; an&nbsp;<em>EbsRootVolumeSize</em> property was added to specify the size of the EBS root volume for an Amazon EMR cluster</li> 
+<p><strong>Amazon Kinesis</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisanalytics-application.html">AWS::KinesisAnalytics::Application</a>, an <em>InputProcessingConfiguration</em> property was added to the Input property type to transform records as they are received from the stream</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html">AWS::KinesisFirehose::DeliveryStream</a>, use the <em>Arn</em> attribute with the <em>Fn:GetAtt</em> function to get the Amazon Resource Name (ARN) of the delivery stream</li> 
+<p><strong>AWS Key Management Service</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kms-key.html">AWS::KMS::Key</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with a custom master key</li> 
+<p><strong>AWS Lambda</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-lambda-alias.html">AWS::Lambda::Alias</a>, use the <em>CodeDeployLambdaAliasUpdate</em> update policy to perform an AWS CodeDeploy deployment when the version changes on a resource; you can also use the <em>RoutingConfig</em> property to specify two different versions of an AWS Lambda function, allowing you to dictate what percentage of traffic will invoke each version</li> 
+<p><strong>AWS OpsWorks</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-opsworks-layer.html">AWS::Opsworks::Layer</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-opsworks-stack.html">AWS::OpsWorks::Stack</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with either a layer or stack</li> 
+<p><strong>Amazon RDS</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-optiongroup.html">AWS::RDS::OptionGroup</a>, an <em>OptionVersion</em> property was added to the <em>OptionConfiguration</em> property type to specify a version for the option</li> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-rds-database-instance.html">AWS::RDS::DBInstance</a>, <em>SourceRegion</em> and <em>KmsKeyId</em> properties were added to create an encrypted read replica from a cross-region source database instance</li> 
+<p><strong>Amazon Route53</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-route53-hostedzone.html">AWS::Route53::HostedZone</a>, a <em>QueryLoggingConfig</em> property was added to specify a configuration for DNS query logging</li> 
+<p><strong>Amazon S3</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html">AWS::S3::Bucket</a>, an <em>AnalyticsConfigurations</em> property was added to configure an analysis filter for an Amazon S3 bucket</li> 
+<p><strong>AWS Systems Manager</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ssm-parameter.html">AWS::SSM::Parameter</a>, an <em>AllowedPattern</em> property was added to specify a regular expression used to validate the parameter value</li> 
+<p><strong>AWS Step Functions</strong></p> 
+<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-stepfunctions-statemachine.html">AWS::StepFunctions::StateMachine</a>, you can specify a <em>StateMachineName</em> when creating a state machine, and both <em>DefinitionString</em> and <em>RoleArn</em> can be updated without replacing the state machine.</li> 
+<p>&nbsp;</p> 
+<p>Visit the <a href="https://aws.amazon.com/cloudformation/">CloudFormation</a> details page and <a href="https://aws.amazon.com/documentation/cloudformation/">CloudFormation documentation</a> for more information, as well as the full list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported resources</a>.</p> 
+<h3>About the Author</h3> 
+<table style="height: 250px" width="1107" cellpadding="8"> 
+<tbody> 
+<tr> 
+<td width="63">&nbsp;<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" /></td> 
+<td width="391"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.</strong>&nbsp;He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Password Rotation for Windows on Amazon EC2 Made Easy with EC2Rescue</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1046,357 +1428,6 @@ exit 0</code>
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/andrew_park.jpg" /></p> 
 <p>Andrew Park is a Cloud Infrastructure Architect at Amazon Web Services. Prior to AWS, Andrew has served 20+ years as a Linux Solution Engineer, a Linux infrastructure Architect/Administrator and a Cloud Engineer. He has been a key participating member of cloud adoption programs in many different Canadian banks, and he also has participated in many different open source projects like Samba, restricted shell (rssh), not red hat update (Yes, this was an actual project), Red Hat’s Anaconda and Agenda VR3. He works tirelessly on behalf of the clients in order that customers can enjoy economically friendly open source solutions. He is a foodie, loves to converse with people and machines alike, and a firm believer of Open Source philosophy.</p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">10 reasons why you should try AWS OpsWorks for Puppet Enterprise</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Bill Solominsky</span></span> | on 
-<time property="datePublished" datetime="2017-12-28T13:48:08+00:00">28 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/10-reasons-why-you-should-try-aws-opsworks-for-puppet-enterprise/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>By Ryan Coleman, Director of Product Management at <a href="https://puppet.com/" target="_blank" rel="noopener noreferrer">Puppet</a></em></p> 
-<p>We’re really excited to see <a href="https://aws.amazon.com/opsworks/puppetenterprise/" target="_blank" rel="noopener noreferrer">AWS OpsWorks for Puppet Enterprise</a> out in the wild. Over 600 people attended our joint session at AWS re:Invent 2017 (check out the video <a href="https://www.youtube.com/watch?v=1Zw4g3o2O0M" target="_blank" rel="noopener noreferrer">here</a>) and many of you stopped by our booth to find out more. This post is for everyone we didn’t talk to directly. If you’re an open source Puppet user and you’d like to try some of the Puppet Enterprise features you’ve been hearing about, you can deploy OpsWorks for Puppet Enterprise in less than 20 minutes with no upfront costs. If you’re running a small team and you have a big cloud or automation initiative on the table for 2018, then OpsWorks for Puppet Enterprise is a perfect starting point.<span id="more-2283"></span></p> 
-<p>And, because it’s that time of year for making lists, we’re bringing you the top 10 reasons why you should try OpsWorks for Puppet Enterprise in the new year.</p> 
-<ol> 
-<li>You can have a fully configured Puppet master up and running on AWS in less than 20 minutes. We developed a handy <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/gettingstarted-opspup.html" target="_blank" rel="noopener noreferrer">User Guide</a> and <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-starterkit.html" target="_blank" rel="noopener noreferrer">Starter Kit</a> to help you get started.</li> 
-<li>Backups, upgrades, and restorations are automatically handled for you based on maintenance windows that you define.</li> 
-<li>You can take advantage of hourly billing and only pay for what you consume.</li> 
-<li>You can deploy wherever your customers are—OpsWorks just added support for <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/aws-opsworks-is-now-available-in-nine-regions/" target="_blank" rel="noopener noreferrer">6 new AWS Regions</a>. In addition to these Regions: US East (N. Virginia), US West (Oregon), and EU (Ireland), it’s now available in in these Regions: US East (Ohio), US West (N. California), EU (Frankfurt), Asia Pacific (Singapore), Asia Pacific (Tokyo), and Asia Pacific (Sydney).</li> 
-<li>Need to use up some of your AWS credits? You can apply them to your AWS bill and offset part of your OpsWorks for Puppet Enterprise usage!</li> 
-<li>Workflows tailored to the cloud make it easy to bring your cloud resources under management. For example, Puppet Enterprise in OpsWorks can securely register nodes on the Puppet master without intervention.</li> 
-<li>Connect to your existing module code repository. If you don’t have an existing code repo, we provide an AWS-managed source control repository to securely store your infrastructure code.</li> 
-<li>Manage your AWS and on-premises infrastructure with a single tool. If you’re going fully cloud native, OpsWorks for Puppet Enterprise is for you. If you still have on-premises infrastructure to manage, you can bring that, too.</li> 
-<li>Are you running open source Puppet or an older version of Puppet Enterprise? Try out the latest features available in Puppet Enterprise 2017.3 like <a href="https://puppet.com/products/capabilities/task-management" target="_blank" rel="noopener noreferrer">Task Management</a>, which lets you run ad hoc tasks across tens of thousands of nodes with full governance and auditability.</li> 
-<li>Accelerate migration to the cloud and get the benefits of Day 2 management.</li> 
-</ol> 
-<p>Together with AWS, we look forward to helping you move to the cloud and scale automation across your organization in 2018. Give it a try and let us know what you think. If you’d like to learn more about OpsWorks for Puppet Enterprise, you can get more info <a href="https://aws.amazon.com/opsworks/puppetenterprise/" target="_blank" rel="noopener noreferrer">here</a>.</p> 
-<p><em>The content and opinions in this post are those of the third-party author and AWS is not responsible for the content or accuracy of this post.</em></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/image2-1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Integrating AWS CloudFormation with AWS Systems Manager Parameter Store</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Anuradha Garg</span></span> | on 
-<time property="datePublished" datetime="2017-12-28T11:40:24+00:00">28 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/integrating-aws-cloudformation-with-aws-systems-manager-parameter-store/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS CloudFormation has always allowed you to customize your templates by using parameters for runtime input values. Parameters make your template code dynamically configurable, improving the reusability of your code. Previously, the only ways you could specify values for these parameters were to pass the plaintext values as arguments to the CloudFormation API, or hard code them in the template using ‘default’ values. This posed the following limitations:</p> 
-<ol class="incremental" type="1"> 
-<li>There was no centralized place to define/update your parameters (which may contain secrets, configuration data, etc.) and then import them into CloudFormation.</li> 
-<li>When changing parameters, you had to either slightly rewrite your template code or pass new parameter values when doing stack update operation.</li> 
-</ol> 
-<p>We are pleased to announce the integration of CloudFormation with <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-paramstore.html">AWS Systems Manager Parameter Store</a> which provides solutions to the above restrictions. In this blog, I explain how you can use Systems Manager parameters in your CloudFormation templates to simplify stack updates involving parameters and achieve consistency by using values stored in Parameter Store. With this integration, your code remains untouched while the stack update operation automatically picks up the latest parameter store value.</p> 
-<p><span id="more-2268"></span></p> 
-<b id="how-systems-manager-parameters-work-in-cloudformation">How Systems Manager parameters work in CloudFormation</b> 
-<p>You can use the existing Parameters section of your CloudFormation template to define Systems Manager parameters, along with other parameters. Systems Manager parameters are a unique type that is different from existing parameters because they refer to actual values in the Parameter Store. The value for this type of parameter would be the Systems Manager (SSM) parameter key instead of a string or other value. CloudFormation will fetch values stored against these keys in Systems Manager in your account and use them for the current stack operation. If the parameter being referenced in the template does not exist in Systems Manager, a synchronous validation error is thrown. Also, if you have defined any parameter value validations (AllowedValues, AllowedPattern, etc.) for Systems Manager parameters, they will be performed against SSM keys which are given as input values for template parameters, not actual values stored in Systems Manager.</p> 
-<p>Parameters stored in Systems Manager are mutable. Any time you use a template containing Systems Manager parameters to create/update your stacks, CloudFormation uses the values for these Systems Manager parameters at the time of the create/update operation. So, as parameters are updated in Systems Manager, you can have the new value of the parameter take effect by just executing a stack update operation. The <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_Parameter.html">Parameters</a> section in the output for Describe API will show an additional ‘ResolvedValue’ field that contains the resolved value of the Systems Manager parameter that was used for the last stack operation.</p> 
-<b id="new-systems-manager-parameter-types-supported-in-cloudformation">New Systems Manager parameter types supported in CloudFormation</b> 
-<p>CloudFormation parameters already support certain AWS specific types. SSM parameter types will be an addition to these types. New parameter types introduced in CloudFormation are:</p> 
-<ul class="incremental"> 
-<li>AWS::SSM::Parameter::Name</li> 
-<li>AWS::SSM::Parameter::Value&lt;String&gt;</li> 
-<li>AWS::SSM::Parameter::Value&lt;List&lt;String&gt;&gt;</li> 
-<li>AWS::SSM::Parameter::Value&lt;Any AWS type&gt;</li> 
-<p>The first one in the list is used to pass the name of the parameter key as-is. CloudFormation will not fetch the value stored against it. For example, you can use this type to validate that the parameter exists in Parameter Store. For all others, the value is fetched from Systems Manager with the type defined in the trailing angle brackets &lt;&gt;. For now, you can only use plaintext strings or list of strings. CloudFormation will support the Parameter Store ‘SecureString’ type in a later release.</p> 
-<b id="how-to-use-ssm-types-in-cloudformation">How to Use SSM types in CloudFormation</b> 
-<p>As mentioned earlier, SSM parameter types are used in template to reference existing Systems Manager parameters. Let’s look at a couple example scenarios.</p> 
-<h3 id="example-1">Example 1:</h3> 
-<p>Let’s say you are deploying a CloudFormation stack in both Development and Production. You are planning to use smaller instance types in Development. You don’t want to remember the instance types to be used in your CloudFormation template whenever you redeploy from one environment to another. The data (parameter value for the instance type parameter) can be maintained separately from the code (template). This example shows the end-to-end steps for using Systems Manger parameters for this use-case.</p> 
-<code># Create a parameters for Dev and Prod environments in Systems Manager Parameter Store
-aws ssm put-parameter --name myEC2TypeDev --type String --value “t2.small”
-aws ssm put-parameter --name myEC2TypeProd --type String --value “m4.large”
-</code> 
-<code class="yaml"># Reference/use existing Systems Manager Parameter in CloudFormation
-Parameters:
-InstanceType :
-Type : 'AWS::SSM::Parameter::Value&lt;String&gt;'
-Default: myEC2TypeDev
-KeyName :
-Type : 'AWS::SSM::Parameter::Value&lt;AWS::EC2::KeyPair::KeyName&gt;'
-Default: myEC2Key
-AmiId:
-Type: 'AWS::EC2::Image::Id'
-Default: 'ami-60b6c60a'
-Resources :
-Instance :
-Type : 'AWS::EC2::Instance'
-Properties :
-Type : !Ref InstanceType
-KeyName : !Ref KeyName
-ImageId : !Ref AmiId 
-</code> 
-<code># Call create-stack for Dev environment by passing SSM parameter key as template parameter value
-aws cloudformation create-stack --stack-name S1 --template-body &lt;above-template&gt;
-# Call create-stack for Prod environment by passing SSM parameter key as template parameter value
-aws cloudformation create-stack --stack-name S1 --template-body &lt;above-template&gt; --parameters ParameterKey=InstanceType,ParameterValue=myEC2TypeProd</code> 
-<p>Systems Manager console – All SSM parameters under this account are displayed.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/image1.png" /></p> 
-<p>CloudFormation console – Stack list page where selected stack is using SSM parameters.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/image2-1.png" /></p> 
-<p>CloudFormation console – Stack detail page for stack using SSM parameters.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/image3.png" /></p> 
-<h3 id="example-2">Example 2:</h3> 
-<p>Consider the use case of updating Amazon Machine Image (AMI) IDs for the EC2 instances in your CloudFormation templates. Normally, you might map AMI IDs to specific instance types and Regions. Then to update these, you would manually change them in each of your templates. Or you would be using a custom resource with an AWS Lambda function that gets the IDs of the latest AMIs for the Region and instance type that you’re using. Arguably, neither of these methods is very convenient.</p> 
-<p>Systems Manger Parameter Store team recently launched <a href="https://aws.amazon.com/blogs/mt/query-for-the-latest-windows-ami-using-systems-manager-parameter-store/">an easy way to retrieve the latest AMI IDs</a> for your template. <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-walk.html#sysman-paramstore-walk-hierarchies">Hierarchical</a> public parameters supported by Parameter Store can also be referenced in a CloudFormation template similar to the one used in Example 1. You can use the public parameter variable for the Windows AMI ID in your template. You don’t need to worry about how to fetch the latest AMI IDs. This SSM parameter will be updated whenever there is a newer version available. Whenever you decide to update the EC2 instances in your CloudFormation template to use the new AMI ID, you just call update-stack API on the stack. It will automatically fetch the latest value from Parameter Store. Also, note that for hierarchical parameters, you need to provide the full path of the parameter name.</p> 
-<code class="yaml"># Use public Systems Manager Parameter
-Parameters :
-LatestAmiId :
-Type : 'AWS::SSM::Parameter::Value&lt;AWS::EC2::Image::Id&gt;'
-Default: ‘/aws/service/ami-windows-latest/Windows_Server-2016-English-Core-Containers’
-Resources :
-Instance :
-Type : 'AWS::EC2::Instance'
-Properties :
-ImageId : !Ref LatestAmiId</code> 
-<code># Create-stack CLI call
-aws cloudformation create-stack --stack-name S1 --template-body &lt;above-template&gt;
-# Describe stack output’s ‘Parameters’ section for this stack
-aws cloudformation describe-stacks --stack-name S1</code> 
-<code class="json">…
-&quot;Parameters&quot;: [
-{
-&quot;ParameterValue&quot;: &quot;/aws/service/ami-windows-latest/Windows_Server-2016-English-Core-Containers&quot;,
-&quot;ResolvedValue&quot;: &quot;ami-ba9c05c0&quot;,
-&quot;ParameterKey&quot;: &quot;LatestAmiId&quot;
-}
-]
-…</code> 
-<b id="summary">Summary</b> 
-<p>By leveraging the CloudFormation integration with Systems Manager Parameter Store, you can make your templates more reusable and generic by storing and managing your runtime configuration and parameters centrally and securely. This, in turn, can make your stack operations simpler and more consistent, by clearly delineating the separation of infrastructure configuration and infrastructure code from each other.</p> 
-<p>The feature is now available in all AWS Regions!</p> 
-<hr /> 
-<b>About the Author</b> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/Anuradha.jpg" /> Anuradha Garg is a software developer on the AWS CloudFormation team where she works on developing new features for the service. Outside work, she is a travel enthusiast and loves exploring new things.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Manage Credentials in AWS OpsWorks for Puppet Enterprise using Hiera-eyaml</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nick Alteen</span></span> | on 
-<time property="datePublished" datetime="2017-12-28T11:13:04+00:00">28 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/how-to-manage-credentials-in-aws-opsworks-for-puppet-enterprise-using-hiera-eyaml/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>For customers new to configuration management with AWS OpsWorks for Puppet Enterprise (OWPE), a frequently-asked question is “How do I store sensitive data, such as database passwords, for use in my manifests?” Hiera allows you to manage and access data from various backends (data storage locations). By default, Hiera 5 supports YAML, JSON, and HOCON backends and only plaintext data files and values.</p> 
-<p>With some additional configuration, Hiera 5 supports the eyaml backend, which allows administrators to define backend data files with encrypted data (without having to encrypt the file in its entirety). This provides security of data at rest while allowing fast lookup and ease of use/review by administrators. Additionally, plaintext values can be included in the same file. Hiera-eyaml supports encrypted arrays, hashes, and nested arrays/hashes.</p> 
-<p><span id="more-2299"></span></p> 
-<h3>Enabling Hiera-eyaml</h3> 
-<p>The eyaml command line tool is made available for working with encrypted data files. To install and use hiera-eyaml, follow these instructions.</p> 
-gem install hiera-eyaml 
-<p>Import the following modules from the Puppet Forge to your Master.</p> 
-<li>https://forge.puppet.com/puppet/hiera</li> 
-<li>https://forge.puppet.com/puppetlabs/puppetserver_gem</li> 
-<li>https://forge.puppet.com/puppetlabs/inifile</li> 
-<li>https://forge.puppet.com/puppetlabs/stdlib</li> 
-<p>The following example Puppetfile includes the required modules.</p> 
-forge &quot;http://forge.puppetlabs.com&quot;
-# Modules from the Puppet Forge
-mod &quot;puppetlabs/concat&quot;
-mod &quot;puppetlabs/ntp&quot;
-mod &quot;puppetlabs/stdlib&quot;
-mod &quot;puppet/staging&quot;
-mod &quot;puppet-logrotate&quot;
-mod &quot;puppet/nginx&quot;
-mod &quot;puppetlabs/inifile&quot;
-mod &quot;puppetlabs/puppetserver_gem&quot;
-mod &quot;puppet/hiera&quot; 
-<p>Create a profile manifest to configure Hiera. This will enable three hierarchies (Virtual yaml, Nodes yaml, and Default yaml file). In the starter kit provided when creating an AWS OpsWorks for Puppet Enterprise instance, this would be located in <code>[STARTER_KIT]/site/profile/manifests/hiera.pp</code>.</p> 
-class profile::hiera {
-class { 'hiera':
-hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
-hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
-hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
-{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
-{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
-{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
-],
-eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-&nbsp;&nbsp; eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-&nbsp;&nbsp; eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
-&nbsp;&nbsp; &nbsp;create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
-&nbsp;&nbsp;&nbsp; keysdir&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
-&nbsp;&nbsp;&nbsp; provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
-}
-} 
-<p>Ensuring that you are following best practices, you can then add the newly created hiera profile to a role for our Puppet Master. This would be placed in <code>[STARTER_KIT]/site/role/manifests/puppet_master.pp</code>.</p> 
-class role::puppet_master {
-include profile::hiera
-} 
-<p>After steps 2-4 have been completed, and the control repository has been synchronized with the Puppet master (via webhook and puppet-code deploy), the role should be available for classification on the Puppet Master. This can be done in the Classification console under “All Nodes” -&gt; “PE Infrastructure” -&gt; “PE Master”. If for some reason the role is not appearing as a classification option, ensure that you have refreshed class definitions.</p> 
-<p>To quickly synchronize these changes, you can manually execute an Agent run on the Master using the PE console. At this point, the necessary configuration to support hiera-eyaml has been configured. The next steps would be to install encryption keys securely on the Puppet Master.</p> 
-<h3>Secure Key Storage</h3> 
-<p>After eyaml has been configured on the Master, &nbsp;you need to generate and securely store the asymmetric key pairs used for encryption and decryption of sensitive data. This can be done with the <code>eyaml createkeys</code> command from your workstation. The private key should be stored in a secure location that can only be accessed by the Puppet Master and any authorized users. In this case, you can leverage an Amazon S3 bucket with a strict access policy that allows only the OWPE instance’s IAM profile and administrators to our AWS account. The sample policy that follows demonstrates this. With this policy, it is important to ensure that the <code>s3:GetObject</code> and <code>s3:ListBucket</code> permissions are added to the <code>aws-opsworks-cm-ec2</code> role. After the policy has been applied and the OWPE Amazon EC2 role has been updated, have an administrator upload the public and private keys to the bucket.</p> 
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Id&quot;: &quot;HieraKeysPolicy&quot;,
-&nbsp; &quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;AllowOpsWorksCMInstanceRole&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::ACCOUNT_ID:role/service-role/aws-opsworks-cm-ec2-role&quot;
-},
-&quot;Action&quot;: [
-&quot;s3:GetObject&quot;,
-&quot;s3:ListBucket&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:s3:::BUCKET_NAME/*&quot;,
-&quot;arn:aws:s3:::BUCKET_NAME&quot;
-]
-},
-{
-&quot;Sid&quot;: &quot;AllowAdminAccess&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::ACCOUNT_ID:user/ADMIN_USER&quot;
-},
-&quot;Action&quot;: &quot;s3:*&quot;,
-&quot;Resource&quot;: [
-&quot;arn:aws:s3:::BUCKET_NAME/*&quot;,
-&quot;arn:aws:s3:::BUCKET_NAME&quot;
-]
-}
-]
-} 
-<p>After this policy has been applied, public and private keys can be generated with the <code>eyaml createkeys</code> command. This will automatically place the key files in a <code>./keys</code> directory on your workstation. The public/private keys can then be uploaded to the S3 bucket, and you can modify the <code>hiera.pp</code> manifest to include importing these files to <code>/etc/puppetlabs/code-staging/keys</code>. This directory is configured as part of the Hiera profile created previously, and is included in the backup/restore procedures.</p> 
-<p>Since these files are not created with in-line content, or from files/templates stored within the module itself, you need to make use of the exec Puppet resource. Since the AWS CLI is installed by default on OWPE Masters, no additional configuration/installation is required. The benefit of this approach is that the AWS CLI will make use of instance profiles to determine access permissions to S3. You need to confirm that the role assigned to nodes in your environment has appropriate S3 permissions (specifically <code>s3:ListBucket</code> on the bucket itself, and <code>s3:GetObject</code> for any key files).</p> 
-<p>First, update the Hiera profile to include importing the public/private key files.</p> 
-class profile::hiera {
-class { 'hiera':
-hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
-hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
-hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
-{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
-{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
-{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
-],
-eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
-create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
-keysdir&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;=&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
-provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
-}
-exec { 'get-private-key':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/private/key.pem /etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
-creates =&gt; '/etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
-}
-exec { 'get-public-key':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/public/key.pem /etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
-creates =&gt; '/etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
-}
-exec { 'update-key-perms':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'chown -R pe-puppet:pe-puppet /etc/puppetlabs/code-staging/keys &amp;&amp; chmod -R 0500 /etc/puppetlabs/code-staging/keys &amp;&amp; chmod 0400 /etc/puppetlabs/code-staging/keys/*.pem',
-require =&gt; [
-Exec['get-private-key'],
-Exec['get-public-key'],
-],
-}
-} 
-<p>After this is complete and deployed to your control repository, run Puppet Agent on the master and deploy the changes with <code>puppet-code deploy --wait --all --config-file .config/puppet-code.conf --token-file .config/puppetlabs/token</code> (executed from the root of your starter kit). To verify the modifications work as intended, test the puppet lookup tool to verify you are able to retrieve data from <code>common.yaml</code>.</p> 
-$ puppet lookup message --explain
-Searching for &quot;message&quot;
-&nbsp; Global Data Provider (hiera configuration version 5)
-&nbsp;&nbsp;&nbsp; Using configuration &quot;/etc/puppetlabs/puppet/hiera.yaml&quot;
-&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Virtual yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/virtual/xenhvm.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;virtual/%{::virtual}.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Path not found
-&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Nodes yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/nodes/opsworks-1703-ohq1bhd0cetefkis.us-east-1.opsworks-cm.io.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;nodes/%{::trusted.certname}.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path not found
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/nodes/RedHat.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;nodes/%{::osfamily}.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path not found
-&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Default yaml file&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/common.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;common.yaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Found key: &quot;message&quot; value: &quot;This node is using common data&quot; 
-<p>Now, you can update the Hiera data within your control repository to include encrypted values. Note that this will require separate additions to the hierarchy specified in the Hiera class. Thus, you must first update <code>hiera.pp</code> to include the additional hierarchy layer.</p> 
-class profile::hiera {
-class { 'hiera':
-hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
-hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
-hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
-{&quot;name&quot; =&gt; &quot;Secret Data&quot;, &quot;lookup_key&quot; =&gt; &quot;eyaml_lookup_key&quot;, &quot;paths&quot; =&gt; ['common.eyaml'], &quot;options&quot; =&gt; { &quot;pkcs7_private_key&quot; =&gt; &quot;/etc/puppetlabs/code/keys/private_key.pkcs7.pem&quot;, &quot;pkcs7_public_key&quot; =&gt; &quot;/etc/puppetlabs/code/keys/public_key.pkcs7.pem&quot; } },
-{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
-{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
-{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
-],
-eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
-eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
-create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
-keysdir&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
-provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
-}
-exec { 'get-private-key':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/private/key.pem /etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
-creates =&gt; '/etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
-}
-exec { 'get-public-key':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/public/key.pem /etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
-creates =&gt; '/etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
-}
-exec { 'update-key-perms':
-path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
-cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
-command =&gt; 'chown -R pe-puppet:pe-puppet /etc/puppetlabs/code-staging/keys &amp;&amp; chmod -R 0500 /etc/puppetlabs/code-staging/keys &amp;&amp; chmod 0400 /etc/puppetlabs/code-staging/keys/*.pem',
-require =&gt; [
-Exec['get-private-key'],
-Exec['get-public-key'],
-],
-}
-} 
-<p>After this is complete, add an encrypted YAML file with some test data. Note that there is a specific format required when adding encrypted values, as seen in the following snippet.</p> 
-# From the same directory as ./keys/
-eyaml edit CONTROL_REPO/hieradata/common.eyaml 
-<p>For testing purposes, we created a new value.</p> 
----
-encryptedmessage: DEC::PKCS7['Hello, World!']! 
-<p>After this is complete, you can commit and push the changes to your control repository, sync them with the Puppet Master, and run Puppet Agent on the master to implement the updated Hiera configuration. To validate that this works as expected, output the file contents, and compare them to the output of puppet lookup.</p> 
-$ cat /etc/puppetlabs/code/environments/production/hieradata/common.eyaml
----
-encryptedmessage: ENC[PKCS7,ENCRYPTED_STRING]
-$ puppet lookup encryptedmessage
-Searching for &quot;encryptedmessage&quot;
-&nbsp; Global Data Provider (hiera configuration version 5)
-&nbsp;&nbsp;&nbsp; Using configuration &quot;/etc/puppetlabs/puppet/hiera.yaml&quot;
-&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Secret Data&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/common.eyaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;common.eyaml&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Found key: &quot;encryptedmessage&quot; value: &quot;'Hello, World!'&quot; 
-<p>At this point, you can add additional hierarchies for environment or fact-based data, and manage sensitive information within. From your manifest code, you can simply query Hiera with the <code>lookup()</code> function as normal. You need to create and maintain encryption keys, and distribute them to administrators who need to manage Hiera data.</p> 
-<h3>About the Author</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/internal-cdn.amazon.com_.jpeg" /></p> 
-<p>&nbsp;</p> 
-<p>Nick Alteen is a Lab Development Engineer at Amazon Web Services, previously a Cloud Support Engineer. In both roles, he enjoys developing training and providing guidance to customers for usage of AWS services to fit their needs.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

@@ -190,6 +190,419 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Systems Manager Parameter Store adds support for Parameter versions</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-10-26T12:45:28+00:00">26 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-parameter-store-adds-support-for-parameter-versions/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Lou de la Torre, AWS Partner Solutions Architect and </em><em>Venkat Krishnamachari, Principal Product Manager, Amazon EC2 Systems Manager</em></p> 
+<p>Today we are excited to announce versioning support for Amazon EC2 Systems Manager Parameter Store. With Parameter Store versioning support, each iteration of a parameter is assigned a unique version number at creation time. These individual version numbers can be easily referenced in API actions and Systems Manager Documents. By default, the latest value of the parameter will be returned when no version is specified.</p> 
+<h3>Parameter Store</h3> 
+<p><a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Parameter Store</a> is part of <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager</a>.&nbsp;It provides a centralized, encrypted store to manage your configuration data, whether it is plain text data (database strings) or secure strings and secrets (such as passwords, and API keys). Because Parameter Store is available through the AWS CLI, APIs, and SDKs, you can easily reference parameters across AWS services such as AWS Lambda and Amazon EC2 Container Service (ECS).</p> 
+<p>For additional posts on Parameter Store, see:</p> 
+<p><a href="https://aws.amazon.com/blogs/mt/the-right-way-to-store-secrets-using-parameter-store/">The Right Way to Store Secrets using Parameter Store</a></p> 
+<p><a href="https://aws.amazon.com/blogs/compute/managing-secrets-for-amazon-ecs-applications-using-parameter-store-and-iam-roles-for-tasks/">Managing Secrets for Amazon ECS Applications Using Parameter Store and IAM Roles for Tasks</a></p> 
+<p><a href="https://aws.amazon.com/blogs/mt/organize-parameters-by-hierarchy-tags-or-amazon-cloudwatch-events-with-amazon-ec2-systems-manager-parameter-store/">Organize Parameters by Hierarchy, Tags, or Amazon CloudWatch Events with Amazon EC2 Systems Manager Parameter Store</a></p> 
+<p><span id="more-1531"></span></p> 
+<h3>Parameter Store Versioning</h3> 
+<p>Versioning provides an additional layer of protection for your Parameter Store values. For example, if code deployment fails you can easily roll back and reference older versions of config data saved as parameters in the Parameter Store. You can recover from unintended user errors that caused an overwrite in your parameter value. You can also use versioning to keep track of the number of times your stored values changed over the parameter’s lifetime for auditing purposes (see Figure 1).</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/Figure1-1-1024x546.png" /></p> 
+<p>By default, the initially created parameters’ version is 1. Versions are incremented automatically by increments of 1 whenever a value is updated in the Parameter Store. To demonstrate the value of Parameter Store versioning, consider the following scenario.</p> 
+<p>In an effort to minimize management overhead you decide to migrate your .NET application back-end SQL database from SQL on EC2 to RDS SQL. This will require that you deploy new code to your .NET application to update the database connection string. As with any migration, you want to ensure you can quickly rollback in case of failure.</p> 
+<p>With Parameter Store versioning you can quickly rollback by performing the following steps:</p> 
+<ol> 
+<li>Create a new Parameter pointing to the existing database string (SQL on EC2)</li> 
+<li>Create a new version of the Parameter pointing to the new database string (RDS SQL)</li> 
+<li>Update your code with a reference to the latest or Default version of the parameter</li> 
+<li>Migrate your database from SQL on EC2 to RDS SQL</li> 
+<li>Deploy your code updating the .NET application to point to the new SQL database running on RDS via the latest or Default version of the parameter</li> 
+<li>If any issues arise, simply update your code with the original version of the Parameter pointing your .NET application back to the original SQL on EC2 instance and re-deploy</li> 
+</ol> 
+<p>Let’s take a look at how easily you can make that happen by first creating a Parameter, then updating the parameter, viewing all existing versions of the Parameter, retrieving a Parameter by specific version number and finally rolling back to the original version of the Parameter. To do this you can use either the AWS CLI or the AWS Tools for Windows PowerShell. We will walk you through using both.</p> 
+<p><strong>Step 1. Create a Parameter</strong></p> 
+<p>Execute the following command to create a Parameter using the AWS CLI:</p> 
+<code class="lang-bash">aws ssm put-parameter --name &quot;/Prod/dotnet&quot; --type String --value &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;</code> 
+<p>or you can use&nbsp;the AWS Tools for Windows PowerShell:</p> 
+<code class="lang-powershell">Write-SSMParameter -Name &quot;/Prod/dotnet&quot; -Value &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot; -Type &quot;String&quot;</code> 
+<p><strong>Step 2. Update the Parameter</strong></p> 
+<p>Execute the following command to update the parameter using the AWS CLI (note the change in value and the overwrite option):</p> 
+<code class="lang-bash">aws ssm put-parameter --name &quot;/Prod/dotnet&quot; --type String --value &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot; --overwrite</code> 
+<p>Or you can use the AWS Tools for Windows PowerShell (note the change in value and the overwrite option):</p> 
+<code class="lang-powershell">Write-SSMParameter -Name &quot;/Prod/dotnet&quot; -Value &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot; -Type &quot;String&quot; -Overwrite $true</code> 
+<p><strong>Step 3. View all existing Versions of the Parameter</strong></p> 
+<p>Execute the following command to view all existing versions of the Parameter using the CLI:</p> 
+<code class="lang-bash">aws ssm get-parameter-history --name “/Prod/dotnet”</code> 
+<p>The System returns information similar to the following:</p> 
+<code class="lang-bash">PS C:\&gt; aws ssm get-parameter-history --name “/Prod/dotnet”
+{
+&quot;Parameters&quot;: [
+{
+&quot;LastModifiedUser&quot;: &quot;arn:aws:iam&quot;, 
+&quot;LastModifiedDate&quot;: 1507742527.826, 
+&quot;Type&quot;: &quot;String&quot;, 
+&quot;Name&quot;: &quot;/Prod/dotnet&quot;, 
+&quot;Value&quot;: &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;
+&quot;Version&quot;: 1
+}, 
+{
+&quot;LastModifiedUser&quot;: &quot;arn:aws:iam&quot;, 
+&quot;LastModifiedDate&quot;: 1507743165.366, 
+&quot;Type&quot;: &quot;String&quot;, 
+&quot;Name&quot;: &quot;/Prod/dotnet&quot;, 
+&quot;Value&quot;: &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot;
+&quot;Version&quot;: 2
+}
+]
+}</code> 
+<p>or you can execute the following command to view all existing versions of the Parameter using the AWS Tools for Windows PowerShell:</p> 
+<p><code class="lang-powershell"></code></p> 
+<code class="lang-powershell">Get-SSMParameterHistory -Name &quot;/Prod/dotnet&quot;</code> 
+<p>The System returns information similar to the following:</p> 
+<p>&nbsp;</p> 
+<code class="lang-bash">PS C:\&gt; Get-SSMParameterHistory -Name &quot;/Prod/dotnet&quot;
+Description&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
+KeyId&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
+LastModifiedDate : 10/11/2017 5:22:07 PM
+LastModifiedUser: arn:aws:iam
+Name&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : /Prod/dotnet
+Type&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : String
+Value&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433
+Version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  : 1
+Description&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : 
+KeyId&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
+LastModifiedDate : 10/11/2017 5:32:45 PM
+LastModifiedUser : arn:aws:iam
+Name&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : /Prod/dotnet
+Type&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : String
+Value&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433
+Version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  : 2</code> 
+<p><strong>Step 4. Retrieve the Parameter</strong></p> 
+<p>Use the following AWS CLI to retrieve parameters:</p> 
+<p>Execute the following command to retrieve the latest version of the Parameter (default):</p> 
+<code class="lang-bash">aws ssm get-parameters --names “/Prod/dotnet”</code> 
+<p>The System returns information similar to the following:</p> 
+<code class="lang-bash">PS C:\&gt; aws ssm get-parameters --name “/Prod/dotnet”
+{
+&nbsp;&nbsp;&nbsp; &quot;InvalidParameters&quot;: [],
+&nbsp;&nbsp;&nbsp; &quot;Parameters&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Type&quot;: &quot;String&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Name&quot;: &quot;/Prod/dotnet&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Value&quot;: &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Version&quot;: 2
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; ]
+}</code> 
+<p><code class="lang-bash"></code></p> 
+Execute the following command to retrieve a specific version of the Parameter (by version number): 
+<code class="lang-bash">aws ssm get-parameters --names “/Prod/dotnet:1&quot;</code> 
+<p>The System returns information similar to the following:</p> 
+PS C:\&gt; aws ssm get-parameters --region us-west-1 --name “/Prod/dotnet” 
+<code class="lang-bash">
+{
+&nbsp;&nbsp;&nbsp; &quot;InvalidParameters&quot;: [],
+&nbsp;&nbsp;&nbsp; &quot;Parameters&quot;: [
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Type&quot;: &quot;String&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Name&quot;: &quot;/Prod/dotnet&quot;,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Value&quot;: &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Version&quot;: 1
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
+&nbsp;&nbsp;&nbsp; ]
+}</code> 
+<p><code class="lang-bash"></code></p> 
+Note the difference in values. 
+<p>or using the&nbsp;the AWS Tools for Windows PowerShell, you can execute the following command to retrieve the latest version of the Parameter (default):</p> 
+<p><code class="lang-powershell">(Get-SSMParameterValue -Names &quot;/Prod/dotnet&quot;).Parameters | fl</code></p> 
+<p>The System returns information&nbsp;similar to the following:</p> 
+<code class="lang-bash">PS C:\&gt; (Get-SSMParameterValue -Name &quot;/Prod/dotnet&quot;).Parameters | fl
+Name&nbsp; &nbsp;&nbsp;&nbsp;: /Prod/dotnet
+Type&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: String
+Value &nbsp;&nbsp;&nbsp;&nbsp;: dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433
+Version&nbsp; : 2
+</code> 
+<p>Execute the following command to retrieve a specific version of the Parameter (by version number):</p> 
+<code class="lang-powershell">(Get-SSMParameterValue -Names &quot;/Prod/dotnet:1&quot;).Parameters | fl</code> 
+<p>The system returns information similar to the following:</p> 
+<code class="lang-bash">PS C:\&gt; (Get-SSMParameterValue -Name &quot;/Prod/dotnet:1&quot;).Parameters | fl
+Name&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;: /Prod/dotnet
+Type&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: String
+Value &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433
+Version&nbsp;&nbsp; : 1
+</code> 
+<p>Note the difference in values.</p> 
+<p>To roll back your .NET application to point to the original SQL on EC2 instance, simply update your code to reference the previous version of the Parameter and re-deploy.</p> 
+<p>You can reference Parameter Store versioning in Systems Manager Documents as well, as show in the following example:</p> 
+<p><strong>Systems Manager AWS-RunShellScript example</strong></p> 
+<p>The default value for commands is referenced with version 2 of SSM parameter ‘runcommand’.</p> 
+<code class="lang-bash">{
+&quot;schemaVersion&quot;:&quot;1.2&quot;,
+&quot;description&quot;:&quot;Run a shell script or specify the commands to run.&quot;,
+&quot;parameters&quot;:{
+&quot;commands&quot;:{
+&quot;type&quot;:&quot;StringList&quot;,
+&quot;description&quot;:&quot;(Required) Specify a shell script or a command to run.&quot;,
+&quot;minItems&quot;:1,
+&quot;displayType&quot;:&quot;textarea&quot;
+&quot;default&quot;:&quot;{{ssm:runcommand:2}}&quot;
+},
+&quot;executionTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;default&quot;:&quot;3600&quot;,
+&quot;description&quot;:&quot;(Optional) The time in seconds for a command to complete before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
+&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
+}
+},
+&quot;runtimeConfig&quot;:{
+&quot;aws:runShellScript&quot;:{
+&quot;properties&quot;:[
+{
+&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
+&quot;runCommand&quot;:&quot;{{ commands }}&quot;,
+&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
+}
+]
+}
+}
+}</code> 
+<p><strong>Summary</strong><br /> Parameter Store provides a centralized, encrypted store to manage your configuration data, whether it is plain text data (database strings) or secure strings and secrets (such as passwords, and API keys). Use versioning to add an extra layer of protection for your Parameter Store values.&nbsp;This new feature is available now and you can start using it today!</p> 
+<p><strong>About the author</strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/LouDelat-150x150.jpg" />Lou De La Torre is a Partner Solutions Architect with Amazon Web Services. Lou is responsible for assisting Partners and Customers alike with their AWS for Windows architectures and migration strategies. With a career in information technology that spans more than two decades, Lou brings a significant amount of expertise in cloud and systems architecture, systems management, disaster recovery, process improvement and compliance management. Lou consistently strives to ensure that he is delivering solutions that align with the needs and requirements of his customer’s business objectives, while alleviating any pain points they may be experiencing in their IT operations.</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">OpsWorks for Chef Automate – Automatically Bootstrapping Nodes in Different Accounts</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Darko Meszaros</span></span> | on 
+<time property="datePublished" datetime="2017-10-24T23:23:40+00:00">24 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/opsworks-for-chef-automate-automatically-bootstrapping-nodes-in-different-accounts/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Lots of us today are managing multiple AWS accounts. Although having multiple accounts can bring you &nbsp;benefits, such as more granular control of resources and access, decentralized control, and simpler billing. Multiple accounts can also introduce some challenges. A challenge we face in this blog post is having a centralized configuration management server with its nodes spread throughout other AWS accounts.</p> 
+<h3>Goal</h3> 
+<p>Let’s picture working for a company where various teams own Amazon EC2 instances in their own respective AWS accounts. We have a team dedicated to managing the configuration of all EC2 instances (nodes) across all of the company’s AWS accounts. The configuration management is performed by an <a href="https://aws.amazon.com/opsworks/chefautomate/">OpsWorks for Chef Automate</a> server. How do we go about bootstrapping these nodes to the Chef Automate server?</p> 
+<p>I’ll show you how you can bootstrap nodes in other AWS accounts to a single/centralized OpsWorks for Chef Automate server. To be precise, I’ll bootstrap an <a href="https://aws.amazon.com/amazon-linux-ami/">Amazon Linux</a> node in AWS account B to an OpsWorks for Chef Automate server in Account A. To bootstrap the instance I’ll use the user data provided in the Chef Automate starter kit we have downloaded during the creation of the server. This user data script uses the built-in AWS API calls to bootstrap your node.</p> 
+<p><span id="more-1630"></span></p> 
+<h3>A few notes before we start</h3> 
+<p>In this tutorial I assume that you don’t have <a href="https://aws.amazon.com/documentation/iam/">IAM</a> roles created for your Chef nodes, so we are creating everything from scratch. If, in fact, you do have roles configured, then just focus on the policy part of this tutorial. Also, we assume that you have the AWS CLI set up on your workstation with adequate privileges. Additionally, make sure all the ARNs mentioned here have the correct account IDs.</p> 
+<h3>Step 1: Set up IAM permissions on account A, our Chef Automate account</h3> 
+<p>First, we’ll create a role in account A that can be assumed by a node in account B. This role gives the node the necessary permissions to bootstrap itself with the Chef Automate server.</p> 
+<p>A) Create a policy that allows us to associate the nodes with our Chef Automate server. Create the policy using the following document:<code> owca_allow_associate.json</code></p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: [
+&quot;opsworks-cm:AssociateNode&quot;,
+&quot;opsworks-cm:DescribeNodeAssociationStatus&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+}
+]
+}</code> 
+<p>B)&nbsp;Create the policy with that document, using the AWS CLI:</p> 
+<code class="lang-bash">aws iam create-policy 
+--policy-name OWCA-AllowAssociate 
+--policy-document file://owca_allow_associate.json</code> 
+<p>C)&nbsp;Create a role that can be assumed by the other account (Account B – where the nodes are). Create that role using the following document: <code>owca_trust_policy.json</code></p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:root&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}]
+}</code> 
+<p>D) Now, let’s use the AWS CLI to create the role:</p> 
+<code class="lang-bash">aws iam create-role 
+--role-name CrossAccount-OWCA 
+--assume-role-policy-document file://./owca_trust_policy.json </code> 
+<p>E) And finally, attach the policy we created in step B to the role we created in step D:</p> 
+<code class="lang-bash">aws iam attach-role-policy 
+--role-name CrossAccountPowerUser 
+--policy-arn  arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:policy/OWCA-AllowAssociate </code> 
+<h3>Step 2: Set up IAM permissions on account B, our nodes account</h3> 
+<p>In this step we create an instance role that will be attached to your node on launch. This role allows the instance to assume a role from account A (the Chef Automate account) so it can associate itself to the Chef Automate server.</p> 
+<p>A) To create a role, we first need to create a document: <code>role_owca_associate.json</code></p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+<p>B) Create the role with the document, by running AWS CLI:</p> 
+<code class="lang-bash">aws iam create-role
+--role-name AssociateCrossAccount-owca 
+--assume-role-policy-document file://role_owca_associate.json</code> 
+<p>C) Create a policy document that allows our instance to assume a role: <code>node_assume_role.json</code></p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: {
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+&quot;Resource&quot;: &quot;arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA &quot;
+}
+}</code> 
+<p>D) Create the policy:</p> 
+<code class="lang-bash">aws iam create-policy 
+--policy-name ChefAssociateAccess 
+--policy-document file://./node_assume_role.json</code> 
+<p>E) Finally, attach the policy to the role we created earlier:</p> 
+<code class="lang-bash">aws iam attach-role-policy 
+--role-name CrossAccountPowerUser 
+--policy-arn  arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:policy/AssociateCrossAccount-owca</code> 
+<h3>Step 3: Modifying the user data</h3> 
+<p>In this step, we take the generated user data (<code>userdata.sh</code>) from the downloaded OpsWorks for Chef Automate starter_kit.zip and modify it with a few more functions that allow us to bootstrap your nodes across accounts.</p> 
+<p>The modifications we are adding here are quite simple. We are just using <code>aws sts assume-role</code> to assume the role that we have created in account A (the Chef server account), and use the temporary credentials it generates to run the <code>associate-node</code> commands, which are required for bootstrapping the node to the Chef Automate server.</p> 
+<p>Additionally, we are installing the <a href="https://github.com/stedolan/jq">jq utility for JSON parsing</a> – but this is removed during the cleanup.</p> 
+<p>A) Open up the <code>userdata.sh</code> file in a text editor and add the following lines on line 21 (just after the <code>set -e -o pipefail</code> line):</p> 
+<code class="lang-bash">set_cli_role() {
+yum install -y jq
+ASSUMED_ROLE=$(aws sts assume-role --role-arn arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA --role-session-name owca)
+export AWS_ACCESS_KEY_ID=$(echo $ASSUMED_ROLE | jq .Credentials.AccessKeyId | xargs)
+export AWS_SECRET_ACCESS_KEY=$(echo $ASSUMED_ROLE | jq .Credentials.SecretAccessKey | xargs)
+export AWS_SESSION_TOKEN=$(echo $ASSUMED_ROLE | jq .Credentials.SessionToken | xargs)
+}
+cleanup_cli_role(){
+yum remove -y jq
+unset AWS_SESSION_TOKEN
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+}</code> 
+<p>The first function we create here (<code>set_cli_role</code>) is used for assuming the role from account A, and exporting the temporary credentials to environment variables that will be used by our API calls. The second function is just for cleanup – removing of the <code>jq</code> JSON parser and un-setting the environment variables we set in the function before.</p> 
+<p>B) Now on the line 87 insert the <code>set_cli_role</code> function, and on line 93 add the <code>cleanup_cli_role</code>. Your function execution section should go from this:</p> 
+<code class="lang-bash">install_aws_cli
+node_association_status_token=&quot;$(associate_node)&quot;
+install_chef_client
+write_chef_config
+install_trusted_certs
+wait_node_associated &quot;${node_association_status_token}&quot;</code> 
+<p>C) To this:</p> 
+<code class="lang-bash">install_aws_cli
+set_cli_role
+node_association_status_token=&quot;$(associate_node)&quot;
+install_chef_client
+write_chef_config
+install_trusted_certs
+wait_node_associated &quot;${node_association_status_token}&quot;
+cleanup_cli_role</code> 
+<p>Here we simply change the execution part of the user data shell script to include our two new functions.</p> 
+<p>D) Save the <code>userdata.sh</code> somewhere safe.</p> 
+<h3>Step 4: Launch the nodes with the user data script</h3> 
+<p>The only thing left now is to run your nodes with the newly edited user data script. We can achieve this either by adding the user data during a manual launch of the EC2 instance, or by setting this on an<a href="https://aws.amazon.com/autoscaling/"> Auto Scaling</a> group launch configuration.</p> 
+<h3>Conclusion</h3> 
+<p>In this blog post we’ve enabled your nodes from different AWS accounts to bootstrap themselves to a centralized OpsWorks for Chef Automate server that is present in a separate account. We’ve achieved this by creating the required IAM roles and policies, and also by changing the user data that ships with the OpsWorks for Chef Automate starter kit. We’ve done this only for two accounts, but you can modify this to work on any number of accounts.</p> 
+<p><strong>About the Author</strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/24/darko-cropped.jpeg" /><br /> Darko Meszaros is a Cloud Support Engineer who supports customers that use various AWS automation tools, such as AWS OpsWorks, AWS CodeDeploy, and AWS CloudFormation. He is a subject matter expert for OpsWorks and CodeDeploy. Outside of work, he loves collecting video games and old computers.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Feature Updates: Support for Amazon Athena and Coverage Updates for Amazon S3, Amazon RDS, Amazon Kinesis and Amazon CloudWatch</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
+<time property="datePublished" datetime="2017-10-18T18:46:07+00:00">18 OCT 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-athena/" title="View all posts in Amazon Athena*"><span property="articleSection">Amazon Athena*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-features-update-support-for-amazon-athena-coverage-updates-for-s3-rds-kinesis-and-cloudwatch/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>As one of the most widely-used services in AWS, CloudFormation continues to expand its feature set&nbsp;by including adding support for Amazon Athena, two new features to protect stacks and control rollback processes, plus several new coverage updates.</p> 
+<p>CloudFormation now supports the creation of an <a href="https://aws.amazon.com/athena/">Amazon Athena</a> named query as a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-athena-namedquery.html">resource</a>. Amazon Athena is a query service that makes it easy to analyze data directly from files stored in S3 using standard SQL statements. Named queries can then be executed manually from the AWS Management Console, CLI or programmatically&nbsp;using API calls.</p> 
+<p>You can now create a standard set of named queries&nbsp;using CloudFormation templates. To try it out, you can use some of the sample data provided by Athena, as covered in Jeff Barr’s blog post <a href="https://aws.amazon.com/blogs/aws/amazon-athena-interactive-sql-queries-for-data-in-amazon-s3/">here</a>.</p> 
+<p><span id="more-1532"></span></p> 
+<p>After&nbsp;you’ve verified that your query properly runs on Athena, use CloudFormation to create a query using the <strong>AWS::Athena::NamedQuery</strong> resource type:</p> 
+<code class="lang-yaml">---
+#===============================================================================
+# Template: athena-named-query.yaml
+#
+# Purpose:  Creates an Athena Named Query via AWS CloudFormation, using the
+#           default data set provided by Athena.
+#===============================================================================
+AWSTemplateFormatVersion: &quot;2010-09-09&quot;
+Description: |
+Uses the default data set in Amazon Athena, with a sample elb logs table,
+to demonstrate how to create a named query via a CloudFormation template.
+This query checks for HTTP response codes and counts each code's occurrence
+Resources:
+AthenaNamedQuery:
+Type: AWS::Athena::NamedQuery
+Properties:
+Database: &quot;default&quot;
+Description: &quot;Select and count HTTP response codes&quot;
+Name: &quot;HTTPResponseCodeCount&quot;
+QueryString: &gt;
+SELECT backend_response_code, count(*)
+FROM default.&quot;elb_logs&quot;
+GROUP BY backend_response_code;</code> 
+<p>This YAML template above executes&nbsp;using a Create Stack call in under a minute. Then, go to the Athena console and find&nbsp;the query you created using CloudFormation under the Saved Queries menu:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/SavedQueries-1024x397.png" /></p> 
+<p>&nbsp;</p> 
+<p>Note our new query, HTTPResponseCodeCount, its description, and the first portion of the SQL query shows in our list, which is alphabetically sorted by name (it is the fourth item on the preceding image).&nbsp;Choose&nbsp;the name of your new query, and then&nbsp;choose the <strong>Run Query</strong> button to execute it:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/QueryResults-1024x545.png" /></p> 
+<p>&nbsp;</p> 
+<p>The <strong>Results</strong> pane shows that most pages return a HTTP 200 response code, which is good (OK). You can inspect the other error codes, like 404 (Not Found), 302 (Redirect) or 500 (Server Error).</p> 
+<p>Beyond the new Athena support, two new features have been released within the last few weeks:</p> 
+<li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-protect-stacks.html">Stack termination protection</a></strong> prevents a stack from being accidentally deleted. It’s a property that can be enabled on new or existing stacks, and it provides yet another level of protection for stacks and their resources. This setting is disabled by default, so you have to explicitly enable it when you create new stacks. For existing, non-nested stacks, you can change termination protection&nbsp;using the console or CLI.</li> 
+<li><strong><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_RollbackConfiguration.html">Rollback triggers</a></strong> allow you to have CloudFormation monitor the state of your application while the stack is being created or updated, and to roll back that create or update operation if the application triggers any alarms you have configured. Chuck Meyer’s blog post <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">here</a> demonstrates the use of rollback triggers.</li> 
+<p>CloudFormation has also introduced the following resource coverage updates:</p> 
+<li><strong>Amazon Simple Storage Service (S3)</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html">Configure</a> the transfer acceleration state.</li> 
+</ul> </li> 
+<li><strong>Amazon Relational Database Service (RDS)</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-rds-database-instance.html">Update</a> engine property from Oracle-SE or Oracle SE1&nbsp;to Oracle&nbsp;SE2 without the database instance being replaced.</li> 
+</ul> </li> 
+<li><strong>AWS Elastic Load Balancing (ELB)</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html">Specify</a> the IDs of the subnets to attach to a load balancer, and specify the type of load balancer to create.</li> 
+<li>For target groups, <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html">specify</a> the Availability Zone where the IP address is to be registered,&nbsp;and also specify the registration type of the targets in a given target group.</li> 
+</ul> </li> 
+<li><strong>AWS Elastic Beanstalk</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk.html">Define</a> lifecycle settings for resources that belong to the application, as well as the service role that Elastic Beanstalk assumes in order to apply lifecycle settings.</li> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk-environment.html">Specify</a> a custom platform for Elastic Beanstalk.</li> 
+</ul> </li> 
+<li><strong>Amazon&nbsp;Elastic Compute Cloud (EC2)</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-natgateway.html">Specify</a> resource tags for a Network Address Translation (NAT) gateway.</li> 
+</ul> </li> 
+<li><strong>Amazon&nbsp;Kinesis Firehose</strong> 
+<li><a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html">Specify</a> the stream type, as well as stream and role ARNs for a Kinesis stream used as a source for a delivery stream.</li> 
+</ul> </li> 
+<li><strong>Amazon CloudWatch</strong> 
+<li>Support new <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-events-rule.html">properties</a> for input transformation of events, as well as setting Amazon ECS tasks and Kinesis stream targets.</li> 
+</ul> </li> 
+<p>Visit our <a href="https://aws.amazon.com/cloudformation/">product</a> and <a href="https://aws.amazon.com/documentation/cloudformation/">documentation</a> pages for more information, as well as our list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported AWS resources</a>.</p> 
+<hr /> 
+<p><strong>About the Author</strong></p> 
+<table class=" alignleft" style="height: 90px" width="900"> 
+<tbody> 
+<tr> 
+<td width="63"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" /></td> 
+<td width="408"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.&nbsp;</strong>He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Configuring Serverless Applications Using AWS CloudFormation Custom Resources</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1120,261 +1533,6 @@ by
 <h3>About the Author</h3> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/18/mbaker-150x150.jpg" /></p> 
 <p><a href="https://www.linkedin.com/in/lidder/?ppe=1">Michael Baker</a> works as a DevOps Engineer for the Infrastructure Engineering team at <a href="https://www.bulletproof.net.au/">Bulletproof Group Limited</a>. Bulletproof is an AWS Premium Partner headquartered in Sydney, Australia.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Reducing Configuration Drift with Amazon EC2 Systems Manager State Manager and Amazon CloudWatch Events</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
-<time property="datePublished" datetime="2017-09-14T12:16:35+00:00">14 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/reducing-configuration-drift-with-amazon-ec2-systems-manager-state-manager-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post was written by Anupam Shrivastava, Software Development Engineer with Amazon Web Services.</em></p> 
-<p>State Manager helps you automate the process of keeping your EC2 instances or virtual machines (VM) in your on-premises data center in a desired state. Some use cases for State Manager include:</p> 
-<li>Ensuring that instances are joined to a Windows domain</li> 
-<li>Ensuring that instances are patched with specific software throughout their lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/configure-amazon-ec2-instances-in-an-auto-scaling-group-using-state-manager/">Configure Amazon EC2 Instances in an Auto Scaling Group</a>.</li> 
-<li>Executing Linux shell scripts or PowerShell scripts at scheduled times during the instances lifecycle. For more information, see <a href="https://aws.amazon.com/blogs/mt/combating-configuration-drift-using-amazon-ec2-systems-manager-and-windows-powershell-dsc/">Combating Configuration Drift Using Amazon EC2 Systems Manager and Windows PowerShell DSC</a>.</li> 
-<li>Using other configuration management tools like Ansible. For more information, see <a href="https://aws.amazon.com/blogs/mt/running-ansible-playbooks-using-ec2-systems-manager-run-command-and-state-manager/">Running Ansible Playbooks using EC2 Systems Manager, Run Command and State Manager</a></li> 
-<p>In State Manager, an association is a binding between your expressed configuration in a document, and a set of targets, on a specific schedule, to ensure consistent state. As part of the recent launch, we have made it easy for customers to easily remediate their instances when they drift from a desired configuration, provide you more control on when you can reapply configurations, and also make it easy for you to track changes to State Manager associations.</p> 
-<p>In this post, I demonstrate some new State Manager features such as association names and versions, rate expressions, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> integration. You start by specifying the configuration in a Systems Manager document.</p> 
-<p><span id="more-1243"></span></p> 
-<h3>Walkthrough</h3> 
-<p>Here are the steps that you take to demonstrate these new features of State Manager:</p> 
-<ol> 
-<li>Create an association to install Windows updates on one of the EC2 instances, using the rate expression of every 1 day. Give the association a name as well.</li> 
-<li>Configure CloudWatch Events for this association such that you receive status update notifications on an Amazon SNS topic, which can then be used to send email alerts.</li> 
-<li>Update the association’s schedule to execute every 30 minutes, to be more aggressive with checking and installing Windows updates. Use the association name filter to quickly find the right association to update.</li> 
-<li>View the different association versions after updating.</li> 
-</ol> 
-<h4>Step 1: &nbsp;Create an association</h4> 
-<p>Open the EC2 console and choose <strong>Systems Manager, State Manager.</strong></p> 
-<p>On the State Manager page, create an association with the following settings:</p> 
-<li>For <strong>Association Name</strong>, type ‘CriticalWindowsUpdates’.</li> 
-<li>For <strong>Select Document</strong>, select the AWS-InstallWindowsUpdates document.</li> 
-<li>For <strong>Targets</strong>, select a Windows instance.</li> 
-<li>For <strong>Schedule</strong>, choose <strong>Rate schedule builder</strong> and specify a rate expression of every 1 day.</li> 
-<li>For <strong>Parameters</strong>, select the following: 
-<li>Action: Install</li> 
-<li>Allow Reboot: True</li> 
-<li>Categories: CriticalUpdates</li> 
-</ul> </li> 
-<li>Choose <strong>Create Association</strong>.</li> 
-<p>You can also perform the same operations with the AWS CLI, using the following command:</p> 
-<code class="lang-bash">aws ssm create-association --name AWS-InstallWindowsUpdates --targets &quot;Key=InstanceIds,Values=i-0ca45fddbf4ce950f&quot; --schedule-expression &quot;rate(1 day)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True –-association-name CriticalWindowsUpdates</code> 
-<p>If you have not upgraded the SSM agent on your EC2 instance to the latest version, you might get a failed association error of ‘UnsupportedAgent’. In that case, upgrade the SSM agent to the latest version by executing a command using Run Command and the AWS-UpdateSSMAgent document. After you upgrade the agent, the association should start succeeding.</p> 
-<h4>Step 2: Configure CloudWatch Events to send notifications for a failed association</h4> 
-<p>Because you have created an association to ensure that an instance always has the latest critical Windows updates, you should also configure CloudWatch Events to notify you in case the association failed to check and apply the critical Windows updates.</p> 
-<p>Create an Amazon SNS topic that is configured to send you email. In the example below, I have an SNS topic already created with the topic ‘WindowsCriticalUpdates’.</p> 
-<p>Open the CloudWatch console and choose <strong>Events, Create rule</strong>. Use the following values:</p> 
-<li><strong>Service Name</strong>: EC2 Simple Systems Manager (SSM)</li> 
-<li><strong>Event Type</strong>: State Manager</li> 
-<li><strong>Specific type</strong>: EC2 State Manager Association State Change</li> 
-<li><strong>Specific status</strong>: Failed</li> 
-<li><strong>Edit Event Pattern</strong>:&nbsp; Add the Association Name to track the status for a specific Association</li> 
-<li>Choose <strong>Configure details</strong>.</li> 
-<p>When you’re done, the event pattern should look like the following:</p> 
-<code class="lang-json">{
-&quot;source&quot;: [&quot;aws.ssm&quot;],
-&quot;detail-type&quot;: [&quot;EC2 State Manager Association State Change&quot;],
-&quot;detail&quot;: {
-&quot;status&quot;: [&quot;Failed&quot;],
-&quot;association-name&quot;: [&quot;CriticalWindowsUpdates&quot;]
-}
-}</code> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/cwe.png" /></p> 
-<p>Bind the rule to the SNS topic ‘WindowsCriticalUpdates’, which is configured to send you emails for notification purposes.</p> 
-<h4>&nbsp;Step 3: Update the association schedule</h4> 
-<p>After a few days, you might realize that you want to have a more aggressive schedule of checking every 30 minutes for critical Windows updates. On the State Manager page, filter the associations by the word ‘Critical’. Select ‘CriticalWindowsUpdates’ and edit it.</p> 
-<p>On the Edit association page, choose Rate schedule builder and specify a rate expression of every 30 minutes. For Parameters, again select the following:</p> 
-<li>Action: Install</li> 
-<li>Allow Reboot: True</li> 
-<li>Categories: CriticalUpdates</li> 
-<p>Choose Edit association. You can also perform the same operations with the AWS CLI, using the following command:</p> 
-<code class="lang-bash">aws ssm update-association --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2 --schedule-expression &quot;rate(30 minutes)&quot; --parameters Action=Install,Categories=CriticalUpdates,AllowReboot=True</code> 
-<p>After the association is edited, it is immediately scheduled for execution on the target instances.</p> 
-<h4>Step 4: Track association changes using versioning</h4> 
-<p>The Versions tab provides an audit trail of all the updates that were made to the association. The attributes that can be updated are:</p> 
-<li>Association name</li> 
-<li>Document name</li> 
-<li>Document version</li> 
-<li>Parameters</li> 
-<li>Targets</li> 
-<li>Schedule expression</li> 
-<p>When you update any of the fields in an association, State Manager creates a new version. You can see all previous versions, along with the various field values. This enables you to track changes across various versions.</p> 
-<p>In the earlier example, you can see two association versions corresponding to the two different rate schedule expressions.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/versioning.png" /></p> 
-<p>You can also perform the same operations with the AWS CLI, using the following command:</p> 
-<code class="lang-bash">aws ssm list-association-versions --association-id 21da58e2-c9e1-4da5-a12a-d7d37eb981a2</code> 
-<h3>Conclusion</h3> 
-<p>In this post, I showed you how to use several new features in State Manager that will ensure your instances are in a desired state and do not drift:</p> 
-<li>Naming associations and filtering by names</li> 
-<li>Granular scheduling by rate expressions</li> 
-<li>Association status notifications through CloudWatch Events</li> 
-<li>Tracking association changes through versions</li> 
-<hr /> 
-<h3>About the Author</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/14/anupam.jpg">Anupam Shrivastava</a> is a software development engineer on the Amazon EC2 Systems Manager team. He enjoys being part of AWS and building easy-to-use scalable solutions for customers across the globe. Outside of work, he enjoys playing tennis and cricket, swimming, and traveling.</p> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Introducing the AWS Config Rule Development Kit (RDK)</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Henry Huang</span></span> | on 
-<time property="datePublished" datetime="2017-09-12T13:59:42+00:00">12 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config*"><span property="articleSection">AWS Config*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/introducing-the-aws-config-rule-development-kit-rdk/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Recently, <a href="https://aws.amazon.com/config">AWS Config</a> released a Rule Development Kit (RDK) that greatly simplifies your custom rule authoring experience. The RDK is an open-source tool that helps you set up AWS Config, author rules, and then test them using a variety of AWS resource types. This allows you to focus on the development of the rule itself. The AWS Config RDK is now available for download from the <a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub repo. We follow semantic versioning, and are dedicated to maintaining backwards compatibility for each major version.</p> 
-<h3>About AWS Config</h3> 
-<p>AWS Config is a service that enables you to assess, audit, and evaluate the configurations of your AWS resources. AWS Config continuously monitors and records your AWS resource configurations and allows you to automate the evaluation of recorded configurations against desired configurations. Rules enable you to automatically check the configuration of AWS resources recorded by AWS Config. There are 37 managed AWS Config rules by default and 34 custom rules maintained by the community in the <a href="https://github.com/awslabs/aws-config-rules">aws-config-rules</a> GitHub repo.</p> 
-<p><span id="more-1254"></span></p> 
-<b>Getting started</b> 
-<p>You can get started with AWS Config RDK and create a rule named “Hello World” in just a few minutes.</p> 
-<li>Prerequisites</li> 
-<li>Enable AWS Config</li> 
-<li>Create your first rule</li> 
-<li>Test your rule</li> 
-<b>Prerequisites</b> 
-<p>The AWS Config RDK requires the latest version of the <a href="https://aws.amazon.com/cli">AWS CLI</a>. You must also log in to an AWS account. Use the following command to install the AWS CLI (<a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">requires pip to be installed already</a>):</p> 
-<code class="lang-bash">pip install --upgrade --user awscli</code> 
-<p>Use the following command to configure the AWS CLI. For more information, see <a style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif" href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">Configuring the AWS CLI</a><span style="font-family: Georgia, 'Times New Roman', 'Bitstream Charter', Times, serif">.</span></p> 
-<code class="lang-bash">aws configure --profile myCLIprofile 
-AWS Access Key ID [None]: AKIAI44QH8DHBEXAMPLE
-AWS Secret Access Key [None]: je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
-Default region name [None]: us-east-1
-Default output format [None]: text</code> 
-<p>Use the following command to clone the AWS Config RDK on macOS, Linux, or Windows platforms:</p> 
-<code class="lang-bash">git clone https://github.com/awslabs/aws-config-rdk.git</code> 
-<p>Choose your platform (MacLinux or Windows).<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-01.png" /></p> 
-<b>Enable AWS Config</b> 
-<p>To begin, enable AWS Config in your AWS account for the region configured in the AWS CLI. For example, on macOS or Linux, use the following command to configure your profile:</p> 
-<code class="lang-bash">cd MacLinux/setup; ./setup myCLIprofile </code> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-02.png" /><br /> On Windows, use the following command to configure your profile:</p> 
-<code class="lang-bash">cd Windows/setup; ./setup.cmd myCLIprofile </code> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-03.png" /></p> 
-<p>In this example, AWS Config in the us-east-1 region has been enabled by RDK setup.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-04.png" /></p> 
-<b>Create your first rule</b> 
-<p>Now you can create your first rule. Use the following command to create the EBS_OPTIMIZED_INSTANCE managed rule, which checks whether Amazon EBS optimization is enabled for your EC2 instances that can be EBS-optimized. Create the rule under the folder /aws-config-rdk/MacLinux/rules on macOS or Linux:</p> 
-<code class="lang-bash">cd MacLinux/rules; ./createRule myCLIprofile hello_world AWS::EC2::Instance </code> 
-<p>You see the following results:<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-05.png" /></p> 
-<p>On Windows, use the following command:</p> 
-<code class="lang-bash">cd Windows/rules; ./createRule.cmd myCLIprofile hello_world AWS::EC2::Instance </code> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-06.png" /></p> 
-<p>The following resources were created:</p> 
-<li>The parameter “APPLICABLE_RESOURCE_TYPES” has the same value as “APPLICABLE_RESOURCES” already defined in the rule code</li> 
-<li>The AWS Lambda function named “hello_world”</li> 
-<li>An AWS Config rule named “hello_world”, which was also associated with the Lambda function</li> 
-<p>The rule has started to evaluate EC2 instances for compliance with EBS optimization.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-07.png" /><br /> Now you can replace the default values with your own code. Make sure that resource types are consistent between the rule_code.py and createRule.cmd script parameters. Otherwise, your rule returns NOT_APPLICABLE. The rules/ruleCode/rule_util.py script handles the boring parts of a rule, and should not need to be modified.</p> 
-<b>Test your rule</b> 
-<p>The AWS Config RDK supports testing your rule by invoking the Lambda function with configuration items (used as test cases) from the /rules/testUtil/compliantCIs and /rules/testUtil/noncompliantCIs directories. The RDK checks that the Lambda function returns the corresponding result.</p> 
-<p>On macOS or Linux, use the following command:</p> 
-<code class="lang-bash">cd MacLinux/rules; ./test myCLIprofile hello_world </code> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-08.png" /></p> 
-<p>On Windows, use the following command:</p> 
-<code class="lang-bash">cd Windows/rules; ./test.cmd myCLIprofile hello_world </code> 
-<p>You see the following results:</p> 
-<p><img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-09.png" /></p> 
-<p>Besides, we have provided Configuration Item examples in “rules/testUtil/exampleCIs” to help you to write test cases by the modification to make them represent compliant or non-compliant resources.<br /> <img src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-10.png" /></p> 
-<b>Summary</b> 
-<p>The AWS Config RDK helps you build rules easily, including the following:</p> 
-<li>Preparing the initial rule development environment, by enabling AWS Config with a variety of automatically created AWS resources.</li> 
-<li>Creating Lambda functions, rules, and the association between them so that you don’t have to.</li> 
-<li>Supporting multiple platforms: &nbsp;macOS, Linux, and Windows.</li> 
-<li>Testing rules just by the code, with no more manual setup in complicated test environments.</li> 
-<p>We would love to hear your feedback. Feel free to leave comments or suggestions on the&nbsp;<a href="https://github.com/awslabs/aws-config-rdk">aws-config-rdk</a> GitHub page.</p> 
-<h3>About the Author</h3> 
-<p><img class="alignleft" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/12/blog-post-11.png" /><br /> Henry Huang is a DevOps Consultant for the Professional Services Team&nbsp;at Amazon Web Services in China.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/prof-473x630.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Smart Budgeting Using Lambda and Service Catalog</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tapodipta Ghosh</span></span> | on 
-<time property="datePublished" datetime="2017-09-07T11:42:37+00:00">07 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/aws-budgets/" title="View all posts in AWS Budgets*"><span property="articleSection">AWS Budgets*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/aws-cost-management/" title="View all posts in AWS Cost Management*"><span property="articleSection">AWS Cost Management*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/smart-budgeting-using-lambda-and-service-catalog/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>If you have a lot of development activity in your organization, it’s important to keep track of your non-production AWS accounts.</p> 
-<p>If these accounts aren’t monitored closely, you might easily end up exceeding your budget.</p> 
-<p>In this blog post, I demonstrate how you can use the <a href="https://aws.amazon.com/about-aws/whats-new/2015/06/aws-introduces-budgets-a-simple-way-to-manage-your-aws-costs/">AWS Budgets</a> alert in conjunction with<a href="https://aws.amazon.com/lambda/"> AWS Lambda</a> and <a href="https://aws.amazon.com/servicecatalog/">AWS Service Catalog</a> to automate management of your IT budget for non-production environments.<span id="more-1163"></span></p> 
-<h3>Workflow</h3> 
-<p>For this example, I have created a billing alarm to notify me when the cost for a sandbox account overshoots the forecast by 30 percent. The billing alarm is tied to an Amazon SNS Topic which is subscribed by a Lambda function. This ensures that when the billing alert occurs, the IT administrator gets notified via SNS about the possibility of an overage. At the same time, the Lambda function calls the AWS Service Catalog API to enforce the template constraint to freeze all EC2 instance creation to only the t2.medium type.</p> 
-<p>&nbsp;</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/Screen-Shot-2017-08-07-at-2.00.50-PM-1024x508.png" /></p> 
-<h3>Create the SNS topic and subscription</h3> 
-<p>In the SNS console, choose&nbsp;Create topic&nbsp;and enter appropriate values for the &nbsp;Topic name&nbsp;(such as BudgetAlert) and&nbsp;Display name&nbsp;(Budget-Alert).</p> 
-<p>Choose&nbsp;Create topic. Select the topic and view the details.</p> 
-<p>Next, choose&nbsp;Create subscription.</p> 
-<p>For&nbsp;Protocol, choose&nbsp;Email. Enter the email address where notifications should be sent and choose&nbsp;Create subscription.</p> 
-<p>An email is sent to confirm the SNS topic subscription. In the email, open the&nbsp;SubscribeURL&nbsp;link to complete the subscription. Note the SNS topic Amazon Resource Name (ARN) because it’s used later by the Lambda function.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/07/sns.png" /></p> 
-<p>For more information, see&nbsp;<a href="http://docs.aws.amazon.com/sns/latest/dg/CreateTopic.html">Create a Topic</a>&nbsp;in the Amazon SNS Developer Guide.</p> 
-<h3>Create the Lambda function</h3> 
-<p>In the Lambda console, choose&nbsp;Functions,&nbsp;Create a Lambda function. Choose Blank Function and on the&nbsp;Configure trigger page, choose&nbsp;Next.</p> 
-<p>On the next page, enter the following values:</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Runtime:&nbsp;Python 2.7</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Code entry type:&nbsp;Inline</p> 
-<p>&middot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Role:&nbsp;Create a custom role (takes you to another page). Call the role service-catalog-lambda-&lt;region&gt;-role</p> 
-<p>For the policy document, enter the following policy:</p> 
-<code class="lang-json">{
-&nbsp;&nbsp;&nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,
-&nbsp;&nbsp;&nbsp; &quot;Statement&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;servicecatalog:*&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;s3:*&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;cloudformation:ValidateTemplate&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;iam:GetRole&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;*&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&quot;Effect&quot;: &quot;Allow&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; },
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Action&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:CreateLogGroup&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:CreateLogStream&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;logs:PutLogEvents&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ],
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&quot;Effect&quot;: &quot;Allow&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; ]
-}</code> 
-<p>On the&nbsp;Configure function&nbsp;page, choose&nbsp;Next. Review the configuration settings before choosing&nbsp;Create function.</p> 
-<p>You can also follow the instructions here:</p> 
-<p><a href="https://github.com/awslabs/aws-service-catalog-enforce-template-constraints/">https://github.com/awslabs/aws-service-catalog-enforce-template-constraints/</a></p> 
-<h3>Budget alert</h3> 
-<p>Create the AWS Budgets alert and add the IT administrator’s email to notify the administrator when the forecasted budget is greater than the percentage that you choose (in our example, it’s 30 %). Add the SNS Topic ARN and Verify. You should see “Verified” next to the topic ARN.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/BudgetAlert.png" /></p> 
-<p>For more information on how to create AWS budgets, you can refer the AWS Budgets Update blog post.</p> 
-<p>After the alert condition is met, the IT administrator will receive an email from AWS Budgets similar to the sample that follows:</p> 
-<code class="lang-json">{&nbsp;&quot;Subject&quot; : &quot;Budget&nbsp;Notification: Test is in Alarm State&quot;,
-&nbsp; &quot;Message&quot; : &quot;AWS&nbsp;Budget&nbsp;Notification\n\nDear AWS Customer,\n\nYou requested that we notify you when your Actual Cost for your&nbsp;budget&nbsp;\&quot;BudgetAlert\&quot; is greater than $50000. Your Actual Cost for this&nbsp;budget&nbsp;is now $50393. You can find further details below and by accessing your AWS&nbsp;Budgets&nbsp;dashboard.\n\nBudget
-}</code> 
-<p>The Lambda function also gets triggered. It looks for all portfolios in the Service Catalog, looks for InstanceType template constraints, and it changes the constraint to “t2.medium or small only.” The following example shows how the updated constraint looks after the Lambda function has successfully run.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/08/23/post_lambda_run.png" /></p> 
-<h3>Summary</h3> 
-<p>In this post, I’ve demonstrated an easy way to keep track of your non-prod accounts budget, while you are also focused on continuous development.</p> 
-<hr /> 
-<h3>About the Author</h3> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/09/07/tapo.jpg" /></p> 
-<p>Tapodipta Ghosh is a Solutions Architect focusing on AWS Marketplace.&nbsp;&nbsp;Tapo&nbsp;is passionate about cloud computing and loves helping customers on-board their products into AWS Marketplace.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
