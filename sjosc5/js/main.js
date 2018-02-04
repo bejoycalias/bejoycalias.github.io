@@ -1,6 +1,3 @@
-// Replace "leverdemo" with your own company name
-url = 'https://api.lever.co/v0/postings/hotstar?mode=json&department=1. Engineering'
-
 //Checking for potential Lever source or origin parameters
 var pageUrl = window.location.href;
 var leverParameter = '';
