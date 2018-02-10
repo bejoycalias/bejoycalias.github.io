@@ -190,6 +190,214 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Centralized Management of Multiple Accounts and Cross-Platform EC2 Instances Using AWS Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Sohaib Tahir</span></span> | on 
+<time property="datePublished" datetime="2018-02-06T15:24:46+00:00">06 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/centralized-management-of-multiple-accounts-and-cross-platform-ec2-instances-using-aws-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h3><strong>Introduction</strong></h3> 
+<p>Many AWS customers, particularly in the public sector, are implementing a central IT agency model. These organizations have an AWS account for central IT that is designated for the management of security and compliance activities such as patch management, use of golden Amazon Machine Images (AMIs), and federates user access for other agencies’ AWS accounts.</p> 
+<p>In this blog post, I present a solution that will allow the AWS account for central IT to use AWS Systems Manager (SSM) to execute commands using Run Command and manage patches in the AWS accounts of other agencies. I’ll walk you through the steps for deploying this solution using AWS CloudFormation templates. We will create a Systems Manager Activation in the central account for registering Amazon EC2 instances as managed instances from the other agencies’ AWS accounts. We’ll also deploy AWS Lambda functions to propagate the EC2 tags into the Central IT account and attach them to the managed instances as Systems Manager tags. This way the tags can be used as targets for executing SSM Documents through Run Commands and for other Systems Manager features such as State Manager, Maintenance Windows, and Patch Management.</p> 
+<p><span id="more-2227"></span></p> 
+<p>These are the minimum requirements for implementing this solution:<br /> • Central IT account (or a parent account)<br /> • Agency account (or child accounts)<br /> • EC2 instance profile in the agency account<br /> • SSM agents and Boto3 library on EC2 instances</p> 
+<p>The following diagram shows the system architecture:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/Blog_ssm_diag.png" /></p> 
+<p>&nbsp;</p> 
+<h3><strong>Implementation </strong></h3> 
+<p><strong>Step one</strong><br /> First, we’ll create a managed instance activation in the central IT AWS account. This activation will be used to register both Windows and Linux EC2 instances from individual agency accounts. On activation creation, an activation ID along with activation code is returned. You need to store these in a text file, we’ll use them in later steps.</p> 
+<p>For this blog post I’m providing a Python script for registering Amazon Linux-based EC2 instances from the agency account. You can easily write your own script for Windows or other operating system (OS) platforms.</p> 
+<p><strong>Step two</strong><br /> Next, we’ll deploy SSM Agent on EC2 instances in all of the agency/child accounts that will be centrally managed through the activation created in the first step. Note that by default the EC2 instance registers to its own account’s Systems Manager after the agent is installed and started. The EC2 instance appears in the Systems Manager Shared Resources section in the appropriate AWS Region, in the Managed Instances tab.</p> 
+<p><strong>Step three</strong><br /> Now we’ll create two parameters, ActivationID and ActivationCode, in the agency’s Systems Manager Parameter Store for the values we already have copied in a text file in step one. Our Python script that registers the EC2 instance to activation uses the values of these parameters for registration. You can use either the AWS Management Console, the API, or AWS CLI for creating the parameters. For the AWS CLI, use the following commands, which are documented in the&nbsp;CLI Command Reference.</p> 
+<code class="lang-bash">aws ssm put-parameter --name &quot;ActivationID&quot; --type &quot;String&quot; --value &quot;xxxxxxxxxx&quot; --region &lt;AWS_region&gt;
+aws ssm put-parameter --name &quot;ActivationCode&quot; --type &quot;String&quot; --value &quot;xxxxxxxxx&quot; --region &lt;AWS_region&gt;
+</code> 
+<p>&nbsp;</p> 
+<p><strong>Step four</strong><br /> After the SSM Agent is installed, the EC2 instances need to be registered to the activation that we created in the first step. When the registration to an activation is complete, a managed instance ID is returned in the form mi-xxxxxxxxxxxxxxxx. This ID is attached to the instance since neither EC2 instance ID nor the EC2 tags are propagated to the Central IT account from the agency account through activation. We’ll use Lambda functions later to propagate all of the EC2 tags to the Central IT account from each agency account.</p> 
+<p>The Python code that follows registers an Amazon Linux-based EC2 instance to an unexpired activation. The code requires the Boto 3 library to be pre-installed on the instance and an EC2 instance profile that has permissions to access Systems Manager Parameter Store and create EC2 tags.</p> 
+<code class="lang-python">#!/usr/bin/python
+import os
+import urllib2
+import json
+import commands
+import re
+import boto3
+from boto3 import session
+instance_details = json.loads(urllib2.urlopen('http://169.254.169.254/2016-06-30/dynamic/instance-identity/document/').read())
+instanceid=instance_details['instanceId']
+REGION=instance_details['region']
+# Getting the AWS credentials from the IAM role
+session = session.Session()
+credentials = session.get_credentials()
+def Activation(InstanceID):
+#Getting Activation ID and Code from parameter store
+ssm = boto3.client('ssm',region_name=REGION)
+activation_id = ssm.get_parameter(Name='ActivationID')
+ActivationID=activation_id['Parameter']['Value']
+activation_code = ssm.get_parameter(Name='ActivationCode')
+ActivationCode=activation_code['Parameter']['Value']
+# Registering Instance to Activation and storing ManagedInstanceID for tagging
+status_stop_service, Output_stop_service =commands.getstatusoutput(&quot;sudo stop amazon-ssm-agent&quot;)
+cmd=&quot;sudo amazon-ssm-agent -register -y -code %s -id %s -region %s&quot;%(ActivationCode,ActivationID,REGION)
+status, output = commands.getstatusoutput(cmd)
+m = re.search('(mi-)\w{17}',output.splitlines()[-1])
+ManagedInstanceID=m.group(0)
+if status==0:
+status_start_service, Output_start_service =commands.getstatusoutput(&quot;sudo start amazon-ssm-agent&quot;)
+print ManagedInstanceID
+# Creating Tag for ManagedInstanceID tag
+create_tags = ec2.create_tags(Resources=[str(InstanceID)],Tags=[{'Key':'managedinstanceid','Value':ManagedInstanceID}])
+# Checking if Instance already has ManagedInstanceID Tag
+ec2=boto3.client('ec2',region_name=REGION)
+ec2_attached_tags = ec2.describe_instances(Filters=[{'Name': 'tag-key','Values': ['managedinstanceid']}],InstanceIds=[instanceid])
+if not ec2_attached_tags['Reservations']:
+Activation(instanceid)
+else:
+print &quot;Instance is already registered to an Activation/Account&quot;</code> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>IAM policy for the EC2 instance profile:</p> 
+<p><code></code></p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Action&quot;: [
+&quot;ec2:CreateTags&quot;,
+&quot;ec2:DescribeInstances&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: &quot;*&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ssm:GetParameter&quot;
+],
+&quot;Resource&quot;: &quot;*&quot;
+}
+]
+}
+</code> 
+ 
+<p><code></code></p> 
+<p>&nbsp;</p> 
+<p>Learn more about activation for different operating systems:</p> 
+<li>Registering Windows instances to activation: <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-managedinstances.html#sysman-install-managed-win">http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-managedinstances.html#sysman-install-managed-win</a></li> 
+<li>Registering Linux instances to activation:<br /> <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-managedinstances.html#sysman-install-managed-linux">http://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-managedinstances.html#sysman-install-managed-linux</a></li> 
+<p>Note that there is a limit of 1,000 instances per activation and activation expires after a maximum of 30 days. After activation expiry, new instances can’t be registered to it, but registered instances can continue to be managed.</p> 
+<p><strong>Step five</strong><br /> After they are registered, the EC2 Instances in other accounts will appear in the EC2 console, in the Central IT account, Managed Instances section. They are identified by the same managed ID that was returned during activation process. This returned Managed ID is attached as an EC2 tag in the earlier Python code. A Lambda function, called Automation-EC2-Tags-Collector, copies the EC2 tags in the agency account to the Central IT account by invoking a second Lambda function, called Automation-SSM-Tag-Manager. The following CloudFormation template will deploy this Lambda function in agency accounts:</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?#/stacks/new?stackName=Automation-EC2-Tags-Collector&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/SSM/aws-automation-ec2-tag-collector.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/blog_westrich_5.png" /></a></p> 
+<p>The Automation-SSM-Tag-Manager Lambda function is deployed in the Central IT account so that it can accept the EC2 tags passed as an event by each agency’s Lambda function. Since each of the EC2 tags has the managed instance ID tag as well, it can used to map all the relevant EC2 tags propagated from agency accounts to the managed instances in in the central account. A maximum of 10 tags can be attached to a managed instance. Tags are critical to Systems Manager operation because they group resources together for applying and deploying Systems Manager functionalities such as Run Command, State Manager, Patch Manager, and Maintenance Windows.</p> 
+<p>Use the following CloudFormation template to deploy Automation-SSM-Tag-Manager Central IT account:</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?#/stacks/new?stackName=Automation-SSM-Tag-Manager&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/SSM/aws-automation-ssm-tag-manager.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/blog_westrich_5.png" /></a></p> 
+<p>The Automation-EC2-Tags-Collector Lambda function should have permissions to invoke Automation-SSM-Tag-Manager. We’ll ensure this by deploying the following CloudFormation template. For parameters for adding permissions, you need to provide the agency account ID and the AWS Region into which the Automation-EC2-Tags-Collector is deployed.</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?#/stacks/new? stackName=AWS-Automation-SSM-Add-Agency&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/SSM/aws-automation-ssm-add-agency.yaml"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/blog_westrich_5.png" /></a></p> 
+<p><strong>Step six</strong><br /> After these CloudFormation templates are successfully deployed, you need to validate the instances appearing as managed instances in the central IT account along with the EC2 tags. Execute following AWS CLI command for the central IT account:</p> 
+<code class="lang-bash">aws ssm list-tags-for-resource --resource-type “ManagedInstance” --resource-id &quot;&lt;managedinstanceID&gt;&quot; --region &lt;Activation_region&gt;
+</code> 
+<p>You can now use the propagated tags to execute Systems Manager documents or create Maintenance Windows. As an example you can execute the following Run Command on EC2 tag of “OS=Linux” as under:</p> 
+<code class="lang-bash">aws ssm send-command --document-name &quot;AWS-RunShellScript&quot; –parameters commands=[&quot;ifconfig&quot;] --targets Key=tag:OS,Values=Linux --region &lt;your_SSM_region&gt;
+</code> 
+<h3><strong>Conclusion</strong></h3> 
+<p>In this blog post I presented a Central IT solution for cross-account and cross-platform EC2 management using AWS Systems Manager and AWS Lambda. We created an Activation in the central IT account for registering agencies’ EC2 instances, we then deployed Lambda functions to import EC2 tags into the Central IT account for using them in implementing various EC2 SSM features. Using Systems Manager in Central IT provides you a variety of out-of-the-box features such as Patch Management, Maintenance Windows, Automation, and State Manager. These features can be used to enforce compliance and governance. Deploying this solution not only allows you to manage instances centrally but also to keep managing various OS platforms independently using the exported EC2 tags.</p> 
+<p>&nbsp;</p> 
+<p><strong>About the Author</strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/Phone_Tool_2-199x300.jpg" /></p> 
+<p>Sohaib Tahir is a Solutions Architect for State and Local Government Public Sector Team. Sohaib has a focus in Networking and Automation, and loves to help customers in building architectures with automation services like AWS Systems Manager, AWS Lambda and Cloud-formation and Networking services including Amazon VPC and Direct Connect.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/31/Screen-Shot-2018-01-31-at-12.00.15-PM.png" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation: 2017 in Review</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chuck Meyer</span></span> | on 
+<time property="datePublished" datetime="2018-02-02T13:35:05+00:00">02 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-2017-in-review/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In 2017, over 350,000 AWS customers used <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> to manage resources collected across 2.4M stacks. We added coverage for 14 new services and several new features.</p> 
+<p>In this post, I’d like to look back at some features and new content that CloudFormation introduced in 2017, including:</p> 
+<ul class="incremental"> 
+<li>New AWS resources that you can provision with CloudFormation.</li> 
+<li>StackSets to centrally manage stacks across accounts and regions.</li> 
+<li>Termination protection to protect stacks that contain critical resources.</li> 
+<li>Rollback triggers to revert infrastructure changes impacting application performance.</li> 
+<li>Integration with <a href="https://aws.amazon.com/systems-manager">AWS Systems Manager</a> Parameter Store.</li> 
+<li>Quick-create links to get stacks up and running quickly.</li> 
+<li>…and some of our most popular posts and re:Invent sessions.</li> 
+<p>I also talk a little about what’s ahead in 2018.<span id="more-2521"></span></p> 
+<h3 id="new-aws-resources">New AWS resources</h3> 
+<p>I did some digging into the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-resource-specification.html">AWS CloudFormation Resource Specification</a> and pulled out a few interesting statistics.</p> 
+<p>In 2017, we added support for 14 new services and APIs in CloudFormation:</p> 
+<table style="height: 203px" width="775"> 
+<tbody> 
+<tr> 
+<td>Amazon Athena</td> 
+<td>AWS Glue</td> 
+</tr> 
+<tr> 
+<td>AWS Batch</td> 
+<td>Amazon GuardDuty</td> 
+</tr> 
+<tr> 
+<td>AWS Cloud9</td> 
+<td>Amazon Inspector</td> 
+</tr> 
+<tr> 
+<td>AWS CodeStar</td> 
+<td>Amazon Kinesis Data Analytics</td> 
+</tr> 
+<tr> 
+<td>Amazon Cognito</td> 
+<td>Amazon Route 53 Auto Naming API</td> 
+</tr> 
+<tr> 
+<td>AWS Database Migration Service (AWS DMS)</td> 
+<td>AWS Step Functions</td> 
+</tr> 
+<tr> 
+<td>Amazon DynamoDB Accelerator (DAX)</td> 
+<td>AWS WAF Regional</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>As of today, you can use CloudFormation to provision 248 AWS resource types, 71 more than this time last year. For information about supported resources, see the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html">AWS Resource Types Reference</a> in the <em>AWS CloudFormation User Guide</em> or grab the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-resource-specification.html">AWS CloudFormation Resource Specification</a> yourself for the canonical list.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/31/Screen-Shot-2018-01-31-at-12.00.15-PM.png" /></p> 
+<p>You can read up on some of these new features and service in a series of coverage posts that my colleague, Luis Colon, has been writing. For instance, here’s one walking you through <a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-features-update-support-for-amazon-athena-coverage-updates-for-s3-rds-kinesis-and-cloudwatch/">creating a named query resource for Amazon Athena</a>.</p> 
+<h3 id="stacksets">StackSets</h3> 
+<p>With CloudFormation StackSets, you can now define AWS resources in a CloudFormation template and then roll it out across multiple AWS accounts or Regions in an automated and repeatable manner. You can use this to set up a baseline level of AWS functionality that addresses cross-account and cross-region infrastructure management.</p> 
+<p>Jeff Barr walked you through <a href="https://aws.amazon.com/blogs/aws/use-cloudformation-stacksets-to-provision-resources-across-multiple-aws-accounts-and-regions/">using StackSets</a> in a post on the AWS Blog.</p> 
+<h3 id="termination-protection">Termination protection</h3> 
+<p>Enabling termination protection on a stack prevents it from being accidentally deleted. You cannot delete a stack with termination protection enabled. We walked you through turning on this feature in our post on how to <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">Use AWS CloudFormation Stack Termination Protection and Rollback Triggers to Maintain Infrastructure Availability</a>. We also discussed incorporating this feature into a strategy for <a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-guardrails-protecting-your-stacks-and-ensuring-safer-updates/">AWS CloudFormation Guardrails: Protecting your Stacks and Ensuring Safer Updates</a>.</p> 
+<h3 id="rollback-triggers">Rollback triggers</h3> 
+<p>Rollback triggers enable you to have CloudFormation monitor the state of your application during stack creation and updates. CloudFormation rolls back that operation if the application breaches the threshold of any of the alarms that you’ve specified.</p> 
+<p>There’s a walkthrough of setting up a rollback trigger in the second half of my post, <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">Use AWS CloudFormation Stack Termination Protection and Rollback Triggers to Maintain Infrastructure Availability</a>.</p> 
+<h3 id="systems-manager-parameter-store-integration">Systems Manager Parameter Store integration</h3> 
+<p>You can now reference Systems Manager parameters in the Parameters section of your CloudFormation templates to simplify stack updates and achieve consistency by using values from Parameter Store.</p> 
+<p>We published a post to walk you through the process of <a href="https://aws.amazon.com/blogs/mt/integrating-aws-cloudformation-with-aws-systems-manager-parameter-store/">Integrating AWS CloudFormation with AWS Systems Manager Parameter Store</a>.</p> 
+<h3 id="quick-create-links-to-get-stacks-up-and-running-quickly.">Quick-create links to get stacks up and running quickly.</h3> 
+<p>Finally, you can now build quick-create links pre-populated with the template URL, stack name, and template parameters. To try it out yourself, check out <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html">Creating Quick-Create Links for Stacks</a>.</p> 
+<h3 id="blog-posts-and-reinvent-sessions">Blog posts and re:Invent sessions</h3> 
+<p>The most-read CloudFormation post from the <a href="https://aws.amazon.com/blogs/mt/">AWS Management Tools blog</a> in 2017 was <a href="https://aws.amazon.com/blogs/mt/configuring-serverless-applications-using-aws-cloudformation-custom-resources/">Configuring Serverless applications using CloudFormation Custom Resources</a>. Posts on <a href="https://aws.amazon.com/blogs/mt/use-aws-cloudformation-stack-termination-protection-and-rollback-triggers-to-maintain-infrastructure-availability/">Stack Termination</a> and <a href="https://aws.amazon.com/blogs/mt/integrating-aws-cloudformation-with-aws-systems-manager-parameter-store/">Parameter Store integration</a> were also popular.</p> 
+<p>At re:Invent, there were 67 sessions at least partially dealing with CloudFormation. The <a href="https://youtu.be/01hy48R9Kr8">CloudFormation Deep Dive (DEV317)</a> session was popular enough to get a repeat session. Other sessions included:</p> 
+<ul class="incremental"> 
+<li><a href="https://www.youtube.com/watch?v=vKd7WeCLJaM">Learn How Intuit Built a Frictionless Infrastructure Management (DEV318)</a></li> 
+<li><a href="https://www.youtube.com/watch?v=IBvsizhKtFk">AWS re:Invent 2017: How Amazon.com Uses AWS Management Tools (DEV340)</a></li> 
+<h3 id="whats-next">What’s next</h3> 
+<p>The AWS CloudFormation team looks forward to making more improvements to your CloudFormation experience in 2018, starting with the new Drift Detection feature that we announced at re:Invent and which is currently in beta.</p> 
+<p>And remember, you can always go to the documentation <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/ReleaseHistory.html">CloudFormation release history page</a> to see the latest updates.</p> 
+<hr /> 
+<h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/BadgePhoto-blog.jpg" />About the Author</h3> 
+<p>Chuck Meyer&nbsp;is a Senior Developer Advocate for AWS CloudFormation based in Ohio.&nbsp; He&nbsp;spends his time&nbsp;working with&nbsp;both&nbsp;external and internal development teams to constantly improve the developer experience for CloudFormation users.&nbsp; He’s a live music true believer and spends as much time as possible playing bass and watching bands.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How to secure infrequently used EC2 instances with AWS Systems Manager</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1273,161 +1481,6 @@ cookbook &quot;jinar-cookbook&quot;, &quot;~&gt;; 0.2.4&quot;, git: &quot;https:
 <p>&nbsp;</p> 
 <p>&nbsp;</p> 
 <p><em>The screenshots in this post are Copyright Chef Software Inc., and are available at <a href="https://github.com/chef/chef-web-docs">https://github.com/chef/chef-web-docs</a> under the terms of the CC-BY-3.0 license, available here <a href="https://creativecommons.org/licenses/by/3.0/legalcode">https://creativecommons.org/licenses/by/3.0/legalcode</a>.</em></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">2017 Year in Review: AWS OpsWorks for Chef Automate and Puppet Enterprise</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Rahul Gulati</span></span> | on 
-<time property="datePublished" datetime="2017-12-29T01:12:32+00:00">29 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/2017-year-in-review-aws-opsworks-for-chef-automate-and-puppet-enterprise/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS OpsWorks for Chef Automate and AWS OpsWorks for Puppet Enterprise provide fully managed Chef and Puppet servers with a suite of automation tools for infrastructure and application management. Enterprise customers rely on OpsWorks for easy configuration management and secure maintenance as the service automatically patches, updates, and backs up servers. This blog post gives you a quick recap of this year’s announcements and events for AWS OpsWorks for Chef Automate and AWS OpsWorks for Puppet Enterprise.</p> 
-<p><span id="more-2218"></span></p> 
-<p><strong>Announcing OpsWorks for Puppet Enterprise</strong></p> 
-<p>Puppet Enterprise support has been the most popular request for AWS OpsWorks since AWS launched the service. Using OpsWorks for Puppet Enterprise, customers can easily manage hybrid infrastructure as code, register node instances without signing certificate requests on the Puppet master, and run modules from the Puppet Forge community. AWS OpsWorks for Puppet Enterprise is integrated with AWS CloudTrail and AWS CodeCommit. AWS CloudTrail captures all of the AWS OpsWorks for Puppet Enterprise API calls and delivers log files to an Amazon S3 bucket. AWS CodeCommit hosts R10K remote repositories, which are general purpose toolsets for deploying Puppet environments and modules.</p> 
-<p><a href="https://aws.amazon.com/blogs/aws/new-aws-opsworks-for-puppet-enterprise/">Launch announcement</a></p> 
-<p><strong>AWS OpsWorks for Chef Automate now supports Chef Compliance</strong></p> 
-<p>The release of Chef Automate version 1.6 includes the new Compliance view for the Chef Automate UI. With AWS OpsWorks for Chef Automate integrated with compliance, you can track the compliance of your infrastructure based on a predefined policy. This allows you to frequently audit your applications for vulnerabilities and remediate violations.</p> 
-<p><a href="https://aws.amazon.com/blogs/mt/aws-opsworks-for-chef-automate-now-supports-compliance/">Launch announcement</a></p> 
-<p><strong>re:Invent – Automate and scale configuration management with AWS OpsWorks</strong></p> 
-<p>At re:Invent 2017, we hosted a session on automating and scaling configuration management through AWS OpsWorks. We gave an overview of how using the DevOps model to treat infrastructure environments as code enables you to automate and scale development and production environments.</p> 
-<p>We showed re:Invent session attendees how OpsWorks lets you use Chef and Puppet to automate the way servers are configured, deployed, and managed across your Amazon EC2 instances or on-premises compute environments. We walked through how OpsWorks helps you to focus on the core task of configuration management using Puppet and Chef by setting up and maintaining your environment in just a few clicks.</p> 
-<p><a href="https://www.slideshare.net/AmazonWebServices/automate-and-scale-configuration-management-with-aws-opsworks-dev331-reinvent-2017">Slides</a></p> 
-<p><a href="https://www.youtube.com/watch?v=1Zw4g3o2O0M">Video</a></p> 
-<p>Right after re:Invent, we released two more updates.</p> 
-<p><strong>Availability in six new Regions</strong></p> 
-<p>AWS OpsWorks for Chef Automate and AWS OpsWorks for Puppet Enterprise are available in six new Regions: US East (Ohio), US West (N. California), EU (Frankfurt), Asia Pacific (Singapore), Asia Pacific (Tokyo), and Asia Pacific (Sydney). With this release, this service is available in nine regions, including US East (N. Virginia), US West (Oregon), and EU (Ireland).</p> 
-<p>We added these Regions based on customer feedback, adoption of other AWS products, and to provide wider geographical coverage.</p> 
-<p><a href="http://docs.aws.amazon.com/general/latest/gr/rande.html#opsworks_region">AWS Regions and Endpoints</a></p> 
-<p><strong>Create backups from the console</strong></p> 
-<p>With this release, AWS OpsWorks for Chef Automate and Puppet Enterprise customers can also create manual backups through the AWS Management Console. Earlier, manual backups were limited to using a CLI command. A backup – either manual or automated – saves application-level server data, such as cookbooks, modules, users, organizations, and node configurations. Backup excludes any additional files that you store on the server EC2 instance.</p> 
-<p><a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opscm-chef-backup.html">Back Up an AWS OpsWorks for Chef Automate Server</a></p> 
-<p><a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-backup.html">Back Up an AWS OpsWorks for Puppet Enterprise Server</a></p> 
-<p><strong>About the Author</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/22/ragulati.jpeg" />Rahul Gulati is a Product Manager at AWS OpsWorks. He enjoys working with customers and engineering teams to build software products.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS OpsWorks for Puppet Enterprise and an alternate implementation for policy based auto signing</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andrew Park</span></span> | on 
-<time property="datePublished" datetime="2017-12-28T16:21:29+00:00">28 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-opsworks-puppet-enterprise-and-an-alternate-implementation-for-policy-based-auto-signing/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS OpsWorks for Puppet Enterprise was <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/announcing-aws-opsworks-for-puppet-enterprise/">released in November of 2017</a>. It has a secure API (<em>associate node</em>) that provides a secure, convenient, and AWS-integrated method to sign certificates for clients of OpsWorks for Puppet Enterprise. This secure API is ideal for use within a user data script when being used for AWS CloudFormation (which can be found <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html">here</a>) or Auto Scaling Groups.</p> 
-<p>However, this blog post is about creating an alternate mechanism that allows end users to implement a different condition-checking mechanism before signing client certifications. This method is effective in environments such as proof of concept (PoC), development, or testing where clients aren’t executing the full AWS provisioning process. For example, this method could be used where customers build bare metal virtual machines (VMs) or containers. It could also be used where the VMs exist in a hybrid cloud environment or in an environment where OpsWorks for Puppet Enterprise is used to govern a customer’s private cloud VMs. It’s important to note that this method is not integrated with AWS CloudTrail, where every <em>associate node</em> API call would be tracked. When you use this alternative method, this tracking is not in effect.<span id="more-2311"></span></p> 
-<b>Introduction</b> 
-<p>When a VM makes a request to sign in to the Puppet master, the master bases its approval of the client’s request on certain criteria. This is called policy-based auto signing.&nbsp; Due to the nature of Puppet and the possibility of exposing sensitive information, the signing of a client’s certificate must be approved carefully. The conceptual implementation is <a href="https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning">documented on the Puppet website</a>.</p> 
-<p>This blog post provides one example of policy-based auto signing using the following assumptions:</p> 
-<ol> 
-<li>The Puppet clients are Amazon EC2 instances.</li> 
-<li>These instances reside in the same VPC.</li> 
-<li>The Puppet master is equipped with required tools such as the AWS CLI and <a href="https://stedolan.github.io/jq/">jq</a>.</li> 
-<li>The Puppet master’s AWS client tool has been configured with sufficient authority to be able to access all the information on the EC2 instances, such as their private DNS names and their tags.</li> 
-</ol> 
-<b>Set up the necessary components on the Puppet Enterprise master<strong>&nbsp;</strong></b> 
-<p>(NOTE: a puppet module that can help with automating steps 5-8 is available.&nbsp; It can be found <a href="https://forge.puppet.com/awsandrewpark/aws_owpe_policysign">here</a> and for reporting an issue about the module, you can visit this <a href="https://github.com/awslabs/aws_owpe_policysign/issues">link</a>.&nbsp; Please note that you have to edit common.yaml to enter your ID and secret access key.&nbsp; For usage help, please visit <a href="https://forge.puppet.com/awsandrewpark/aws_owpe_policysign#usage">here</a>.)</p> 
-<ol> 
-<li>Log in to the PE console and add the following value under puppet_enterprise::profile::master class</li> 
-</ol> 
-<code class="lang-css">allow_unauthenticated_ca = true</code> 
-<ol start="2"> 
-<li>Choose Add parameter.</li> 
-<li>Choose Commit.</li> 
-<li>Log in to the PE master using SSH and execute the following command to apply the configuration change:</li> 
-</ol> 
-<code class="lang-bash">puppet agent -tov</code> 
-<ol start="5"> 
-<li>In the same SSH session on the PE master, ensure that the AWS CLI is configured with the proper Access Key ID and the Secret Access Key for the pe-puppet</li> 
-</ol> 
-<code class="lang-bash">sudo su - pe-puppet --shell /bin/bash
-$ aws configure
-AWS Access Key ID [None]: ************
-AWS Secret Access Key [None]: **********************
-Default region name [None]: us-east-1
-Default output format [None]: json              
-$ exit</code> 
-<p style="padding-left: 60px">NOTE: &nbsp;This is an important step for the Puppet Enterprise Puppet user (pe-puppet) because the policy-based signing script must be executable by the pe-puppet user.</p> 
-<ol start="6"> 
-<li>Edit&nbsp;/etc/puppetlabs/puppet/puppet.conf file and ensure that following line appears under <em><strong>[main]</strong></em> section of the configuration file:</li> 
-</ol> 
-<code class="lang-bash">autosign = /opt/puppetlabs/autosign/autosign.sh</code> 
-<ol start="6"> 
-<li>Create an auto sign structure and copy over the script. (You can find this script in Appendix A.) And restart Puppet Master Service:</li> 
-</ol> 
-<code class="lang-bash">mkdir -p /opt/puppetlabs/autosign
-cp autosign.sh /opt/puppetlabs/autosign/autosign.sh
-chown -R pe-puppet.pe-puppet /opt/puppetlabs/autosign
-chmod 750 /opt/puppetlabs/autosign /opt/puppetlabs/autosign/autosign.sh   
-/etc/init.d/pe-puppetserver restart</code> 
-<ol start="7"> 
-<li>Now the Puppet master is ready to sign based on the policy. (For the explanation of the policy contained in the example script, see Appendix B.) On the Puppet client that has not been signed into a PE master, run the following command to request to be signed in.</li> 
-</ol> 
-<code class="lang-bash">puppet agent -tov --waitforcert=200</code> 
-<ol start="8"> 
-<li>To confirm, you should see the following entries in the /var/log/puppetlabs/puppetserver/puppetserver.log file on the PE master:</li> 
-</ol> 
-<code class="lang-bash">2017-12-18 20:23:21,739 INFO  [qtp2115462635-102] [p.p.certificate-authority] Signed certificate request for ip-my-ip-address.ec2.internal
-2017-12-18 20:23:22,636 INFO  [qtp2115462635-364] [puppetserver] mount[pe_packages] allowing * access
-2017-12-18 20:23:22,637 INFO  [qtp2115462635-364] [puppetserver] mount[pe_modules] allowing * access</code> 
-<p style="padding-left: 30px">On the Puppet client’s command line, you should see something like the following:</p> 
-<code class="lang-bash">[root@ip-my-ip-address ~]# puppet agent -tov --waitforcert=200
-Info: Creating a new SSL key for ip-my-ip-address.ec2.internal
-Info: Caching certificate for ca
-Info: csr_attributes file loading from /etc/puppetlabs/puppet/csr_attributes.yaml
-Info: Creating a new SSL certificate request for ip-my-ip-address.ec2.internal
-Info: Certificate Request fingerprint (SHA256): 
-FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF [snip]
-Info: Caching certificate for ip-my-ip-address.ec2.internal
-Info: Caching certificate_revocation_list for ca
-Info: Caching certificate for ca
-Info: Using configured environment 'production'
-Info: Retrieving pluginfacts
-Info: Retrieving plugin
-Notice: /File[/opt/puppetlabs/puppet/cache/lib/facter]/ensure: created</code> 
-<b>Conclusion</b> 
-<p>That’s it. The Puppet Enterprise (PE) Master will sign the client certificates based on the policy you have defined in the autosign.sh. To recap, this blog post shows you how to create an alternate mechanism that allows end users to implement different condition-checking before signing client certificates. We walk you through an example of policy-based auto signing configuration and provide an example script.</p> 
-<p>To learn more about AWS OpsWorks for Puppet Enterprise, visit <a href="https://aws.amazon.com/opsworks/puppetenterprise/">here</a>.</p> 
-<b>Appendix A: autosign.sh</b> 
-<code class="lang-bash">#!/bin/sh
-# If we do not have aws cli or jq, exit with error immediately
-which aws &gt; /dev/null 2&gt;&amp;1 || exit 2
-which jq &gt; /dev/null 2&gt;&amp;1 || exit 3
-usage()
-{
-echo &quot;$0 [private dns name of ec2 instance]&quot;
-exit 1
-}
-[ $# -eq 1 ] || usage
-clientname=$1
-# Criteria 1: the puppet client must be visible in my VPC
-[ `aws ec2 describe-instances --filters &quot;Name=private-dns-name,Values=$clientname&quot; --output=text | wc -l | sed 's/ //g'` -eq 0 ] &amp;&amp; exit 1
-# Criteria 2: the puppet client must have proper tags
-UNIQUETAG=&quot;puppetclient&quot;
-INSTANCEID=`aws ec2 describe-instances --filters &quot;Name=private-dns-name,Values=$clientname&quot; --output=json | jq .Reservations[].Instances[].InstanceId`
-[ &quot;`aws ec2 describe-tags --filters &quot;Name=resource-id,Values=$INSTANCEID&quot; --output json  | jq '.Tags[] | select(.Key==&quot;myuniquetag&quot;).Value' | sed 's/&quot;//g'`&quot; != &quot;$UNIQUETAG&quot; ] &amp;&amp; exit 1
-# We passed everything, give it a thumbs up
-exit 0</code> 
-<b>Appendix B: Policy description</b> 
-<p>The provided autosign.sh script uses two criteria to validate legitimacy of the puppet client’s certificate signing request.</p> 
-<ol> 
-<li>The Amazon EC2 VM must exist in the same VPC. (This is verified using the aws ec2 describe-instances)</li> 
-<li>The unique tag created during the instantiation phase of the Amazon EC2 VM must exist and match what the Puppet master expects (configurable/adjustable in the sh script).</li> 
-</ol> 
-<b>Related links</b> 
-<p>Add Nodes Automatically: <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html">http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html</a></p> 
-<p>Puppet’s policy-based auto signing: <a href="https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning">https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning</a></p> 
-<b>About the author</b> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/andrew_park.jpg" /></p> 
-<p>Andrew Park is a Cloud Infrastructure Architect at Amazon Web Services. Prior to AWS, Andrew has served 20+ years as a Linux Solution Engineer, a Linux infrastructure Architect/Administrator and a Cloud Engineer. He has been a key participating member of cloud adoption programs in many different Canadian banks, and he also has participated in many different open source projects like Samba, restricted shell (rssh), not red hat update (Yes, this was an actual project), Red Hat’s Anaconda and Agenda VR3. He works tirelessly on behalf of the clients in order that customers can enjoy economically friendly open source solutions. He is a foodie, loves to converse with people and machines alike, and a firm believer of Open Source philosophy.</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

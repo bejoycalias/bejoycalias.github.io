@@ -190,6 +190,196 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Automate IIS and HttpErr Logs to Amazon CloudWatch Using EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Pawan Puthran</span></span> | on 
+<time property="datePublished" datetime="2017-11-22T09:56:52+00:00">22 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/automate-iis-and-httperr-logs-to-amazon-cloudwatch-using-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>When you have workloads or applications hosted on IIS Web Server, it’s important to monitor and analyze both <a href="https://www.iis.net/configreference/system.applicationhost/sites/sitedefaults/logfile#003">IIS</a> and <a href="https://support.microsoft.com/en-us/help/820729/error-logging-in-http-apis#Kinds%20of%20errors%20that%20the%20HTTP%20API%20logs">HttpErr</a> logs for abnormalities. IIS logs contain an entry for every request to the site. However, at times, you might not find the requests in IIS logs, even though IIS logging is enabled. There is a good chance that the request was rejected by HTTP.sys (Kernel mode driver for HTTP) before it was handed to the IIS worker process. Some of the common reasons for rejecting a request include the following:</p> 
+<li>The service is unavailable because the application pool is offline. (Http 503: Service Unavailable)</li> 
+<li>Parse error – Bad request. (Http 400)</li> 
+<p>In this blog post, we show you how to configure Windows EC2 instances to send HttpErr and IIS logs to <a href="https://aws.amazon.com/cloudwatch/">Amazon CloudWatch</a> using <a href="https://aws.amazon.com/ec2/systems-manager">Amazon EC2 Systems Manager (SSM)</a>. Then we show you how to set up a CloudWatch alarm to notify you when the IIS application pool stops using <a href="https://aws.amazon.com/sns/" target="_blank" rel="noopener noreferrer">Amazon Simple Notification Service</a> (SNS).</p> 
+<p><span id="more-1788"></span></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/flowdiag.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/flowdiag-1024x293.png" /></a></p> 
+<p>Amazon EC2 Systems Manager is a management service that helps you automate management tasks such as collecting system inventory, applying operating system (OS) patches, automating the creation of Amazon Machine Images (AMIs), and configuring operating systems and applications at scale. Systems Manager lets you remotely and securely manage the configuration of your managed instances.</p> 
+<b>Configuring Windows EC2 for CloudWatch using EC2 Systems Manager</b> 
+<p>There are <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/send_logs_to_cwl.html">many ways to send instance metrics</a> to CloudWatch. Let’s look at the steps you need to follow to integrate <a href="https://aws.amazon.com/ec2/systems-manager/state-manager/">System Manager State Manager</a> with CloudWatch.</p> 
+<ol> 
+<li>Set up the configuration file for CloudWatch</li> 
+<li>Configure integration with CloudWatch</li> 
+<li>Create a CloudWatch metric filter and configure an alarm</li> 
+</ol> 
+<b>Step 1: Set up the configuration file for CloudWatch</b> 
+<ol> 
+<li>Download the sample <a href="https://s3.amazonaws.com/ec2-downloads-windows/CloudWatchConfig/AWS.EC2.Windows.CloudWatch.json">JSON file for CloudWatch</a></li> 
+<li>Ensure that “isEnabled” is set to true <code class="lang-json">{
+&quot;IsEnabled&quot;: true,
+&quot;EngineConfiguration&quot;: {
+...
+}
+}</code> </li> 
+<li>In the JSON file, add the following configuration information after the IISLogs section. <code class="lang-json">{
+&quot;Id&quot;: &quot;HttpErrLogs&quot;,
+&quot;FullName&quot;: &quot;AWS.EC2.Windows.CloudWatch.CustomLog.CustomLogInputComponent,AWS.EC2.Windows.CloudWatch&quot;,
+&quot;Parameters&quot;: {
+&quot;LogDirectoryPath&quot;: &quot;C:\\Windows\\System32\\LogFiles\\HTTPERR&quot;,
+&quot;TimestampFormat&quot;: &quot;yyyy-MM-dd HH:mm:ss&quot;,
+&quot;Encoding&quot;: &quot;UTF-8&quot;,
+&quot;Filter&quot;: &quot;&quot;,
+&quot;CultureName&quot;: &quot;en-US&quot;,
+&quot;TimeZoneKind&quot;: &quot;UTC&quot;,
+&quot;LineCount&quot;: &quot;3&quot;
+}
+}</code> </li> 
+<li>Add the following configuration to ensure that the log data is sent to CloudWatch. Modify or update the Region, LogGroup, and Logstream name. <code class="lang-json">{
+&quot;Id&quot;: &quot;HttpErrCloudWatchLogs&quot;,
+&quot;FullName&quot;: &quot;AWS.EC2.Windows.CloudWatch.CloudWatchLogsOutput,AWS.EC2.Windows.CloudWatch&quot;,
+&quot;Parameters&quot;: {
+&quot;AccessKey&quot;: &quot;&quot;,
+&quot;SecretKey&quot;: &quot;&quot;,
+&quot;Region&quot;: &quot;us-east-2&quot;,
+&quot;LogGroup&quot;: &quot;WebServer&quot;,
+&quot;LogStream&quot;: &quot;{instance_id}-httpErr&quot;
+}
+}</code> <p><strong>Region</strong>: The Region where you want to send log data.<br /> <strong>LogGroup</strong>: Name for your log group. This will appear on the Log Groups screen on the CloudWatch console.<br /> <strong>LogStream</strong>: Destination log stream. This will appear on the Log Groups &gt; Streams screen on the CloudWatch console.</p> <p>Note: If you use Systems Manager State Manager, you don’t have to provide credentials in the configuration file.</p></li> 
+<li>Flow Control – Each data type must have a corresponding destination in the Flows section. For example, to send log details defined in the HttpErrLogs section to the destination defined in the HttpCloudWatchLog section, add “HttpErrLogs,HttpCloudWatchLog” to the Flows section <code class="lang-json">&quot;Flows&quot;: {
+&quot;Flows&quot;: [
+&quot;HttpErrLogs,HttpErrCloudWatchLogs&quot;
+]
+}
+</code> <p>Similarly, add the following to configure the IIS logs (for LogDirectoryPath, check the IIS logs directory and SiteID)</p> <code class="lang-json">{
+&quot;Id&quot;: &quot;IISLogs&quot;,
+&quot;FullName&quot;: &quot;AWS.EC2.Windows.CloudWatch.CustomLog.CustomLogInputComponent,AWS.EC2.Windows.CloudWatch&quot;,
+&quot;Parameters&quot;: {
+&quot;LogDirectoryPath&quot;: &quot;C:\\inetpub\\logs\\LogFiles\\W3SVC1&quot;,
+&quot;TimestampFormat&quot;: &quot;yyyy-MM-dd HH:mm:ss&quot;,
+&quot;Encoding&quot;: &quot;UTF-8&quot;,
+&quot;Filter&quot;: &quot;&quot;,
+&quot;CultureName&quot;: &quot;en-US&quot;,
+&quot;TimeZoneKind&quot;: &quot;UTC&quot;,
+&quot;LineCount&quot;: &quot;3&quot;
+}
+},
+{
+&quot;Id&quot;: &quot;IISCloudWatchLogs&quot;,
+&quot;FullName&quot;: &quot;AWS.EC2.Windows.CloudWatch.CloudWatchLogsOutput,AWS.EC2.Windows.CloudWatch&quot;,
+&quot;Parameters&quot;: {
+&quot;AccessKey&quot;: &quot;&quot;,
+&quot;SecretKey&quot;: &quot;&quot;,
+&quot;Region&quot;: &quot;us-east-2&quot;,
+&quot;LogGroup&quot;: &quot;WebServer&quot;,
+&quot;LogStream&quot;: &quot;{instance_id}-iis&quot;
+}
+}
+...
+&quot;Flows&quot;: {
+&quot;Flows&quot;: [
+&quot;IISLogs,IISCloudWatchLogs&quot;,
+&quot;HttpErrLogs,HttpCloudWatchLogs&quot;
+]
+}
+}</code> <p>Complete the configuration using this <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/SSM_HttpErr_Cloudwatch.json">SSM_HttpErr_Cloudwatch</a> example file</p></li> 
+</ol> 
+<b>Step 2: Configure integration with CloudWatch</b> 
+<p>You can either choose Run Command or State Manager features of Systems Manager to integrate with CloudWatch. In this blog, we will show you how to use State Manager to integrate with CloudWatch.</p> 
+<p>State Manager automates the process of keeping your managed instances in a defined state. You can use State Manager to ensure that your instances are bootstrapped with specific software at start up, joined to a Windows domain (Windows instances only), or patched with specific software updates.</p> 
+<p>Note: Amazon EC2 Systems Manager requires an IAM role for EC2 instances that will process commands. Please ensure you have the correct <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-configuring-access-policies.html">policy</a> attached to the instance.</p> 
+<li>Open the AWS Management Console, and go to the EC2 console. In the EC2 console navigation pane, choose <strong>State Manager</strong> in the <strong>Systems Manager Services</strong> section and select <strong>Create an association</strong>.</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/association.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/association-1024x426.png" /></a></p> 
+<li>Provide an associate name and select AWS-ConfigureCloudWatch as the <strong>Document</strong>.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/selectdocument-1024x622.png" /></p> 
+<li>For <strong>Targets</strong>, choose the instances to integrate with CloudWatch either by tag or manually. We recommend choosing the target by tag. In case you don’t see any instances here, please check the IAM role policy.</li> 
+<li>For <strong>Schedule</strong>, choose 30 minutes as the time interval for how often you want Systems Manager to apply this policy. This doesn’t affect the frequency when the SSM Agent sends data to CloudWatch.</li> 
+<li>For <strong>Parameters</strong>, ensure <strong>Status</strong> is <strong>Enabled</strong> and copy and paste your <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/SSM_HttpErr_Cloudwatch.json">JSON contents</a> into the properties.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/targets-1024x854.png" /></p> 
+<li>(Optional) Select <strong>Advanced, Write to S3</strong> to send command output to an Amazon S3 bucket.</li> 
+<li>Choose <strong>Create Association</strong>.</li> 
+<li><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/successassociation-1024x367.png" />On the State Manager, select the association that you just created and then choose <strong>Apply Association Now</strong>.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/apply-1024x179.png" /></p> 
+<p>For more information, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/send_logs_to_cwl_instances.html#ec2-configuration-cwl">http://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/send_logs_to_cwl_instances.html#ec2-configuration-cwl</a></p> 
+<p>After you configure integration, the SSM Agent sends all the logs you configured in your JSON file to CloudWatch. SSM creates a log file that can be found at: C:/ProgramData/Amazon/SSM/Logs. It contains the following entries if LogGroup and LogStream are created successfully. If you don’t see these entries, check the error log, which can be found in the same path.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/SSM_Logs-1024x112.png" /></p> 
+<p>In the CloudWatch Logs console, in the <strong>Log Groups</strong> list, you should see WebServer, and in the <strong>LogStream</strong> list you should see {instance_id}-httpErr.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/cw-1024x359.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/logstream-1024x173.png" /></p> 
+<b>Step 3: Create a CloudWatch metric filter and configure an alarm</b> 
+<p>Next, we create a metric filter and configure an alarm that is triggered when an IIS application pool stops. If an IIS application stops or goes offline, the following entries are logged in HttpErr logs with s-status as 503 and s-reason as AppOffline.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/HTTPErrlogs-1024x152.png" /></p> 
+<p>These logs are located at C:/Windows/System32/LogFiles/HTTPERR</p> 
+<li>In the CloudWatch console choose <strong>Logs</strong> in the navigation pane.</li> 
+<li>Select the <strong>WebServer</strong> log group and then choose the <strong>Create Metric Filter</strong> button.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/createmetric-1-1024x499.png" /></p> 
+<li>Type “AppOffline” for the <strong>Filter pattern</strong>.</li> 
+<li>You can test your filter pattern by selecting <strong>Log Data to Test</strong>.</li> 
+<li>Choose <strong>Assign Metric</strong> and type “IIS AppPool” for the <strong>Filter Name</strong>.</li> 
+<li>For <strong>Metric Details</strong>, type “IIS” for <strong>Metrics Namespace</strong> and “AppPoolOffline” for the <strong>Metric Name</strong>. Choose Create Filter.</li> 
+<li>Next, let’s create an alarm.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/createalarm.png" /></p> 
+<li>Provide the Alarm name and a brief description. In the <strong>Whenever</strong> section, specify a threshold (AppPoolOffline &gt; 0) for 2 consecutive periods (period of 1 minute). For <strong>Statistic</strong>, choose <strong>Standard</strong>. Be sure that <strong>Sample Count</strong> is chosen in the drop-down box. You could choose a higher resolution based on your requirements, but remember that there are cost implications.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/alarmthreshold-1024x535.png" /></p> 
+<li>For <strong>Actions</strong>, for <strong>Whenever this alarm</strong> select <strong>State is Alarm</strong>. For <strong>Send notification to</strong> create a New list to send notification to. Make sure to confirm the subscription.</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/alarm-1.png" /></p> 
+<li>Whenever an alarm threshold is breached (that is, when the App Pool stops), you will receive an email notification.</li> 
+<b><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/email_alert-1024x441.png" /></b> 
+<b>Conclusion</b> 
+<p>Businesses are moving toward automated IT. It’s common for applications to span across environments and locations. They can be in the &nbsp;AWS Cloud and in on-premises data centers. It’s a challenge to ensure that the infrastructure powering your applications is consistent.. To help ensure a consistent approach, you can use State Manager to create policies, reapply these policies to prevent configuration drift, and monitor the status of your intended state.</p> 
+<p>In this blog post, you have learned how to configure a Windows EC2 instance to send HttpErr and IIS logs to CloudWatch using Amazon EC2 Systems Manager. These steps can be applied to a fleet of Windows Instances running IIS to consolidate logs from all the instances centrally.</p> 
+<p>To learn more about Amazon EC2 Systems Manager and EC2 Systems Manager State Manager, go to – <a href="https://aws.amazon.com/ec2/systems-manager/">https://aws.amazon.com/ec2/systems-manager/</a></p> 
+<h3></h3> 
+<hr /> 
+<h3>About the Author</h3> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/31/PawanPuthran_AWS_TAM-150x150.jpg" />Pawan Puthran is a Senior Technical Account Manager at Amazon Web Services. He works with Enterprise Support customers, and he provides technical guidance and assistance to help them make the best use of AWS services. He loves to write blogs outlining his solutions on multiple AWS products.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Take Microsoft VSS-Enabled Snapshots Using Amazon EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Purvi Goyal</span></span> | on 
+<time property="datePublished" datetime="2017-11-20T13:54:47+00:00">20 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/take-microsoft-vss-enabled-snapshots-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>We are happy to announce the support for Microsoft Volume Shadow Copy Service (VSS) on Amazon EC2 instances running Windows AMIs. VSS is a popular volume backup technology in the Microsoft Windows ecosystem (compatible with most Microsoft applications, including SQL Server and Exchange Server). VSS manages disk operations, such as file writes, when a backup is in progress so that the resulting backups are application-consistent.&nbsp;<em>Application-consistent</em> backups are the backups of volumes attached to a machine or an instance, taken at the same time, along with capturing all data in memory and all transactions in progress.</p> 
+<p>VSS-enabled snapshots of Amazon EBS volumes are available through Amazon EC2 Systems Manager Run Command. The command <em>AWSEC2-CreateVssSnapshot</em> allows you to take application-consistent snapshots of all EBS volumes attached to your running EC2 Windows instances, without losing transactional data consistency between your EC2 instances and attached EBS volumes during the backup process.&nbsp;With this capability, you don’t need to use application-specific backup solutions, such as native SQL Backup, or develop and maintain custom scripts. In addition, you don’t need to run third-party tools for taking image-level backups that are application-consistent.</p> 
+<p><span id="more-2030"></span></p> 
+<h3>How to use&nbsp;AWSEC2-CreateVssSnapshot</h3> 
+<p>You can take VSS-enabled EBS snapshots on EC2 instances running Windows by calling the command <em>AWSEC2-CreateVssSnapshot</em> through EC2 Systems Manager Run Command. You can use the AWS Management Console, the AWS CLI, or you can call it through a custom PowerShell script or a Lambda function. In this blog post, we’ll call the command using the EC2 console.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/15/1.png" /></p> 
+<p>In the EC2 console, first select the Run command document <em>AWSEC2-CreateVssSnapshot</em> to take a VSS-enabled snapshot of your EBS volumes attached to an instance. Then select the instance, and specify the description and tags that you want to add to your resulting snapshots. You can also choose to exclude the boot volume from the snapshot process.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/22/7.png" /></p> 
+<p>When initiated, the Run Command call makes the VSS components (More details to follow) on your instances coordinate all ongoing I/O operations on VSS-aware applications running on the EC2 Windows instances. This way the I/O buffers are flushed to the EBS volumes, and all I/O operations are frozen while snapshots are taken. This results in application consistency. After the snapshot is initiated, the freeze on I/O is lifted and normal operations are resumed.</p> 
+<p>The list of snapshots created through the Run Command or the script can be found under EBS snapshots in the left navigation pane in the EC2 console. All VSS-enabled EBS snapshots that are successfully created from this process are tagged as “AppConsistent:True”. To learn more about this capability, go to the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/integration-vss.html">documentation for&nbsp;<em>AWSEC2-CreateVssSnapshot</em></a>.</p> 
+<h3>Setting up your EC2 instances to take VSS-enabled snapshots</h3> 
+<li><strong>Snapshot permissions to instances</strong>: You need to open the IAM console, and use Policy generator to create new Policy for AWS service “Amazon EC2” and attach the following actions to this policy. 
+<ol> 
+<li>DescribeInstances</li> 
+<li>CreateTags</li> 
+<li>CreateSnapshot</li> 
+</ol> </li> 
+<p>Now create an Amazon EC2 role in the IAM console and attach the actions we previously listed and <em>AmazonEC2RoleForSSM</em> policies to it. Attach this role directly to your EC2 Windows instances.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/22/8.png" /></p> 
+<li><strong>Installing VSS components</strong>: All instances created using Microsoft Windows Server AMIs dated 2017.11.18 or later have the VSS components pre-installed. If your Windows instances are not updated with the latest packages, you need to perform additional steps to take VSS-enabled EBS snapshots. 
+<li><strong>Update SSM agent</strong>: If your instances don’t have SSM agent 2.2.58.0 or later, you need to call the <em>AWS-UpdateSSMAgent</em> Run Command to update latest SSM agent. You can use Managed Instances under the Shared Systems Manager Resources in the left navigation pane to see the SSM agent version installed on your instances. <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/22/managed.png" /></li> 
+<li><strong>Configure AWS package</strong>: You need to install the VSS components (<em>AwsVssComponents</em>) on them by calling the <em>AWS-ConfigureAWSPackage</em> command using Systems Manager Run Command.</li> 
+</ul> </li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/15/4.png" /></p> 
+<p>For more information on how you can set up your EC2 instances to take VSS-enabled EBS snapshots, go to the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/integration-vss.html#integration-vss-prereqs">Amazon EC2 documentation</a>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/15/5.png" /></p> 
+<p>Using the command AWSEC2-CreateVssSnapshot requires you to provide IAM permissions to create and tag EBS snapshots to your EC2 instances.&nbsp;Alternatively, if you don’t want to provide additional IAM permissions to your instances for policy or compliance reasons, then you can use a customizable sample script. To read more about this script, refer to the <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/integration-vss.html#integration-vss-AWSEC2-ManageVssIO">documentation for <em>AWSEC2-ManageVssIO</em></a>.</p> 
+<p>The process for restoring the VSS-based EBS snapshots is the same process that you use to restore EBS snapshots. In addition, you can use <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/integration-vss.html#integration-vss-restore">a sample restore script</a> that we provide. This restore script allows you to restore from specified EBS Snapshots to a given Windows instance on Amazon EC2.</p> 
+<hr /> 
+<h4>About the Author</h4> 
+<p style="text-align: left"><img width="100%" src="https://internal-cdn.amazon.com/badgephotos.amazon.com/?uid=goyapurv" />Purvi Goyal is a Senior Product Manager with the Amazon EC2 team, where she strives to enhance the cloud experience of AWS Enterprise customers. Outside of work, she enjoys outdoor activities like hiking and kayaking.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Query for the Latest Windows AMI Using Systems Manager Parameter Store</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1023,225 +1213,6 @@ i-09aee29b50203cf3c Success
 <h3>About the Author</h3> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/28/alan_cranfield.jpg" />Alan Cranfield is a Senior Systems Engineer on the EC2 Windows team where he uses his extensive experience managing critical enterprise environments to help make AWS the best cloud platform for running Windows workloads. He spends his spare time in the garage restoring and customizing old motorcycles.</p> 
 <p><code class="lang-powershell"></code><code class="lang-powershell"></code></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Guardrails: Protecting your Stacks and Ensuring Safer Updates</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
-<time property="datePublished" datetime="2017-10-31T17:03:10+00:00">31 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-guardrails-protecting-your-stacks-and-ensuring-safer-updates/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<blockquote> 
-<p><em>“I wonder what will happen if I touch these two wires together.” – Unix fortune</em></p> 
-</blockquote> 
-<p>If you’ve worked with cloud-hosted applications or large distributed architectures for any extended period of time, chances are you’ve heard colleagues&nbsp;invoke&nbsp;<a href="https://en.wikipedia.org/wiki/Murphy's_law">Murphy’s law</a>: “Anything that can go wrong, will go wrong”. All of us have&nbsp;experienced one of those events in the middle of the night where a usually well-intentioned colleague decides to run maintenance or cleanup on some systems…and accidentally deletes or changes a volume, server, endpoint, function, or other critical resource.</p> 
-<p>If your applications, functions, servers, and other resources are in AWS, and you’re using AWS CloudFormation to automate the deployment and changes to your stacks, you are well positioned to implement several levels of safety guardrails to reduce the likelihood of many of these unplanned events. In this blog post we cover many of these guardrails. We’ll also present ideas collected from user surveys, support cases, and other sources so you can build a strategy&nbsp;to use these safety provisions and improve them over time.</p> 
-<p><span id="more-1560"></span></p> 
-<p>There are four primary features that you can use to protect your stacks and resources in CloudFormation:</p> 
-<table style="height: 203px" border="1" width="100%" cellpadding="4"> 
-<tbody> 
-<tr> 
-<td width="139"><strong>Guardrail</strong></td> 
-<td width="328"><strong>Description</strong></td> 
-</tr> 
-<tr> 
-<td width="139">Termination Protection</td> 
-<td width="328">Stack level attribute to prevent deletion; also works with nested stacks</td> 
-</tr> 
-<tr> 
-<td width="139">Deletion Policies</td> 
-<td width="328">Resource level attribute; can be Delete (default), Retain&nbsp;or Snapshot</td> 
-</tr> 
-<tr> 
-<td width="139">Stack Policies</td> 
-<td width="328">Restrict operations at a stack level to multiple resource groups</td> 
-</tr> 
-<tr> 
-<td width="139">IAM Policies</td> 
-<td width="328">Restrict operations by users, groups or roles</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>These features&nbsp;vary in scope and the granularity of options. Consider implementing several of these features in a layered way, as opposed to using only one of them.</p> 
-<p><strong>Using stack termination protection</strong></p> 
-<p>Using <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-protect-stacks.html">this</a>&nbsp;stack attribute, you can prevent a new or existing stack from being accidentally deleted. This setting is disabled by default, so you have to explicitly enable it when you create new stacks. For existing, non-nested stacks, you can change termination protection&nbsp;using the AWS Management Console or the AWS CLI. For existing nested stacks, you must enable termination protection on the root stack.&nbsp;After it is enabled on the root stack, the protection is also set for the nested or child stacks. However, keep in mind that if you perform a stack update on the root stack that would delete the nested stack, CloudFormation will delete the nested stack. If you attempt to delete a nested stack when its root stack has termination protection in place, the operation will fail and the nested stack will remain unchanged. Like many other CloudFormation operations,&nbsp;you can control who can enable or disable termination protection by using&nbsp;an IAM policy.</p> 
-<code class="lang-json">{
-&quot;Version&quot;:&quot;2012-10-17&quot;,
-&quot;Statement&quot;:[{
-&quot;Effect&quot;:&quot;Allow&quot;,
-&quot;Action&quot;:[
-&quot;cloudformation:UpdateTerminationProtection&quot;
-],
-&quot;Resource&quot;:&quot;*&quot;
-}]
-}
-</code> 
-<p><strong>Figure 1: Sample IAM policy granting permissions to change stack termination protection </strong></p> 
-<p>&nbsp;</p> 
-<p>So, now that you know about termination protection, should you enable it on all or most of your stacks? Maybe, but you should consider the lifecycle of all your stacks first. Adding termination protection to seldom-changing network resource stacks makes sense, providing yet another layer that can supplement existing controls without interfering with daily application changes. On the other hand, if the application stack changes often, you’ll end up enabling and disabling termination protection often as well. For those types of ephemeral stacks, other guardrails outlined in this article&nbsp;might be more appropriate.</p> 
-<p><strong>Using resource-specific deletion policies</strong></p> 
-<p>You can use <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html">Deletion Policies</a> on a resource-by-resource basis in your template code. By default, when a resource is deleted from a stack template and the stack is updated, the resource is deleted by CloudFormation. (The exceptions are some Amazon RDS database resources, which have a different default behavior.) For more information on resource-specific deletion policies, see the CloudFormation <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html">DeletionPolicy Attribute</a> documentation.</p> 
-<p>Keep in mind the&nbsp;Retain option, which deletes the resource from being managed by CloudFormation via stacks and templates, but doesn’t delete it from your AWS account or region. This can be critical for stateful resources like databases and queues, and semi-durable resources like state machines when using AWS Step Functions. For state machines in particular, it’s advisable to retain them because doing so also retains their execution history. In the interest of utmost safety, you should liberally set Deletion Policies to Retain if and until you can make sure you won’t lose valuable historical data for troubleshooting. You can always delete these resources later using other means.</p> 
-<p>For some stateful resources like Amazon EC2 volumes, Amazon ElastiCache, Amazon RDS and Amazon Redshift, you also have the option to have CloudFormation create a snapshot before it deletes those resources. To further protect your more critical stateful resources, you&nbsp;can group them into separate stacks with more strict policies, and/or you can create dependencies between stacks&nbsp;using cross-stack references, which implements further implicit checks.</p> 
-<code class="lang-json">{
-&quot;AWSTemplateFormatVersion&quot;:&quot;2010-09-09&quot;,
-&quot;Resources&quot;: {
-&quot;myVolume&quot;: {
-&quot;Type&quot;:&quot;AWS::EC2::Volume&quot;,
-&quot;DeletionPolicy&quot;:&quot;Snapshot&quot;,
-&quot;Properties&quot;: {
-&quot;AvailabilityZone&quot;:&quot;us-east-1a&quot;,
-&quot;Size&quot;:&quot;200&quot;
-}
-}
-}
-}
-</code> 
-<p><strong>Figure 2: Using Deletion Policy to take a snapshot of an EC2 Volume, if deleted</strong></p> 
-<p>&nbsp;</p> 
-<p><strong>Using stack-level policies</strong></p> 
-<p>A <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/protect-stack-resources.html#protect-stack-resources-protecting">stack policy</a> is a JSON document that defines the update actions that can be performed on a single resource or a group of resources in a flexible yet compact way (versus Deletion Policies, which are defined on a resource-by-resource basis). Stack policies are evaluated and applied in advance of any update actions, which include cases when resources are modified, recreated, or removed. Resources for a rule can be selected with wildcards or by evaluating a condition expression.</p> 
-<code class="lang-json">{
-&quot;Statement&quot; : [
-{
-&quot;Effect&quot; : &quot;Deny&quot;,
-&quot;Action&quot; : &quot;Update:*&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Resource&quot; : &quot;*&quot;,
-&quot;Condition&quot; : {
-&quot;StringEquals&quot; : {
-&quot;ResourceType&quot; : [&quot;AWS::RDS::DBInstance&quot;]
-}
-}
-},
-{
-&quot;Effect&quot; : &quot;Allow&quot;,
-&quot;Action&quot; : &quot;Update:*&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Resource&quot; : &quot;*&quot;
-}
-]
-}
-</code> 
-<p><strong>Figure 3: A Stack policy that prevents updates to all RDS DB Instances </strong></p> 
-<p>&nbsp;</p> 
-<p>Stack policies can be set when you create a stack&nbsp;using the AWS Management Console or&nbsp;by using the AWS CLI. However,&nbsp;to set a stack policy on an existing stack, you must do it&nbsp;using&nbsp;the CLI or API. You also must use the CLI or API to modify an existing policy on a stack. You can also opt to create a strict permanent stack policy, and&nbsp;then update policy-protected resources by creating temporary policies that override the permanent stack policy. Finally, if you use AWS Config, you can also record configuration changes to the attributes of a stack policy, as well as other permissions and rollback settings.</p> 
-<p><strong>Using IAM Policies</strong></p> 
-<p><a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html">IAM Policies</a> explicitly enforce access controls on users, groups or roles. Beyond restricting updates and deletions to a subset of users, you can also restrict users to use only specific templates, use only specific stack policies, create only a few resource types, or assume specific roles. Gaining expertise with IAM policies can benefit you beyond your CloudFormation usage, such as controlling access to logs, who can execute Lambda functions, and many other use cases across all AWS services.</p> 
-<code class="lang-json">{
-&quot;Effect&quot;:&quot;Allow&quot;,
-&quot;Action&quot;:[&quot;cloudformation:CreateStack&quot;]
-},
-{
-&quot;Effect&quot;:&quot;Deny&quot;,
-&quot;Action&quot;:[&quot;cloudformation:CreateStack&quot;]
-“Condition”:{
-‘ForAnyValue:StringLike”:{
-“cloudformation:ResourceType”: [“AWS::IAM::*”]
-}
-}
-}
-</code> 
-<p><strong>Figure 4: IAM policy allowing users to create resources and stacks except for IAM resources</strong></p> 
-<p>&nbsp;</p> 
-<p><strong>A few more suggestions</strong></p> 
-<p>Beyond understanding how these four guardrails work, here are a few other suggestions and ideas you&nbsp;can study&nbsp;as you look to implement these controls, or improve existing controls you may have inherited:</p> 
-<li>By having smaller, multiple policies that affect a smaller set of resources and stacks, you can limit the blast radius of policy changes as you improve them over time, to either make them more restrictive or to add layers of control.</li> 
-<li>Stack and IAM policies should be treated as code and, with that in mind, they should be periodically tested and versioned. Consider implementing validation pipelines and creating chaos engineering-like tests where critical resource deletions are attempted.</li> 
-<li>For your own custom resources, it’s up to you to add code to determine what happens to your resources when they get deleted. For stateful custom resources, it becomes your responsibility to ensure a given resource is backed up or retained. You can also use a Lambda-backed custom resource to pass a stack’s policy from a root stack to a nested stack using the setStackPolicy API call&nbsp;because nested stacks don’t automatically inherit the root stack’s policy.</li> 
-<li>These guardrails are preventive steps that you can execute within CloudFormation. If you go outside of CloudFormation and use a resource’s AWS Management Console to update and delete it, your template code will become out-of-sync with the resource’s state. You should update your template to reflect the new changes, and prevent future changes&nbsp;using additional IAM policies.</li> 
-<p>You should plan to use most (if not all) of these options. Let’s say, for example, that you’ve just inherited a group of applications (and, with those, the infrastructure stacks and templates associated with them) and are looking at adding layers of protection using these guardrails. A defensible approach may look like this:</p> 
-<li>Review your stacks and templates,&nbsp;and review the resources that are more critical, like stateful or semi-durable resources.&nbsp;Determine which of these critical resources are useful candidates for a DeletionPolicy of Retain or Snapshot.</li> 
-<li>Go one level up from resources to stacks, and consider what operations will be allowed for resources (or groups of resources) within that stack. On top of your resource deletion policy layer, add stack policy restrictions that reflect the criticality of those stacks. For the more critical stacks, consider also using stack termination protection. Even if it becomes a nuisance, at least you’ll&nbsp;gain understanding about how frequently stack updates are required for those stacks, which stacks have cross stack references or parent/child relationships, etc. Armed with this information, you can adjust your&nbsp;controls accordingly.</li> 
-<li>Finally, once you’ve protected the resources and stacks themselves, you should then restrict which users should have the ability to run updates on those stacks using IAM policies.</li> 
-<p><strong>Conclusion</strong></p> 
-<p>We just walked through a sequence starting with&nbsp;the most detailed controls at the individual resource level, then to the stacks, and finally to the users, and will likely end up with the most enforced or least privileged controls. Alternatively, you can also opt to start with users, groups, and roles first, and then work your way down through stacks and resources. This can probably be justified if, in looking at the history of your unplanned downtime events, you already suspect that your IAM policies need more urgent attention. In either case, you want to ensure that there are multiple layers of safety in place by having multiple guardrails apply to your most critical resources.</p> 
-<p>Overall, the key to success in making the most of these features is to carefully test and adapt your use of these guardrails over time, and ensure that you have multiple guardrail layers in place for the most critical stacks and resources. Many existing CloudFormation best practices still apply; for example, smaller stacks will be easier to test and ultimately protect than large, complex ones. &nbsp;Finally, consider ways to establish automated tests for your template code by implementing processes like validation pipelines.</p> 
-<p>&nbsp;</p> 
-<p><strong>About the Author</strong></p> 
-<table class=" alignleft" style="height: 129px" width="100%" cellpadding="4"> 
-<tbody> 
-<tr> 
-<td width="63"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" /></td> 
-<td width="408"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.&nbsp;</strong>He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
-</tr> 
-</tbody> 
-</table> 
-<p></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/26/awsreinvent2017banner.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Your AWS CloudFormation Guide to re:Invent 2017 &nbsp;</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chuck Meyer</span></span> | on 
-<time property="datePublished" datetime="2017-10-30T14:31:05+00:00">30 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/events/reinvent/" title="View all posts in AWS re:Invent*"><span property="articleSection">AWS re:Invent*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/your-aws-cloudformation-guide-to-reinvent-2017/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/26/awsreinvent2017banner.png" /></p> 
-<p>There are only five weeks left until <a href="https://reinvent.awsevents.com/">re:Invent 2017</a>. As in years past, AWS CloudFormation will be there, both behind the scenes deploying infrastructure and front-and-center for break-out sessions, workshops, and developer chats.</p> 
-<p>Here are a few highlights we’ve pulled from the <a href="https://www.portal.reinvent.awsevents.com/connect/search.ww#loadSearch-searchPhrase=CloudFormation&amp;searchType=session&amp;tc=0&amp;sortBy=abbreviationSort&amp;p=">session catalog</a>, followed by the full list of CloudFormation-focused sessions and workshops to help you plan your week in Las Vegas.</p> 
-<p><span id="more-1585"></span></p> 
-<b id="breakout-sessions">Breakout Sessions</b> 
-<p>Breakout sessions are the traditional, 60 minute, lecture-style content format.</p> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14428">DEV317 – Deep Dive on AWS CloudFormation</a> <em>The AWS CloudFormation team guides you through techniques used for creating modular templates and and considerations for governance.</em></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16239">DEV318 – Learn How Intuit Built a Frictionless Infrastructure Management System Using AWS CloudFormation</a> <em>Intuit shows you how they built a standardized serverless solution using AWS CloudFormation to manage infrastructure as code.</em></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15142">GPSTEC319 – GPS: Build Once, Deploy Many: Architecting and Building Automated, Reusable Reference Deployments with AWS CloudFormation</a> <em>The AWS Quick Start team shares with you the experience and best practices they’ve gained building over 50 Quick Start reference deployments.</em></li> 
-<b id="workshops">Workshops</b> 
-<p>Workshops are 2.5 hour, small-scale breakouts where you work in teams to build projects and solve problems on AWS.</p> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14430">DEV336 – Stack Mastery: Create and Optimize Advanced AWS CloudFormationTemplates</a> <em>Take a real-world architecture from a sandbox template to production-ready reusable code.</em></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16359">DEV337 – Deploy a Data Lake with AWS CloudFormation</a> <em>You will learn how to build AWS CloudFormation templates using proven methods and best practices to deploy a fully functional data lake architecture.</em></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14629">SID312 – DevSecOps Capture the Flag</a> <em>Improve your DevSecOps skills in this Capture the Flag style workshop. Earn points by enforcing policy via CloudFormation static analysis.</em></li> 
-<b id="other-relevant-sessions">Other relevant sessions</b> 
-<p>While the following sessions aren’t CloudFormation specific, they will show you mature patterns for infrastructure management using CloudFormation alongside other AWS services.</p> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14965">DEV324 – Deep Dive on Advanced Continuous Delivery Techniques Using AWS DevOps Tools</a></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15199">DEV340 – How Amazon.com Uses AWS Management Tools</a></li> 
-<li><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14521">MSC201 – Building end-to-end IT Lifecycle Mgmt &amp; Workflows with AWS Service Catalog</a></li> 
-<p>You can <a href="https://www.portal.reinvent.awsevents.com/connect/publicDashboard.ww">log in and reserve seats for any of these sessions</a> now.</p> 
-<p>In addition, the AWS CloudFormation Developer Advocates will be presenting a series of CloudFormation focused Dev Chats on the Expo floor on Wednesday and Thursday. Stop by the Dev Lounge in the Expo Hall for exact times.</p> 
-<p>And finally, you can come chat with any of the Management Tools team at the AWS booth all week long.</p> 
-<p>See you at re:Invent!</p> 
-<hr /> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14479">AMF301 – Big Data &amp; Analytics for Manufacturing Operations</a></strong><br /> Manufacturing companies collect vast troves of process data for tracking purposes. Using this data with advanced analytics can optimize operations, saving time and money. In this session, we explore the latest analytics capabilities to support your goals for optimizing the manufacturing plant floor. Learn how to build dashboards that connect to prediction models driven by sensors across manufacturing processes. Learn how to build a data lake on AWS, using services and techniques such as AWS CloudFormation, Amazon EC2, Amazon S3, AWS Identity and Access Management, and AWS Lambda. We also review a reference architecture that supports data ingestion, event rules, analytics, and the use of machine learning for manufacturing analytics.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16676">CMP216 – Use Amazon EC2 Spot Instances to Deploy a Deep Learning Framework on Amazon ECS</a></strong><br /> Deep learning, an implementation of machine learning, uses neural networks to solve complex problems like computer vision, natural language processing, and recommendations. Deep learning libraries and frameworks enable developers to enhance the capabilities of their applications and projects. In this workshop, learn how to build and deploy a powerful deep learning framework, Apache MXNet, on containers. The portability and resource management benefit of containers enables developers to focus less on infrastructure and more on building. The lab first demonstrates the automation capabilities of AWS CloudFormation to stand up core infrastructure. We also leverage Spot Fleet for the cost benefit of using Spot Instances, especially important for developer environments. Next we create an MXNet container in Docker and deploy it with Amazon ECS. Finally, we explore image classification with MXNet to validate that everything is working as expected.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16740">CON319 – Interstella 8888: CICD for Containers on AWS</a></strong><br /> Interstella 8888 is an intergalactic trading company that deals in rare resources, but their antiquated monolithic logistics systems are causing the business to lose money. Join this workshop to learn how to set up a CI/CD pipeline for containerized microservices. You’ll get hands-on experience deploying Docker container images using Amazon ECS, AWS CloudFormation, AWS CodeBuild, and AWS CodePipline, automating everything from code check-in to production. AWS credits are provided. Bring your laptop, and have an active AWS account.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14428">DEV317 – Deep Dive on AWS CloudFormation</a></strong></p> 
-<p>AWS CloudFormation enables developers and system administrators to harness the power of infrastructure-as-code. As organizations adopt AWS CloudFormation for workload deployments, common patterns emerge and opportunities to streamline deployments become evident. Using AWS CloudFormation support for nested templates, customers can further streamline the creation of new workloads as code through modular reuse. This session guides you through some of the techniques used for creating modular AWS CloudFormation templates, and considerations for design and governance to empower departments and teams to own the architectures.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16239">DEV318 – Learn How Intuit Built a Frictionless Infrastructure Management System Using AWS CloudFormation</a></strong></p> 
-<p>Managing Infrastructure as Code (IaC) successfully within an organization is a challenge. Regardless of team size, it can turn into a patchwork of solutions causing difficulties collaborating among individuals and teams. Intuit has faced and learned from these challenges, while coordinating among different teams running workloads that provide solutions for different business units. We developed a system that improved our development process for IaC using AWS CloudFormation. In this session, we demonstrate how to move away from an inconsistent development of infrastructure by complementing common development practices with a solution using the serverless technologies from AWS. We walk through our journey and help you discover an approach to assemble a similar solution for your organization.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14965">DEV324 – Deep Dive on Advanced Continuous Delivery Techniques Using AWS DevOps Tools</a></strong><br /> Continuous delivery (CD) enables teams to be more agile and quickens the pace of innovation. Too often, however, teams adopt CD without putting the right safety mechanisms in place. In this talk, we discuss opportunities for you to transform your software release process into a safer one. We explore various DevOps best practices, showcasing sample applications and code. We discuss how to set up delivery pipelines with nonproduction testing stages, failure cases, rollbacks, machine and Availability Zone redundancy, canary testing and deployments, and monitoring. We’ll use AWS Lambda, AWS CloudFormation, AWS CodePipeline, AWS CodeDeploy, and both Amazon CloudWatch alarms and events.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14778">DEV332 – Using AWS to Achieve Both Autonomy and Governance at 3M</a></strong><br /> There is a constant tension between empowering teams to be agile through autonomy and enforcing governance policies to maintain regulatory compliance. Hear from Nathan Scott, Senior Consultant at AWS and James Martin, Automation Engineering Manager at 3M on how they have achieved both autonomy and governance through self-service automation tools on AWS. Learn how to avoid pitfalls with building the CI/CD team, right sizing and how to address. This session will also feature a demo from Casey Lee, Chief Architect at Stelligent on the tools used to accomplish this for 3M, including AWS Service Catalog, AWS CloudFormation, AWS CodePipeline and Cloud Custodian, an open source tool for managing AWS accounts.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14430">DEV336 – Stack Mastery: Create and Optimize Advanced AWS CloudFormationTemplates</a></strong><br /> AWS CloudFormation gives you an easy way to define your infrastructure as code. But are you using it to its full potential? In this workshop, we take real-world architecture from a sandbox template to production-ready reusable code. We start by reviewing an initial template, which you update throughout the session to incorporate AWS CloudFormation features, like nested stacks and intrinsic functions. By the end of this workshop, expect to have a set of AWS CloudFormation templates that demonstrate the same best practices used in AWS Quick Starts.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16359">DEV337 – Deploy a Data Lake with AWS CloudFormation</a></strong><br /> AWS CloudFormation provides many features to automate the provisioning of infrastructure for all types of complex applications. In this workshop, you will learn how to build AWS CloudFormation templates using proven methods and best practices. You will also deploy a fully functional data lake architecture, which uses AWS services like Amazon RDS and open source components like Apache Zeppelin. The labs will demonstrate the capabilities of AWS CloudFormation to stand up infrastructure in a modular way, walk through the deployment of a complex end-to-end application, and validate that all components of the application are working.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15199">DEV340 – How Amazon.com Uses AWS Management Tools</a></strong><br /> Amazon.com enables all of its developers to be productive on AWS by operating across tens-of-thousands of team-owned AWS accounts, all while raising the bar on security, visibility and operational control. Amazon has been able to achieve these seemingly conflicting ideals by automating setup and management of these accounts at scale using AWS Management Tools such as CloudFormation, Config, CloudTrail, CloudWatch and EC2 Systems Manager. In this session, discover more about how Amazon.com built ASAP using AWS Management tools, and understand some of the decisions they made as their usage of AWS evolved over time. You will learn about the design, architecture and implementation that Amazon.com went through as part of this effort.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14951">ENT326 – Oracle Enterprise Solutions on AWS</a></strong><br /> Oracle enterprise applications and middleware such as E-Business Suite, PeopleSoft, Siebel, and WebLogic are central to many IT departments. They often require complex deployments that can greatly benefit from the flexibility, scalability, and security of the cloud. In this session, we discuss architecture patterns and best practices for migrating these applications to and running these applications on AWS. We cover how to work with Oracle enterprise applications and multiple services including Amazon RDS, AWS Database Migration Service, Amazon Elastic File System, and AWS CloudFormation. As part of this, we show examples of successful customer deployments.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15549">GPSCT308 – GPS: Developing and Deploying at the Speed of Light: Automating Serverless Deployments</a></strong><br /> Planning on going serverless, but want to manage it using DevOps-style processes? In this interactive session, we discuss the art of automating and managing deployments of serverless applications on AWS. We cover a range of AWS tools such as AWS CodePipeline, AWS CloudFormation, and AWS Serverless Application Model (AWS SAM), to name just a few.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15142">GPSTEC319 – GPS: Build Once, Deploy Many: Architecting and Building Automated, Reusable Reference Deployments with AWS CloudFormation</a></strong><br /> This session explains how to build reusable, maintainable AWS CloudFormation–based automation for AWS Cloud deployments. We have built over 50 Quick Start reference deployments with partners and customers, and will share this expertise with you. We explore the anatomy of a typical AWS CloudFormation template, dive deep into best practices for building Quick Start automation across Linux and Windows and explore useful design patterns. This expert-level session is for partners interested in building Quick Starts or other AWS CloudFormation–based automation. It requires familiarity with Git, shell scripting, Windows PowerShell, and AWS services like Amazon EC2, Amazon S3 and AWS CloudFormation.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15749">HLC307 – Building a Secure and Healthcare-Compliant Platform for Adopting a Cloud-First Strategy Using AWS</a></strong><br /> This session provides an overview of how Change Healthcare invested in people, process, and an automation platform to adopt a cloud-first strategy. Starting from building a Cloud Center of Excellence team, they identified the compliance, security, and cost optimization requirements and process required to build a framework. They also embedded healthcare compliance, security, architecture best practices, and customer-specific rules and standards for a managed adoption of the cloud. Change Healthcare is leveraging their Cloud 2.0 framework to rapidly deploy their mission applications into AWS. Come learn how Change Healthcare built a serverless architecture using Amazon ECS, AWS Lambda, AWS CodeDeploy, AWS CodeCommit, AWS CloudFormation, AWS Service Catalog, AWS OpsWorks, AWS Elastic Beanstalk, and other managed services.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15746">LFS307 – Becoming a Dynamic Pharma Marketing Organization Using AWS</a></strong><br /> Pharmaceutical company processes tend to be slow when dealing with customer-facing applications that contain FDA-validated messages, all while maintaining infrastructure and security standards. In this session, discover how Mylan, a US–based global generic and specialty pharmaceutical company, overcame these obstacles and provided scalable solutions by leveraging AWS DevOps methods that lower time to market, while maintaining robust security and release management practices. During the presentation, learn how Mylan redefined process models such as infrastructure change management to define new security and process models. Additionally, learn how Mylan used services like Amazon S3, Elastic Load Balancing (ELB), and AWS CloudFormation to define these new models.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15681">LFS308 – Building Data Lakes for Life Sciences Organizations</a></strong><br /> In this chalk talk, we cover the implementation of data lakes for life sciences organizations, such as Amgen and Merck, that are looking to glean new insights from their existing and new clinical data. AWS life sciences solution architects show how to build a data lake on AWS using services and techniques such as AWS CloudFormation, Amazon EC2, Amazon S3, IAM, and AWS Lambda.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15250">MBL308 – Integrating Video in Mobile Apps and Websites</a></strong><br /> In this session, we will build a highly scalable mobile app, website, and serverless mobile backend architecture that demonstrates on-demand video streaming, adaptive multi-bitrate transcoding, and video content ingestion. We use AWS Lambda and Amazon Elastic Transcoder to automatically convert high resolution videos upon upload, Amazon CloudFront to stream video content to devices using network-aware adaptive multi-bitrate protocols (such as HLS), Amazon Cognito to authenticate users, and AWS Mobile Hub and AWS CloudFormation to automate setting up the required resources.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15878">MCL318 – Deep Dive on Amazon Rekognition Architectures for Image Analysis</a></strong><br /> Join us for a deep dive on how to use Amazon Rekognition for real world image analysis. Learn how to integrate Amazon Rekognition with other AWS services to make your image libraries searchable. Also learn how to verify user identities by comparing their live image with a reference image, and estimate the satisfaction and sentiment of your customers. We also share best practices around fine-tuning and optimizing your Amazon Rekognition usage and refer to AWS CloudFormation templates.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14521">MSC201 – Building end-to-end IT Lifecycle Mgmt &amp; Workflows with AWS Service Catalog</a></strong><br /> In this session, you’ll learn how to leverage AWS Service Catalog, AWS Lambda, AWS Config and AWS CloudFormation to create a robust, agile environment while maintaining enterprise standards, controls and workflows. Fannie Mae demonstrates how they are leveraging this solution to integrate with their existing workflows and CMDB/ITSM systems to create an end-to-end automated and agile IT lifecycle and workflow.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14962">SID206 – Best Practices for Managing Security Operation on AWS</a></strong><br /> To help prevent unexpected access to your AWS resources, it is critical to maintain strong identity and access policies and track, effectively detect, and react to changes. In this session you will learn how to use AWS Identity and Access Management (IAM) to control access to AWS resources and integrate your existing authentication system with IAM. We will cover how to deploy and control AWS infrastructure using code templates, including change management policies with AWS CloudFormation. Further, effectively detecting and reacting to changes in posture or adverse actions requires the ability to monitor and process events. There are several services within AWS that enable this kind of monitoring such as CloudTrail, CloudWatch Events, and the AWS service APIs. We learn how Netflix utilizes a combination of these services to operationalize monitoring of their deployments at scale, and discuss changes made as Netflix’s deployment has grown over the years.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14629">SID312 – DevSecOps Capture the Flag</a></strong><br /> In this Capture the Flag workshop, we divide groups into teams and work on AWS CloudFormation DevSecOps. The AWS Red Team supplies an AWS DevSecOps Policy that needs to be enforced via CloudFormation static analysis. Participant Blue Teams are provided with an AWS Lambda-based reference architecture to be used to inspect CloudFormation templates against that policy. Interesting items need to be logged, and made visible via ChatOps. Dangerous items need to be logged, and recorded accurately as a template fail. The secondary challenge is building a CloudFormation template to thwart the controls being created by the other Blue teams. Throughout the session your DevSecOps static analysis will be tested by increasingly difficult CloudFormation templates from the AWS Red Team, with accurate detection being rewarded with points. Finally, we test all teams’ protection against every other team’s malicious template to see which Blue team’s static analysis was most effective.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=14785">SID317 – Automating Security and Compliance Testing of Infrastructure-as-Code for DevSecOps</a></strong><br /> Infrastructure-as-Code (IaC) has emerged as an essential element of organizational DevOps practices. Tools such as AWS CloudFormation and Terraform allow software-defined infrastructure to be deployed quickly and repeatably to AWS. But the agility of CI/CD pipelines also creates new challenges in infrastructure security hardening. How do you ensure that your CloudFormation templates meet your organization’s security, compliance, and governance needs before you deploy them? How do you deploy infrastructure securely to production environments, and monitor the security posture on a continuous basis? And how do you do this repeatedly without hitting a speed bump? This session provides a foundation for how to bring proven software hardening practices into the world of infrastructure deployment. We discuss how to build security and compliance tests for infrastructure analogous to unit tests for application code, and showcase how security, compliance and governance testing fit in a modern CI/CD pipeline. Session Sponsored by: Dome9</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16300">SID327 – How Zocdoc Achieved Security and Compliance at Scale With Infrastructure as Code</a></strong><br /> In less than 12 months, Zocdoc became a cloud-first organization, diversifying their tech stack and liberating data to help drive rapid product innovation. Brian Lozada, CISO at Zocdoc, and Zhen Wang, Director of Engineering, provide an overview on how their teams recognized that infrastructure as code was the most effective approach for their security policies to scale across their AWS infrastructure. They leveraged tools such as AWS CloudFormation, hardened AMIs, and hardened containers. The use of DevSecOps within Zocdoc has enhanced data protection with the use of AWS services such as AWS KMS and AWS CloudHSM and auditing capabilities, and event-based policy enforcement with Amazon Elasticsearch Service and Amazon CloudWatch, all built on top of AWS.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=15779">SID347 – Securely Automating DevOps on AWS</a></strong><br /> In some organizations, the theme of “can’t we all just get along” accurately describes the relationship between DevOps and network security. DevOps operates at a rapid and dynamic pace, taking advantage of the cloud to create and deploy. Security teams exercise industry best practices of policy change control to eliminate potential security holes. Inevitably, deployment challenges arise. In this session, you learn how to automate the deployment of next-generation security to protect DevOps environments on AWS. Topics covered include “touchless” deployment of a fully-configured firewall using AWS CloudFormation templates and AWS Lambda, consuming AWS tags to execute commitless policy updates, using Amazon CloudWatch and Elastic Load Balancing to deliver scalability and resiliency. Come and learn about the next generation of security, operating at the speed of the cloud. Session sponsored by Palo Alto Networks</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=17593">SPL09 – Launching and Managing a Web Application with AWS CloudFormation</a></strong><br /> In this lab, you will learn how to use AWS CloudFormation to provision and update a web application with a number of supporting AWS products and services, including Auto Scaling groups, Amazon Elastic Compute Cloud (EC2) instances, and Elastic Load Balancing.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16411">WIN309 – How to Optimize AWS Architectures for SharePoint Deployments</a></strong><br /> AWS can help you rapidly deploy and scale your Microsoft SharePoint environment to help you collaborate more efficiently and cost-effectively. This session reviews architectural considerations for building a SharePoint deployment on AWS, best practices to ensure optimal performance, how to leverage multiple Availability Zones for high availability and disaster recovery, and how to integrate with Active Directory. We also look at new Quick Start guides, AWS CloudFormation templates, and other tools that dramatically reduce the time to deployment. Our Windows experts discuss the best ways to deploy and run SharePoint on AWS.</p> 
-<p><strong><a href="https://www.portal.reinvent.awsevents.com/connect/sessionDetail.ww?SESSION_ID=16410">WIN312 – Deploying .NET Application CI/CD Pipelines on AWS</a></strong> In this session, we look at the AWS services that customers are using to build and deploy Microsoft-based solutions that use technologies like Windows, .NET, SQL Server, and PowerShell. We start by showing you how to build a Windows-based CI/CD pipeline on AWS using AWS CodeDeploy, AWS CodePipeline, AWS CloudFormation, and PowerShell using an AWS Quick Start. With new integrations, such as the AWS Tools for VSTS, you have more options than ever. We also cover best practices for creating templates that let you automatically deploy ready-to-use Windows products by using services and tools like AWS CloudFormation, PowerShell, and Git. Our .NET experts discuss the best practices for implementing a .NET CI/CD pipeline with AWS services.</p> 
-<hr /> 
-<h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/BadgePhoto-blog.jpg" />About the Author</h3> 
-<p>Chuck Meyer&nbsp;is a Senior Developer Advocate for AWS CloudFormation based in New York.&nbsp; He&nbsp;spends his time&nbsp;working with&nbsp;both&nbsp;external and internal development teams to constantly improve the developer experience for CloudFormation users.&nbsp; He’s a live music true believer and spends as much time as possible playing bass and watching bands.</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
