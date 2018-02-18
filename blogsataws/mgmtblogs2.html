@@ -190,6 +190,192 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/Ha_EC2-Management-tools_SOCIAL.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Enable Modular and Reusable Configuration Using Composite AWS Systems Manager Documents</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2018-01-11T09:53:33+00:00">11 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/enable-modular-and-reusable-configuration-using-composite-aws-systems-manager-documents/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Melonia Mendonca, Software Development Engineer at Amazon Web Services</em></p> 
+<p>AWS Systems Manager (SSM) documents enable infrastructure as code that allows you to configure, manage, and automate your AWS and on-premises resources using AWS Systems Manager services. These SSM Documents define the actions that you want to perform on managed instances. Systems Manager offers a variety of pre-defined public documents and provides the ability to customize the documents as well.</p> 
+<p>Systems Manager lets you <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-ec2-systems-manager-now-integrates-with-github/">execute composite documents</a> as part of your configurations. Composite documents are SSM documents that perform the task of executing one or more secondary documents. Using composite documents, you can do the following:</p> 
+<li><span style="text-decoration: underline">Enable modularity</span> – Documents can be broken into small common tasks, and then they can be called from composite documents.</li> 
+<li><span style="text-decoration: underline">Enable reusability</span> – Having the ability to invoke other documents removes the requirement to duplicate the plugin calls within custom documents.</li> 
+<li><span style="text-decoration: underline">Store documents in remote locations</span>– GitHub and Amazon S3 can be used to save documents because these documents in remote locations can be invoked using composite documents.</li> 
+<li><span style="text-decoration: underline">Use YAML in place of JSON in documents</span> – AWS Systems Manager also allows the use of documents written in YAML format that are stored in remote locations.</li> 
+<p>AWS-RunDocument is a new document you can use to execute documents that are stored in Systems Manager, private or public GitHub, or Amazon S3. This is achieved by using <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-downloadContent">aws:downloadContent</a> and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-rundocument">aws:runDocument</a> plugins. The aws:runDocument plugin executes documents that reside in Systems Manager or in the local path.</p> 
+<p>In this blog post, I’ll show you how to create custom composite documents using the aws:runDocument plugin. I’ll demonstrate how to execute documents created in Systems Manager by invoking them from the composite document. I’ll also walk through the method of executing documents that are in GitHub by using the AWS-RunDocument document.</p> 
+<p><span id="more-2450"></span></p> 
+<h3>Walkthrough 1 – Compose a custom document using SSM documents</h3> 
+<p>In this example, I’ll show you how to compose a document that updates SSM Agent and then runs baseline patch and eventually configures an AWS package. Before the introduction of composite documents, this could be done one of two ways. You could send three separate commands to execute these public documents – AWS-UpdateSSMAgent, AWS-RunPatchBaseline, and AWS-ConfigureAWSPackage. &nbsp;Alternatively, you could add the plugin references in another document, but you would have to duplicate the document and not use the pre-defined, public document provided. With the use of composite documents, these documents are executed by sending a single composite document.</p> 
+<p><strong>Step 1: Create the composite document</strong><br /> I’ll use the aws:runDocument plugin to compose plugins in my document. The plugin has the following parameters:</p> 
+<li><span style="text-decoration: underline">documentType</span> – This indicates the type of document. The document could be locally available – LocalPath or from SSM – SSMDocument. In this example, this parameter will be SSMDocument.</li> 
+<li><span style="text-decoration: underline">documentPath</span> – This is the path to the document. It is either the absolute path to the document on disk, or the name of the document if the type is SSMDocument. In this walkthrough, we will use the path to specify the names of the documents – AWS-UpdateSSMAgent, AWS-RunPatchBaseline, and AWS-ConfigureAWSPackage.</li> 
+<li><span style="text-decoration: underline">documentParameters</span> – The parameters for the secondary document. This should be specified as parameter type StringMap with key and value pairs.</li> 
+<p>The document appears as follows. I have named it composite-document.json. This document can be executed on Windows.</p> 
+<code class="lang-json"><strong>~/tmp/docs/composite-document.json</strong> 
+{
+&quot;schemaVersion&quot;: &quot;2.2&quot;,
+&quot;description&quot;: &quot;Compose SSM documents&quot;,
+&quot;parameters&quot;: {},
+&quot;mainSteps&quot;: [
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;AgentUpdate&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-UpdateSSMAgent&quot;
+}
+},
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;ApplyPatchBaseline&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-RunPatchBaseline&quot;,
+&quot;documentParameters&quot;: &quot;{\&quot;Operation\&quot;:\&quot;Install\&quot;}&quot;
+}
+},
+{
+&quot;action&quot;:&quot;aws:runDocument&quot;,
+&quot;name&quot; : &quot;ConfigureAWSPVDriver&quot;,
+&quot;inputs&quot;:{
+&quot;documentType&quot;:&quot;SSMDocument&quot;,
+&quot;documentPath&quot;:&quot;AWS-ConfigureAWSPackage&quot;,
+&quot;documentParameters&quot;: &quot;{\&quot;action\&quot;:\&quot;Install\&quot;, \&quot;name\&quot;:\&quot;AWSPVDriver\&quot;}&quot;
+}
+}
+]
+}</code> 
+<p>You can navigate to the AWS Systems Manager console and paste this document to create a document. You can also do this using the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-document.html">create-document</a> command in the AWS CLI:</p> 
+<code class="lang-bash">aws ssm create-document --name composite-document --content file://~/tmp/docs/composite-document.json --document-type Command</code> 
+<p><strong>Step 2: Run the command and check the output</strong></p> 
+<p>After the command is sent, each action will be executed to produce the following output.</p> 
+<p><strong><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru1-step2.png" /></strong></p> 
+<p>Or you can use the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/send-command.html">send-command</a> command from the AWS CLI. I am targeting all my Windows value instances by using tagging. To do this I created a new tag – PlatformType. For more information on using tags when you send commands, see <a href="http://C:\Users\ananva\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\WYMO4JZE\docs.aws.amazon.com\systems-manager\latest\userguide\send-commands-multiple.html">Sending Commands to a Fleet</a> in the AWS Systems Manager documentation.</p> 
+<code class="lang-bash">aws ssm send-command --document-name &quot;composite-document&quot; --targets Key=tag:PlatformType,Values=Windows</code> 
+<h3>Walkthrough 2 – Compose an SSM custom document using documents from GitHub</h3> 
+<p>In a <a href="https://aws.amazon.com/blogs/mt/run-scripts-stored-in-private-or-public-github-repositories-using-amazon-ec2-systems-manager/">previous blog post</a>, I reviewed the method of executing scripts from GitHub. Today, I’ll demonstrate how to execute Systems Manager documents from GitHub. This method can be used to execute documents from Amazon S3, too. In this composite document, I will update SSM Agent to the latest version and then install Apache and My SQL. The document to install this software resides in GitHub and is written in YAML.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru-github.png" /></p> 
+<p><strong>Step 1:&nbsp; Create composite document</strong><br /> To create a document from a remote resource like GitHub, I’ll use the pre-defined AWS-RunDocument document. This document has the following parameters to help us specify the information to download the document.</p> 
+<li><span style="text-decoration: underline">Source Type</span>: Location of the script – GitHub or Amazon S3. For this example, the value here is GitHub.</li> 
+<li><span style="text-decoration: underline">Source Info</span>: This parameter provides information for accessing the document. The repository mentioned earlier is public and thus, this should be the owner, repository, and the path to the document.</li> 
+<li><span style="text-decoration: underline">Document Parameters</span>: If the document to be executed takes parameters, they can be specified here. In this case, it will be left blank.</li> 
+<p>You can use the composite document below to install the SSM Agent, Apache and MySQL on the instance.</p> 
+<code class="lang-json"><strong>~/tmp/docs/composite-document-mysql.json</strong> 
+{
+&quot;schemaVersion&quot;: &quot;2.2&quot;,
+&quot;description&quot;: &quot;Composite documents from GitHub&quot;,
+&quot;parameters&quot;: {
+},
+&quot;mainSteps&quot;: [
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;AgentUpdate&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-UpdateSSMAgent&quot;
+}
+},
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;InstallApacheandMySQL&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-RunDocument&quot;,
+&quot;documentParameters&quot; : &quot;{\&quot;sourceType\&quot;:\&quot;GitHub\&quot;, \&quot;sourceInfo\&quot;:\&quot;{\\\&quot;owner\\\&quot;:\\\&quot;mmendonca3\\\&quot;,\\\&quot;repository\\\&quot;:\\\&quot;dummy-test-public\\\&quot;, \\\&quot;path\\\&quot;:\\\&quot;documents/bootstrap/StateManagerBootstrap.yml\\\&quot;}\&quot;}&quot;
+}
+}
+]
+}</code> 
+<p>You can create it using the AWS Systems Manager console or AWS CLI. The command to create this document would be:</p> 
+<code class="lang-bash">aws ssm create-document --name composite-document-mysql --content file://~/tmp/docs/composite-document-mysql.json --document-type Command</code> 
+<p><strong>Step 2: Run Command and check the output</strong><br /> On sending a command to execute this document, the agent gets updated to the latest version, downloads the document, and then executes it.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru2-output.png" /></p> 
+<p>The command to run this is follows:</p> 
+<code class="lang-bash">aws ssm send-command --document-name &quot;composite-document-mysql&quot; --targets Key=tag:PlatformType,Values=AmazonLinux</code> 
+<h3>Conclusion</h3> 
+<p>In this blog post, I have shown you how to enable management as code by using composite documents. You can create composite documents to reuse your documents easily, and enable modularity. Documents created using AWS Systems Manager can be referenced using composite documents. Those documents on GitHub and Amazon S3, written in JSON or YAML, can be executed using the AWS-RunDocument document.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/melonia.jpg" />Melonia Mendonca is a Software Development Engineer with the Amazon EC2 Systems Manager team. She is a passionate engineer who enjoys the ability to innovate encouraged by Amazon. Outside of work, Melonia likes traveling, playing board games and trying different restaurants/cuisines.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS OpsWorks for Chef Automate in a federated environment</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Darko Meszaros</span></span> | on 
+<time property="datePublished" datetime="2017-12-31T14:34:39+00:00">31 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/using-aws-opsworks-for-chef-automate-in-a-federated-environment/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Many large enterprises operate on a federated model. That is, they are separated into different business units or organizations, with different goals, procedures, and skill sets. These enterprises typically use a system to manage their infrastructure configuration and changes.</p> 
+<p>You might ask, “Can we apply a federated model to configuration management? If so, what are the pros and cons and how does AWS OpsWorks for Chef Automate fit into that model?”</p> 
+<p>In this blog post we discuss how to approach configuration management in a. federated enterprise. &nbsp;The main focus is on how you can leverage <a href="https://aws.amazon.com/opsworks/chefautomate/">AWS OpsWorks for Chef Automate</a> to achieve this goal.</p> 
+<p><span id="more-2257"></span></p> 
+<b>Single Chef server to serve all parts of your organization</b> 
+<p>Approaching configuration management in a non-federated way involves using a single Chef server across many different business units.</p> 
+<p>But, I hear you say, “Different business units have their own Chef nodes, cookbooks, and environments. How do we separate those?”</p> 
+<p>The way you can achieve this with Chef is to use the concept of <a href="https://docs.chef.io/server_orgs.html"><strong>Chef Organizations</strong></a>, which is a core part of the Chef Server software.</p> 
+<p>Chef Organizations allows you to separate the following items among different business units, but they still reside on a single Chef server:</p> 
+<li>Permissions</li> 
+<li>Nodes</li> 
+<li>Roles</li> 
+<li>Environments</li> 
+<li>Cookbooks</li> 
+<li>Data bags</li> 
+<p>The main benefits of this approach is that each business unit can independently manage its own nodes, access permissions, and can perform maintenance/updates on its infrastructure on its own schedule. Having this type of isolation allows the business units/organizations to have access to their own unique environments, roles, data bags, and cookbooks. Additionally, by hosting all of this on a single server you reduce the amount of effort required to set up and maintain a separate Chef server for each business unit.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/single_chef.png" /></p> 
+<p style="text-align: center"><em>Single Chef Server Model</em></p> 
+<b>Single Chef server per business unit</b> 
+<p>When we speak about a model for a true federated approach to configuration management, we imply that each of the company’s business units/organizations has its own separate Chef server. This brings us the same benefits that we get when we use Chef Organizations, but with even greater isolation between the business units. This brings more benefits when in the cloud.</p> 
+<p>“What are these new benefits you speak of?”</p> 
+<p>Well, it is very common to have different business units, each with its own respective AWS Account, for all of their resources. This approach is used for billing. It gives us a clear separation of resource usage per business unit. If each business unit uses a Chef server in a centralized AWS account, billing and management of that resource can get out of hand. Another major benefit, which is not strictly cloud related, is that the maintenance of the Chef server and the potential downtime it experiences, does not cause disruptions across all organizations and their infrastructure. By having a Chef server for each business unit you can mitigate the issue of having a single point of failure. If you rely on a single Chef server throughout your enterprise, that server’s failure would cause potential down time across all business units. By using multiple Chef servers you reduce the blast radius of potential Chef server down time.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/Untitled_Diagram.png" /></p> 
+<p style="text-align: center"><em>Federated model/Multi Chef Server</em></p> 
+<p>Additionally, the concept of Chef Organizations can be fully utilized even in a federated model. For example, if a certain business unit wants to separate even further, it can split its own Chef Automate server into organizations. The nodes from all organizations will be visible on the Chef Automate dashboard because you can filter nodes based on Chef Organizations.</p> 
+<p>“But what happens to our cookbooks? Does each business unit need to write its own?” To answer these questions, let’s take a look at <strong>Centralized Cookbook repositories.</strong></p> 
+<b>Centralized Cookbook repositories</b> 
+<p>A great way to make all of your configurations as consistent as possible is to have a companywide Cookbook repository. This means that teams/business units can use cookbooks created by other parts of the company to configure their infrastructure – on their respective Chef Servers. This, in turn, reduces the effort required to start using Chef as a configuration management system in a business unit because most of the required code base is already present. So, for example, let’s say that business unit A writes its own cookbook for setting up an application, and business unit B also uses the same application in their own environment. Business unit B does not have to write its own cookbook from scratch, but can use the cookbooks already created by business unit A. The main obstacle to having a shared cookbook system is properly writing cookbooks in the first place. Each cookbook must be as dynamic as possible. When you write a cookbook, leverage attributes, templates, and data-bags as much as possible so you can be flexible and help other teams use the same cookbook for, &nbsp;their use cases.</p> 
+<p>“So what kind of Cookbook repos can we use?”</p> 
+<h3>Git repo</h3> 
+<p>The simplest approach to centrally managing your cookbooks is to use &nbsp;Git repositories. Yes, simple as that. You can use the <a href="https://docs.chef.io/berkshelf.html"><strong>Berkshelf</strong></a> tool to manage the cookbooks, but instead of pulling them from the Chef supermarket, it pulls from the Git repo. With Berkshelf, you can specify a certain cookbook version to be pulled. In addition, because Berkshelf supports specifying a repository branch, you can even select a specific branch of your cookbook repo, for example, a certain testing branch to be used in a Dev environment.</p> 
+<p><em>Berksfile example:<br /> </em></p> 
+<code class="lang-berks">cookbook &quot;buk-cookbook&quot;, &quot;~&gt;; 0.9.3&quot;, git: &quot;https://github.com/example/buk-cookbook.git&quot;
+cookbook &quot;jinar-cookbook&quot;, &quot;~&gt;; 0.2.4&quot;, git: &quot;https://github.com/example/jinar-cookbook.git&quot;, branch: &quot;my-test-branch&quot;</code> 
+<p>As mentioned before – you can have centralized Cookbook Git repositories across the entire company. Then each team could create its own repositories and push cookbooks – which could, in turn, be used by everyone in the company.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/27/git_mutlichef_cropped.png" /></p> 
+<p style="text-align: center"><em>Common GIT repositories for cookbooks</em></p> 
+<p>“But–hey – at the beginning of this blog post you mentioned that one of the benefits of using a single Chef server is not needing to configure and maintain each server separately. Doesn’t having too many Chef servers give us a lot of overhead?”</p> 
+<p>Enter – <a href="https://aws.amazon.com/opsworks/chefautomate/">OpsWorks for Chef Automate</a></p> 
+<b>How does OpsWorks for Chef automate fit into all of this?</b> 
+<p>AWS OpsWorks for Chef Automate (OWCA) provides a fully managed Chef server and suite of automation tools, which compose <a href="https://www.chef.io/automate/">Chef Automate</a>. OpsWorks for Chef Automate offers you a consistent Chef server configuration throughout all deployed servers. All servers are deployed and bootstrapped by OpsWorks, so this means that each new server will be configured in the same way. Additionally, OpsWorks takes care of the Chef server maintenance in the form of server patching, minor Chef updates, and backups. That means that you do not have to spend time and effort in order to set-up and configure a Chef Automate server. You can just let OpsWorks handle that for you, and have your business units focus all their energy on writing or using Chef cookbooks in their environments.</p> 
+<p>The fact that OpsWorks handles patching means that you don’t need to connect to the Chef server using SSH. You only &nbsp;need to use knife to manage your Chef server software. With backup and restore in place, you can easily revert back to a working version of your server if something goes wrong.</p> 
+<p>A 10 000 foot view of setting up OWCA for a business unit would look something like this:</p> 
+<li>Launch an OWCA server in the desired Region with the desired instance size.</li> 
+<li>Take the starter kit provided with the Chef Automate server to be used on a Chef Workstation.</li> 
+<li>Once the server is fully running, dministrators can use the Chef Workstation to create all the required resources: 
+<li>Environments</li> 
+<li>Roles</li> 
+</ul> </li> 
+<li>Set Berkshelf to get the needed Cookbooks from a common repository, and have them installed on the Chef Automate server.</li> 
+<li>Finally, bootstrap nodes in the appropriate roles. The usage of AWS API can be applied here, as OpsWorks can handle node bootstrapping for you.</li> 
+<p>Simple as that! You don’t need to manually configure Chef servers. You &nbsp;just &nbsp;launch an OpsWorks for Chef Automate server, and the rest is just Cookbook and node management.</p> 
+<b>Summary</b> 
+<p>Here we have discussed how to implement a federated model for configuration management using Chef and OpsWorks. We described how simple it is to set up and maintain a Chef server with OpsWorks. Many of our customers are actually taking this direction when using OpsWorks for Chef Automate because it allows them to separate their teams but still maintain a common set of configuration rules across the entire enterprise. With the assistance of the AWS API to bootstrap nodes this allows you to spend less time worrying about setting up the configuration management infrastructure and more on creating and using Cookbooks and any other Chef resources you need.</p> 
+<p><strong>About the Author</strong></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/24/darko-cropped.jpeg" /><br /> Darko Meszaros is a Cloud Support Engineer who supports customers that use various AWS automation tools, such as AWS OpsWorks, AWS CodeDeploy, and AWS CloudFormation. He is a subject matter expert for OpsWorks and CodeDeploy. Outside of work, he loves collecting video games and old computers.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p><em>The screenshots in this post are Copyright Chef Software Inc., and are available at <a href="https://github.com/chef/chef-web-docs">https://github.com/chef/chef-web-docs</a> under the terms of the CC-BY-3.0 license, available here <a href="https://creativecommons.org/licenses/by/3.0/legalcode">https://creativecommons.org/licenses/by/3.0/legalcode</a>.</em></p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">2017 Year in Review: AWS OpsWorks for Chef Automate and Puppet Enterprise</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1035,133 +1221,6 @@ by
 <p><strong>Summary</strong><br /> In this blog post I demonstrate the value of deploying the AWS Service Catalog in a hub and spoke model. In addition, I explain the process and have provided code samples. These samples show you how to automate a deployment across many AWS accounts and constrain users to specific AWS resource values to meet organization governance controls.</p> 
 <p><strong>About the Author</strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/21/Norton-Bio-Shot-150x150.jpg" /></p> 
 <p>Jason Norton is a Sr. Consultant with Professional Services&nbsp;who loves showing his customers the possibilities.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Gain Visibility into the Execution of Your AWS Lambda functions with AWS CloudTrail</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Kyle Somers</span></span> | on 
-<time property="datePublished" datetime="2017-11-30T11:23:53+00:00">30 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudtrail/" title="View all posts in AWS CloudTrail*"><span property="articleSection">AWS CloudTrail*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/gain-visibility-into-the-execution-of-your-aws-lambda-functions-with-aws-cloudtrail/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Today, we are happy to announce that AWS CloudTrail now supports the Lambda Invoke API as a new data event type with the launch of CloudTrail Lambda data events. Previously, AWS CloudTrail supported management events for AWS Lambda, which allowed you to capture when and by whom a function was created, modified, or deleted. With this new feature, you can now gain visibility into when and by whom an Invoke API call was made and which Lambda function was executed. CloudTrail can deliver these logs to Amazon S3 or Amazon CloudWatch Logs, and for near real-time processing, you can send them to Amazon CloudWatch Events to build event-driven security pipelines for the Lambda functions within your serverless applications.</p> 
-<p><span id="more-2143"></span></p> 
-<h4>AWS CloudTrail Lambda data events</h4> 
-<p>Serverless computing with AWS Lambda is an increasingly popular business solution. Lambda allows you to run code in the cloud without managing or provisioning servers. You write your code, package it as a Lambda function, and hook it up with one or more event sources that trigger the function in response to events. All Lambda functions are executed using the Lambda Invoke API, whether you manually invoke your Lambda function via the AWS CLI, SDK, or set it up with any of the event source integrations. The AWS CloudTrail Lambda data events feature enables you to capture this invoke activity within your account to see who, when, and how your functions are being executed.</p> 
-<h4>How can I use AWS CloudTrail Lambda data events?</h4> 
-<p>AWS CloudTrail Lambda data events can be used to detect and automatically act on invocations of Lambda functions across your AWS account. For example, you can now:</p> 
-<li>Meet your IT auditing and compliance requirements. With CloudTrail data events, you can validate that your functions were invoked by permitted users, roles, and services. Customers with regulatory audit and compliance requirements can maintain the same level of visibility and auditability of Lambda function invokes as they do for other AWS service API invocations.</li> 
-<li>Perform near real-time and ad-hoc security analysis. Lambda data events are delivered to your log delivery destination just like your existing CloudTrail logs, so it is easy to integrate this new log data type into your security analytics pipelines. You can analyze Lambda function invoke activity in near real time with Amazon CloudWatch Events and Amazon CloudWatch Logs.</li> 
-<li>Better understand usage patterns across your AWS Lambda functions. You can perform billing analysis to understand the top user, role, or service callers of Lambda functions. You can also tie costs to specific users and groups for internal chargeback purposes or build reports on function usage across different teams.</li> 
-<p>Let’s take a look at how this integration works.</p> 
-<h4>Setting up Lambda Data Events</h4> 
-<p>Setting up AWS CloudTrail Lambda data events is easy. You can add Lambda data events to an existing trail that you have already created, or you can create a new separate trail just for Lambda data events – either option is suitable and will depend on how you plan to organize and manage your CloudTrail logs. In my example, I have created a separate trail called <strong>LambdaEvents</strong> and have configured it to<em><strong> Log all current and future functions</strong></em>. This feature is really handy and allows me to “set and forget” without needing to revisit my CloudTrail configuration each time a new function or version is published.</p> 
-<p><em>&nbsp;You might be wondering what that S3 tab is for in the following image. Remember, AWS CloudTrail also supports data events for Amazon S3, which Jeff Barr discusses in his blog post <a href="https://aws.amazon.com/blogs/aws/cloudtrail-update-capture-and-process-amazon-s3-object-level-api-activity/">here</a>.</em></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/30/trail_setup-1024x550.png" /></p> 
-<p>Once I have configured a new trail called LambdaEvents and enabled it across all AWS Regions for all existing and future functions, I now need to setup a storage location for CloudTrail to store the log files that will be generated. I have previously created my trail to deliver logs to a bucket dedicated to my Lambda data events (aws-ksomers-lambda-cloudtrail). I have left the rest of the settings at the default, but I could optionally enable a few additional things such as log file validation, encryption using AWS KMS, and notifications using Amazon SNS.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/30/storage-1024x513.png" /></p> 
-<p>Now that CloudTrail Lambda data events is configured, let’s take a look at how data is presented to us with Lambda data events.</p> 
-<p>In my example, I invoked my BlogFunction from the AWS CLI with my “kyle” IAM user as a synchronous request with Lambda invoke type of “RequestResponse”. Remember that Lambda can be invoked either synchronously via a RequestResponse invocation type, asynchronously via an “Event” invocation type, or used in test mode with a “DryRun” invocation type. That invocation generated a CloudTrail log file in my Amazon S3 bucket. Let’s have a look at the event:</p> 
-<code class="lang-js">{
-&quot;eventVersion&quot;: &quot;1.06&quot;,
-&quot;userIdentity&quot;: {
-&quot;type&quot;: &quot;IAMUser&quot;,
-&quot;principalId&quot;: &quot;AIDAIOR74VCJ2M3NB8U4M&quot;,
-&quot;arn&quot;: &quot;arn:aws:iam::999999999999:user/kyle&quot;,
-&quot;accountId&quot;: &quot;999999999999&quot;,
-&quot;accessKeyId&quot;: &quot;AK2IU7DKE7U2KOI8CCBP&quot;,
-&quot;userName&quot;: &quot;kyle&quot;
-},
-&quot;eventTime&quot;: &quot;2017-11-29T08:47:45Z&quot;,
-&quot;eventSource&quot;: &quot;lambda.amazonaws.com&quot;,
-&quot;eventName&quot;: &quot;Invoke&quot;,
-&quot;awsRegion&quot;: &quot;us-west-2&quot;,
-&quot;sourceIPAddress&quot;: &quot;192.168.0.1&quot;,
-&quot;userAgent&quot;: &quot;aws-cli/1.11.129 Python/2.7.8 Linux/3.1.56-0.6.839hdh3.x86_64 botocore/1.5.92&quot;,
-&quot;requestParameters&quot;: {
-&quot;invocationType&quot;: &quot;RequestResponse&quot;,
-&quot;functionName&quot;: &quot;arn:aws:lambda:us-west-2:999999999999:function:BlogFunction:prod&quot;,
-&quot;clientContext&quot;: &quot;ew0KICAiY29udGV4dGtleSIgOiAiY29udGV4dHZhbHVlIg0KfQ==&quot;,
-&quot;qualifier&quot;: &quot;prod&quot;
-},
-&quot;responseElements&quot;: null,
-&quot;additionalEventData&quot;: {
-&quot;functionVersion&quot;: &quot;arn:aws:lambda:us-west-2:999999999999:function:BlogFunction:4&quot;
-},
-&quot;requestID&quot;: &quot;eaccb900-8f45-11e7-b60d-179cdf501g92&quot;,
-&quot;eventID&quot;: &quot;0e205f1d-3929-4803-b887-0d2aca122148&quot;,
-&quot;readOnly&quot;: false,
-&quot;resources&quot;: [{
-&quot;accountId&quot;: &quot;999999999999&quot;,
-&quot;type&quot;: &quot;AWS::Lambda::Function&quot;,
-&quot;ARN&quot;: &quot;arn:aws:lambda:us-west-2:999999999999:function:BlogFunction&quot;
-}],
-&quot;eventType&quot;: &quot;AwsApiCall&quot;,
-&quot;managementEvent&quot;: false,
-&quot;recipientAccountId&quot;: &quot;999999999999&quot;,
-&quot;sharedEventID&quot;: &quot;6159da59-ad2f-4e04-9669-cf0a6b6b4827&quot;</code> 
-<p>When a Lambda function is invoked, the function being invoked will show up in three locations within the CloudTrail Lambda data event. Here is a breakdown of what each one represents:</p> 
-<ol> 
-<li>“<strong>requestParameters:functionName</strong>” – This field will match the input of the function that was called using the API (qualified version or unqualified). In my example, my function is deployed with a Lambda alias of “prod,” so this is displayed in the ARN.</li> 
-<li>“<strong>additionalEventData:functionVersion</strong>” – Here you will see the exact qualified function version that was invoked based on the input in the requestParameters of your Lambda invoke. Remember that a Lambda function alias points to an immutable version of a Lambda function. In this case, I invoked my function via the alias, but the ARN that was executed was version 4 of my function. This field will display the version ARN that was invoked.</li> 
-<li>“<strong>resources:ARN</strong>” – This will show the unqualified function ARN (some refer to it as the “base” ARN).</li> 
-</ol> 
-<p>In the previous example, we looked at the contents of a Lambda Invoke API request of RequestResponse invocation type. For details on the contents of other invocation types such as Event Invocation Types, Cross-Account invocations, invocations from AWS services such as stream-based event sources, check out the documentation <a href="http://docs.aws.amazon.com/lambda/latest/dg/API_Invoke.html">here</a>.</p> 
-<h4>Lambda data events example</h4> 
-<p>One interesting way you can use this new feature is to monitor your Lambda functions for unauthorized invocations. Let’s take a look at an example of how you can use Lambda data events to check for unauthorized invocations with one of our classic Lambda examples, the S3 Event Notification Trigger for PUT Object Requests on a Bucket:\</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/30/diagram-1024x258.png" /></p> 
-<p>In this architecture, there is an S3 bucket that is configured to invoke a Lambda function when new objects are created in the bucket (or any other event you would like). This function might update an Amazon DynamoDB table, send an email, or any other use case you may have!</p> 
-<p>With CloudTrail Lambda data events, you can validate that your function is only being invoked by Amazon S3. Every invocation of your function generates a CloudTrail log event which can be delivered to an S3 bucket for long-term retention. You can also configure a CloudWatch Events Rule and run real-time business logic on these log events with Lambda. In this case, if the “<em>userIdentity:invokedBy</em>” field in my CloudTrail log event isn’t “<em>s3.amazonaws.com</em>”, then my remediation Lambda can update my Lambda Function Policy to properly restrict invocation access to Amazon S3.</p> 
-<p><strong>Pricing and availability</strong></p> 
-<p>Once an AWS CloudTrail trail is set up, Amazon S3 charges apply based on your usage, since AWS CloudTrail delivers logs to an S3 bucket. Data events are recorded only for the functions you specify and are charged at $0.10 per 100,000 events, the same as S3 data events. See CloudTrail <a href="https://aws.amazon.com/cloudtrail/pricing/">pricing page</a> for more details. CloudTrail Lambda data events are available in all AWS public Regions and AWS GovCloud (US).</p> 
-<h3>What’s coming</h3> 
-<p>Several AWS partners such as Sumo Logic, Rapid7, Saviynt, Alert Logic, and Evident.io are working on integrations with CloudTrail Lambda Data Events, so keep an eye out for updates!</p> 
-<hr /> 
-<p><strong>About the author</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/30/kyle.jpg" />Kyle Somers is a Solutions Architect at Amazon Web Services. He works with startups and Focused Territory customers to provide architectural guidance for building applications in the cloud. His passion is AWS Lambda and he serves as a Serverless SME within the AWS community. In his spare time, he likes to travel, read up on the latest tech, and cheer on the University of Arizona Wildcats.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Monitoring Service Limits with Trusted Advisor and Amazon CloudWatch</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Stas Neyman</span></span> | on 
-<time property="datePublished" datetime="2017-11-24T13:41:47+00:00">24 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-trusted-advisor/" title="View all posts in AWS Trusted Advisor*"><span property="articleSection">AWS Trusted Advisor*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/monitoring-service-limits-with-trusted-advisor-and-amazon-cloudwatch/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Understanding your <a href="http://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html">service limits</a> (and how close you are to them) is an important part of managing your AWS deployments – continuous monitoring allows you to request limit increases or shut down resources before the limit is reached.</p> 
-<p>One of the easiest ways to do this is via <a href="https://aws.amazon.com/premiumsupport/trustedadvisor/">AWS Trusted Advisor’s</a> Service Limit Dashboard, which currently covers <a href="https://aws.amazon.com/premiumsupport/ta-faqs/#service-limits-check-questions">39 limits across 10 services</a>.</p> 
-<p>With the recent launch of Trusted Advisor metrics in Amazon CloudWatch, <a href="https://aws.amazon.com/premiumsupport/business-support/">Business</a> and <a href="https://aws.amazon.com/premiumsupport/enterprise-support/">Enterprise</a> support customers can create customizable alarms for individual service limits. Let’s look at an example of how to do that.</p> 
-<p><span id="more-2122"></span></p> 
-<h4>Example: Create an alarm for EC2 On-Demand Instance limits</h4> 
-<p>Begin by logging into the <a href="https://console.aws.amazon.com/trustedadvisor/home#/dashboard">Trusted Advisor console</a> and clicking the “Service Limits” link on the left side of the page. After doing so, you should see the new service limits dashboard.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/Console-1024x444.png" /></p> 
-<p>Click the refresh icon in the top-right of the screen to retrieve the most current utilization and limit data for the service limit checks. This can take a while if you have a lot of AWS resources deployed, so be patient! Once complete, a notification will appear at the top of the Trusted Advisor console.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/check_complete-1024x76.png" /></p> 
-<p>This ensures that CloudWatch has the most up-to-date information available from Trusted Advisor.</p> 
-<p>Next, head over to the <a href="https://console.aws.amazon.com/cloudwatch/">CloudWatch console</a>. Trusted Advisor passes a single metric called “ServiceLimitUsage” that represents the percentage of utilization versus the limit. You can filter these limits by region, limit, or service using the available dimensions.</p> 
-<p>Make sure you are in the US East (N. Virginia) region, then click the “Alarms” link on the left side of the page and then click the “Create Alarm” button.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm-1024x461.png" /></p> 
-<p>Click “Service Limits by Region” under the “Trusted Advisor” category.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm2-1024x936.png" /></p> 
-<p>In the search bar, type “Overall On-Demand Instances”. This will filter the list of available limits down to the EC2 overall on-demand instance limits that are tracked by Trusted Advisor. Click the checkbox next to the limit for the us-east-1 region and click “Next”.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm3-1024x940.png" /></p> 
-<p>You can now set up your CloudWatch alarm for this limit. In this example, we’ve configured it to alarm when you’ve reached 60% of the EC2 On-Demand instance limit. Trusted Advisor updates these metrics once per week by default, but refreshing <a href="https://aws.amazon.com/premiumsupport/ta-iam/#table2">checks</a> via the Trusted Advisor console or Support API will send updated metrics on demand.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm4-1024x933.png" /></p> 
-<p>You can repeat this process for any or all of the service limits covered by Trusted Advisor. For more information and a guide to creating these for any type of Trusted Advisor check, visit <a href="http://docs.aws.amazon.com/awssupport/latest/user/cloudwatch-metrics-ta.html">Creating Trusted Advisor Alarms Using CloudWatch</a>.</p> 
-<hr /> 
-<h4>About the Author</h4> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/Scott_Allison.jpg" />Scott Allison is the Senior Technical Product Manager for Trusted Advisor – an AWS service designed to keep your deployments secure, fault tolerant, and cost-effective. He enjoys working directly with customers and hearing the creative ways people use Trusted Advisor!</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
