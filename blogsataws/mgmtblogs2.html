@@ -190,6 +190,311 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/02/Screen-Shot-2018-01-02-at-1.27.34-PM-1243x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Control AWS resources available to your users using AWS Service Catalog</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Kanchan Waikar</span></span> | on 
+<time property="datePublished" datetime="2018-01-12T09:32:08+00:00">12 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>The <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege" target="_blank" rel="noopener noreferrer">grant least privilege</a> best practice advises you to grant only the permissions that are required to perform a task. To follow this best practice you should determine what your users need to do and then design <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html" target="_blank" rel="noopener noreferrer">IAM policies</a> that let users perform&nbsp;only&nbsp;those tasks. <a href="https://aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">AWS Service Catalog</a> extends the very same best practice. If you are an administrator, it lets you specify the AWS CloudFormation template that your users can launch, while restricting the permissions required to create individual services. If you are an end user of the AWS Service Catalog, you don’t need to worry whether you have enough permissions to launch the stack or whether you are following your organization’s tagging strategy correctly.</p> 
+<p>In the first part of this two-part series of blog posts, I explain how you can manage the AWS resources your users can create using AWS Service Catalog. In the <a href="https://aws.amazon.com/blogs/mt/using-aws-lambda-to-decommission-products-provisioned-from-an-aws-service-catalog-portfolio/" target="_blank" rel="noopener noreferrer">second blog post</a>, I show how you can use AWS Lambda to decommission all of the resources that have been provisioned from an AWS Service Catalog portfolio.</p> 
+<p><span id="more-2373"></span></p> 
+<p>Before I get into how it works, let’s first review a few key AWS Service Catalog concepts:</p> 
+<li>A <strong><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-product" target="_blank" rel="noopener noreferrer">product</a></strong> is an IT service that you want to make available for deployment on AWS. You create a product by importing a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-whatis-concepts.html#w2ab2b5c15b7" target="_blank" rel="noopener noreferrer">CloudFormation template</a>.</li> 
+<li>A&nbsp;<strong><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-provprod" target="_blank" rel="noopener noreferrer">provisioned product</a></strong>&nbsp;is a <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html" target="_blank" rel="noopener noreferrer">CloudFormation stack</a>. When an <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-users" target="_blank" rel="noopener noreferrer">end user</a> launches a product, the AWS Service Catalog provisions the product in form of a CloudFormation stack.</li> 
+<li>A&nbsp;<strong><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-portfolio" target="_blank" rel="noopener noreferrer">portfolio</a></strong>&nbsp;is a collection of&nbsp;<strong>products</strong>, together with the configuration information. You can use portfolios to manage the user access to specific products.</li> 
+<li><strong><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-constraints" target="_blank" rel="noopener noreferrer">Constraints</a>&nbsp;</strong>control the way users can deploy a product. With <strong>launch constraints</strong>, you can specify a role that the AWS Service Catalog can assume to launch a product from the portfolio.</li> 
+<p>Now I’ll walk you through a use case to show you how you can control the AWS resources your users can create. In this use case, you want to conduct a training of a web-based product, say WordPress, using your training AWS account. (WordPress is an open-source blogging tool and content management system (CMS) based on PHP and MySQL.) On the day of the training, attendees sign into your training AWS account using <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/introduction_identity-management.html#intro-identity-users" target="_blank" rel="noopener noreferrer">IAM user</a> credentials that you created, and create their own AWS CloudFormation stack using a WordPress CloudFormation template. The stack outputs a WordPress endpoint that they use during the training. Here are two of the many things that could go wrong due to a single malicious attendee:</p> 
+<li>The user might tweak the CloudFormation template to do unauthorized actions like: 
+<li>Launching a high-end EC2 instance.</li> 
+<li>Launching an EC2 instance with a wide-open security group.</li> 
+<li>Something else!</li> 
+</ul> </li> 
+<li>The user might never tag any of the resources they created leaving you a number of unknown resources to manually discover and clean-up after the training.</li> 
+<p>A simple solution to mitigate these problems is not to give CloudFormation template creation access to the IAM users. Instead, you will use AWS Service Catalog to manage the resource provisioning.</p> 
+<b>Solution</b> 
+<p>Here are the steps you need to go through to let attendees launch a stack using your predefined CloudFormation template:</p> 
+<ol> 
+<li>First, <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/getstarted-portfolio.html" target="_blank" rel="noopener noreferrer">create a portfolio</a>.</li> 
+<li>Then, upload WordPress product to the portfolio created. The product contains the WordPress CloudFormation template and configuration information.</li> 
+<li>Next, create an AWS Service Catalog IAM role (role) and associate it with the WordPress product, as a launch constraint. Later, when users provision the product, AWS Service Catalog will assume the role created.</li> 
+<li>Next, <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/getstarted-iamenduser.html" target="_blank" rel="noopener noreferrer">grant the training attendees access</a> to the portfolio that you created.</li> 
+<li>Then verify whether training users can provision the product. During the training, users can use the AWS Service Catalog to provision the WordPress product.</li> 
+<li>After the training is over, you terminate all provisioned products from the portfolio.</li> 
+</ol> 
+<p>The following solution diagram illustrates how you can set up a training using AWS Service Catalog.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/02/Screen-Shot-2018-01-02-at-1.27.34-PM.png" /><br /> 
+<!--more--></p> 
+<p><strong>Note</strong></p> 
+<p>Before you begin, you need to do the following:</p> 
+<ol> 
+<li>Create an IAM user group for the training attendees. To do so, <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html" target="_blank" rel="noopener noreferrer">create one or more IAM users</a> (for distributing to training attendees) in your AWS account and assign no permissions to them. Next, <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_groups_create.html" target="_blank" rel="noopener noreferrer">create an IAM User Group</a> with a group name as <code>Training-Users</code> and then <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_groups_manage_add-remove-users.html" target="_blank" rel="noopener noreferrer">add IAM users</a> created to the <code>Training-Users</code> group.</li> 
+<li>Verify that <a href="https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/" target="_blank" rel="noopener noreferrer">AWS Service Catalog is supported in the AWS Region</a>.</li> 
+<li>Verify that you have: 
+<li><a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/getstarted-iamadmin.html" target="_blank" rel="noopener noreferrer">AWS Service Catalog Administrator access</a>.</li> 
+<li>IAM Permissions to create a new IAM role.</li> 
+</ul> </li> 
+</ol> 
+<p>Then, you need to create an AWS Service Catalog portfolio. You will use the portfolio to provide training attendees an access to the WordPress product.</p> 
+<h3>Step 1. Create a portfolio</h3> 
+<p>For this use case, you can create a single portfolio with a Training Portfolio name. You will later grant training attendees access to this portfolio. To create a portfolio:</p> 
+<ol> 
+<li>Sign in to the AWS Management Console and then open&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>If you are using the AWS Service Catalog administrator console for the first time, choose&nbsp;<strong>Get started</strong>&nbsp;to start the wizard for configuring a portfolio. Otherwise, choose&nbsp;<strong>Create </strong>portfolio.</li> 
+<li>Enter the following values: 
+<ol> 
+<li><strong>Portfolio name&nbsp;</strong>–&nbsp;<code>Training Portfolio</code></li> 
+<li><strong>Description</strong>&nbsp;–&nbsp;<code>Portfolio for conducting a WordPress training.</code></li> 
+<li><strong>Owner</strong>&nbsp;–&nbsp;<code>Training Team</code></li> 
+</ol> </li> 
+<li>Choose&nbsp;<strong>Create</strong>.</li> 
+</ol> 
+<p>Next, associate the <code>Portfolio-Name</code> <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/tagoptions-using.html" target="_blank" rel="noopener noreferrer">tagOption</a> with the portfolio. This will cause AWS Service Catalog to attach <code>Portfolio-Name</code> tag to all resources created during provisioning of the product from the portfolio. If you are a first-time user, ensure that you have <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/tagoptions-migrate.html" target="_blank" rel="noopener noreferrer">migrated to the TagOption Library</a>. To associate a tag:</p> 
+<ol> 
+<li>Open&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>From the <strong>Service Catalog</strong> drop-down menu, choose&nbsp;<strong>TagOption library</strong>.</li> 
+<li>Choose&nbsp;<strong>Create new TagOption</strong>.</li> 
+<li>Specify <strong>key</strong> as <code>Portfolio-Name</code>, <strong>value</strong> as <code>Training Portfolio</code>, choose <strong>Save</strong>.</li> 
+<li>From the <strong>Service Catalog</strong> drop-down menu, choose <strong>Portfolios list</strong>.</li> 
+<li>Select <code>Training Portfolio</code>, expand <strong>TagOptions</strong>, choose <strong>Add TagOption</strong>.</li> 
+<li>Select the entry with the <strong>key</strong> as <code>Portfolio-Name</code>, <strong>value</strong> as <code>Training Portfolio</code>, choose <strong>Save</strong>.</li> 
+</ol> 
+<p>Next, you need to upload the WordPress product to the portfolio created.</p> 
+<h3>Step 2. Upload the WordPress product in the portfolio</h3> 
+<p>In this step, you upload the CloudFormation Template you want your users to launch, in the form of a product. To upload a product:</p> 
+<ol> 
+<li>Open&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>Click on <code>Training Portfolio</code> to open the portfolio details page, and then choose&nbsp;<strong>Upload new product</strong>.</li> 
+<li>On the&nbsp;<strong>Enter product details</strong>&nbsp;page, type the following and then choose&nbsp;<strong>Next</strong>: 
+<li><strong>Product name</strong>&nbsp;–&nbsp;<code>WordPress</code></li> 
+<li><strong>Description</strong>&nbsp;–&nbsp;<code>This product launches WordPress CloudFormation Stack.</code></li> 
+<li><strong>Provided by</strong>&nbsp;–&nbsp;<code>Training Team</code></li> 
+</ul> </li> 
+<li>On the&nbsp;<strong>Enter support details</strong>&nbsp;page, choose&nbsp;<strong>Next</strong>.</li> 
+<li>On the&nbsp;<strong>Version details</strong>&nbsp;page, choose&nbsp;<strong>Specify a URL location for an Amazon CloudFormation template</strong>, type&nbsp;<a href="https://s3-us-west-2.amazonaws.com/cloudformation-templates-us-west-2/WordPress_Single_Instance.template" target="_blank" rel="noopener noreferrer">https://s3-us-west-2.amazonaws.com/cloudformation-templates-us-west-2/WordPress_Single_Instance.template</a> in the text box. Specify: 
+<li><strong>Version title</strong>&nbsp;–&nbsp;<code>v1.0</code></li> 
+<li><strong>Description</strong>&nbsp;–&nbsp;<code>Base Version</code></li> 
+</ul> </li> 
+<li>Choose&nbsp;<strong>Next</strong>.</li> 
+<li>On the&nbsp;<strong>Review</strong>&nbsp;page, choose&nbsp;<strong>Create</strong>.</li> 
+</ol> 
+<p>Next, you’ll create an IAM role that AWS Service Catalog can assume to allow training attendees to launch a product.</p> 
+<h3>Step 3. Create a Service Catalog IAM role and associate it with the WordPress product as a launch constraint</h3> 
+<p>Create a role that will have permissions to create a CloudFormation stack as well as to create all resources created by the WordPress CloudFormation template. To create the IAM role:</p> 
+<ol> 
+<li>Open the IAM console at&nbsp;<a href="https://console.aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/iam/</a>.</li> 
+<li>In the navigation pane, choose&nbsp;<strong>Policies</strong>. Choose&nbsp;<strong>Create policy</strong>&nbsp;and do the following: 
+<ol> 
+<li>Choose <strong>JSON</strong> Tab.</li> 
+<li>Paste the following policy in the editor: <code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{ 
+&quot;Sid&quot;: &quot;LaunchWordPressRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ec2:AuthorizeSecurityGroupEgress&quot;,
+&quot;ec2:AuthorizeSecurityGroupIngress&quot;,
+&quot;ec2:DeleteSecurityGroup&quot;,
+&quot;ec2:TerminateInstances&quot;, 
+&quot;ec2:CreateSecurityGroup&quot;, 
+&quot;ec2:RunInstances&quot;, 
+&quot;ec2:createTags&quot;, 
+&quot;catalog-user:*&quot;, 
+&quot;cloudformation:CreateStack&quot;, 
+&quot;cloudformation:DeleteStack&quot;, 
+&quot;cloudformation:DescribeStackEvents&quot;, 
+&quot;cloudformation:DescribeStacks&quot;, 
+&quot;cloudformation:GetTemplateSummary&quot;, 
+&quot;cloudformation:SetStackPolicy&quot;, 
+&quot;cloudformation:ValidateTemplate&quot;, 
+&quot;cloudformation:UpdateStack&quot;, 
+&quot;ec2:describe*&quot;, 
+&quot;ec2:get*&quot;, 
+&quot;s3:GetObject&quot;, 
+&quot;sns:*&quot;
+], 
+&quot;Resource&quot;: [ 
+&quot;*&quot; 
+] 
+} 
+] 
+}</code> </li> 
+<li>Choose&nbsp;<strong>Review Policy</strong>.</li> 
+<li>Provide a name, such as <code>WordPressPolicy</code>, choose <strong>Create Policy</strong>.</li> 
+</ol> </li> 
+<li>In the navigation pane, choose&nbsp;<strong>Roles</strong>. Choose&nbsp;<strong>Create role</strong>&nbsp;and do the following: 
+<ol> 
+<li>Choose <strong>AWS service</strong>&nbsp;and then choose&nbsp;<strong>Service Catalog</strong>. Next, choose&nbsp;<strong>Next: Permissions</strong>.</li> 
+<li>In Filter panel, type <code>WordPressPolicy</code>.</li> 
+<li>Select the check box for the&nbsp;<code>WordPressPolicy</code> policy, and then choose&nbsp;<strong>Next: Review</strong>.</li> 
+<li>For&nbsp;<strong>Role name</strong>, type&nbsp;<code>WordPressServiceCatalogLaunchRole</code>.</li> 
+<li>Choose&nbsp;<strong>Create role</strong>.</li> 
+<li>In the filter panel, type <code>WordPressServiceCatalogLaunchRole</code>.</li> 
+<li>Click on the result with <code>WordPressServiceCatalogLaunchRole</code> as the role name.</li> 
+<li>Note the <strong>Role ARN</strong> displayed on the summary page.</li> 
+</ol> </li> 
+</ol> 
+<p>Next, you need to associate the IAM role with the product. This allows AWS Service Catalog to assume the role to launch the product. To associate the IAM role with the product:</p> 
+<ol> 
+<li>Open the AWS Service Catalog console at&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>Choose the <code>Training Portfolio.</code></li> 
+<li>On the portfolio details page, expand the&nbsp;<strong>Constraints</strong>&nbsp;section, and then choose&nbsp;<strong>Add constraints</strong>.</li> 
+<li>For&nbsp;Product, choose&nbsp;WordPress, and for&nbsp;<strong>Constraint type</strong>, choose&nbsp;<strong>Launch</strong>. Next, choose&nbsp;<strong>Continue</strong>.</li> 
+<li>On the&nbsp;<strong>Launch constraint</strong>&nbsp;page, for&nbsp;Enter<strong> role </strong>arn, type the role ARN your noted earlier, and then choose&nbsp;<strong>Submit</strong>.</li> 
+</ol> 
+<p>Next, you need to allow the <code>Training-Users</code> IAM Group to provision a product.</p> 
+<h3>Step 4. Grant the training attendees permission to provision a product from the portfolio</h3> 
+<p>Since users will be using AWS Service Catalog to provision a CloudFormation Stack, all they need is access to the AWS Service Catalog and the <strong>Cloudformation:ListStackResources</strong> access. In this step, you give users access:</p> 
+<ol> 
+<li>Open the IAM console at&nbsp;<a href="https://console.aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/iam/</a>.</li> 
+<li>In the navigation pane, choose&nbsp;<strong>Groups</strong>.</li> 
+<li>In the filter panel, type <code>Training-Users</code>, the search result will display a single result, Choose the result.</li> 
+<li>In the summary page, choose <strong>permissions</strong> tab.</li> 
+<li>Expand inline policies. Console will display a message stating there are no inline policies associated. Choose <strong>click here</strong>.</li> 
+<li>Choose <strong>Custom Policy</strong>, then&nbsp;<strong>Select</strong>. 
+<ol> 
+<li>For&nbsp;<strong>Policy Name</strong>, type&nbsp;<code>SCProvisionProductAccess</code>.</li> 
+<li>Paste the following example policy in&nbsp;<strong>Policy Document</strong>: <code class="lang-json">{ 
+&quot;Version&quot;: &quot;2012-10-17&quot;, 
+&quot;Statement&quot;: [ 
+{ 
+&quot;Effect&quot;: &quot;Allow&quot;, 
+&quot;Action&quot;: [&quot;cloudformation:ListStackResources&quot;, &quot;servicecatalog:ProvisionProduct&quot;], 
+&quot;Resource&quot;: &quot;*&quot; 
+} 
+] 
+}</code> </li> 
+</ol> </li> 
+<li>Choose <strong>Apply Policy</strong>.</li> 
+<li>On the <strong>Summary</strong> page, <strong>Permissions</strong> tab, <strong>Managed Policies</strong> section, choose <strong>Attach Policy</strong>.</li> 
+<li>In the Filter panel, type <strong>ServiceCatalogEndUserAccess</strong>, the search result will display a single result, choose the result.</li> 
+<li>Choose <strong>Attach Policy</strong>.</li> 
+</ol> 
+<p>Finally, you need to allow <code>Training-Users</code> IAM Group to access the <code>Training Portfolio</code>. To do so:</p> 
+<ol> 
+<li>Open <a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a> and choose the <code>Training Portfolio</code>.</li> 
+<li>On the portfolio details page, expand the&nbsp;<strong>Users, groups and roles&nbsp;</strong>section.</li> 
+<li>Choose&nbsp;<strong>Add user, group or role</strong>.</li> 
+<li>On the&nbsp;<strong>Groups</strong>&nbsp;tab, select the check box for&nbsp;<code>Training-Users</code>.</li> 
+<li>Choose&nbsp;<strong>Add Access</strong>.</li> 
+</ol> 
+<h3>Step 5. Verification</h3> 
+<p>Before you give the account credentials to training attendees, verify whether training users can provision the product.</p> 
+<h4><strong>Note</strong></h4> 
+<p>The WordPress template requires you to have at least one <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html" target="_blank" rel="noopener noreferrer">EC2 key pair</a> present in your selected AWS Region. For more information about how to create a key pair, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html#having-ec2-create-your-key-pair" target="_blank" rel="noopener noreferrer">Creating a Key Pair Using Amazon EC2</a>.</p> 
+<p>To verify that the training attendees can launch the <code>WordPress</code> product:</p> 
+<ol> 
+<li>Sign in to the AWS Management Console with the credentials of any IAM user you added to the <code>Training-Users</code> IAM group. Next, open the AWS Service Catalog console at&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>In the&nbsp;<strong>Products</strong>&nbsp;section of the console, choose&nbsp;<code>WordPress</code> and then choose&nbsp;<strong>Launch product</strong>.</li> 
+<li>On the&nbsp;<strong>Product version</strong>&nbsp;page, for&nbsp;<strong>Name</strong>, type&nbsp;<code>WordPress</code>.</li> 
+<li>In the&nbsp;<strong>Version</strong>&nbsp;table, choose&nbsp;<code>v1.0</code></li> 
+<li>Choose&nbsp;<strong>Next</strong>.</li> 
+<li>On the&nbsp;<strong>Parameters</strong>&nbsp;page, type the following and choose&nbsp;<strong>Next</strong>: 
+<li><strong>KeyName</strong> – Select the KeyName you have access to.</li> 
+<li><strong>SSHlocation</strong> – Type a valid CIDR range for the IP address from which you will connect to the instance. This can be the default value (0.0.0.0/0) to allow access from any IP address, your IP address followed by&nbsp;/32&nbsp;to restrict access to your IP address only, or something in between.</li> 
+<li><strong>DBPassword, DBUser, DBRootPassword</strong> – Provide alphanumeric characters of your choice.</li> 
+<li><strong>InstanceType</strong> – <code>t2.micro</code></li> 
+</ul> </li> 
+<li>On the <strong>TagOptions</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Notifications</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the&nbsp;<strong>Review</strong>&nbsp;page, review the information that you typed, and then choose&nbsp;<strong>Launch</strong>&nbsp;to launch the stack. The initial status of the product is shown as&nbsp;<strong>Under Change</strong>. After the product is launched, the status becomes <strong>Available</strong>.</li> 
+</ol> 
+<p>Your environment is ready. You can now distribute the user credentials that you created in <strong>step 1</strong> to all training attendees.</p> 
+<h3>Training starts</h3> 
+<p>Attendees will be able to provision the WordPress website using the AWS Service Catalog console, but they will not be able launch an EC2 instance or execute any other CloudFormation template from the AWS Management Console. After the training is over, you can easily clean up all resources created by attendees. To see how you can clean up all products attendees provisioned during the training, see <a href="https://aws.amazon.com/blogs/mt/using-aws-lambda-to-decommission-products-provisioned-from-an-aws-service-catalog-portfolio/" target="_blank" rel="noopener noreferrer">Part 2</a> of this series of blog posts.</p> 
+<b>Summary</b> 
+<p>This blog-post is Part one of a two-part series of blog posts. In Part one I show you how you can use AWS Service Catalog to allow users to launch CloudFormation stacks in your environment, in a controlled manner. AWS Service Catalog also allows you to define template constraints if you have a requirement of allowing users to specify only certain CloudFormation input parameters.</p> 
+<p>To see how you can clean up all products provisioned during the training, using AWS Lambda, see <a href="https://aws.amazon.com/blogs/mt/using-aws-lambda-to-decommission-products-provisioned-from-an-aws-service-catalog-portfolio/" target="_blank" rel="noopener noreferrer">Part two</a> of this two-part series of blog posts.</p> 
+<p>If you have questions about implementing the solution described in this post, start a new thread on the&nbsp;<a href="https://forums.aws.amazon.com/forum.jspa?forumID=198" target="_blank" rel="noopener noreferrer">AWS Service Catalog Forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://internal-cdn.amazon.com/badgephotos.amazon.com/?uid=kwwaikar" /> Kanchan Waikar is an AWS Marketplace Solutions Architect at Amazon Web Services. She enjoys helping customers build architectures using AWS, AWS Marketplace products, and AWS Service Catalog.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS Lambda to decommission products provisioned from an AWS Service Catalog portfolio</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Kanchan Waikar</span></span> | on 
+<time property="datePublished" datetime="2018-01-12T09:30:11+00:00">12 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/using-aws-lambda-to-decommission-products-provisioned-from-an-aws-service-catalog-portfolio/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>This blog-post is part two in a <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">two-part series</a> of blog posts. <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">Part one</a> shows you how to use <a href="https://aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">AWS Service Catalog</a> to control AWS resources available to your users. Part two shows you how you can use <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> to decommission all products provisioned from any product of a <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-portfolio" target="_blank" rel="noopener noreferrer">Portfolio</a>.</p> 
+<p>Sometimes you might have a business need to terminate all <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-provprod" target="_blank" rel="noopener noreferrer">products provisioned</a> in your AWS account from a specific portfolio. For example, you might want to decommission an old portfolio of products or terminate resources provisioned by your temporary users, as described in the <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">first blog post</a>. As an <a href="http://docs.aws.amazon.com/servicecatalog/latest/adminguide/what-is_concepts.html#what-is_concepts-users" target="_blank" rel="noopener noreferrer">AWS Service Catalog Administrator</a>, going through the AWS Service Catalog console and figuring out which products to terminate can be a daunting task if you are managing many portfolios. In this blog post, I share a sample Lambda function that you can use to terminate all products provisioned from a specific portfolio.</p> 
+<p>The solution explained in this post finds all products of the portfolio, and then for each product, it finds all provisioned products. Finally, it terminates all provisioned products found.</p> 
+<p><span id="more-2384"></span></p> 
+<p>Before you begin, you need to find out the portfolio-ID of the portfolio where you want to terminate all provisioned products.</p> 
+<h3>Find the portfolio ID</h3> 
+<ol> 
+<li>Open the AWS Service Catalog console at&nbsp;<a href="https://console.aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">https://console.aws.amazon.com/servicecatalog/</a>.</li> 
+<li>Choose the&nbsp;portfolio you want to decommission provisioned products from. In this <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">blog post series</a>, we choose <code>Training Portfolio</code>.</li> 
+<li>On the portfolio details page, locate the <strong>Portfolio ID</strong> and make note of it for later use.</li> 
+</ol> 
+<p>Next, you need to set up the Lambda function which will terminate provisioned products from your portfolio.</p> 
+<h3>Deploy the TerminateProvisionedProducts Lambda function</h3> 
+<p>To terminate all products provisioned from a portfolio, you need to set up the <code>TerminateProvisionedProducts</code> Lambda function. You can set up the Lambda function by running a CloudFormation template.</p> 
+<ol> 
+<li>Sign in to the AWS Management Console and go to the AWS CloudFormation console.</li> 
+<li>Next, launch the CloudFormation stack by choosing the following <strong>Launch Stack</strong> link.<br /> <a href="https://console.aws.amazon.com/cloudformation/home?#/stacks/new?stackName=TerminateSCProductsProvisioned&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/Blog2SetupCFT-ver3.json" target="_blank" rel="noopener noreferrer"><img width="100%" src="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/images/cloudformation-launch-stack-button.png" /></a></li> 
+<li>Choose <strong>Next</strong>.</li> 
+<li>On the <strong>Specify Details</strong> page, leave Stack Name as <code>TerminateSCProductsProvisioned</code> and&nbsp;type PortfolioID as the <code>Portfolio ID </code>you noted in the preceding section.</li> 
+<li>Choose <strong>Next</strong>.</li> 
+<li>On the <strong>Options</strong> page, choose <strong>Next</strong>.</li> 
+<li>On the <strong>Review</strong> page, <strong>select</strong> the <strong>check-box</strong> displayed next to the following message. 
+<li><em><strong>I acknowledge that AWS CloudFormation might create IAM resources.</strong></em></li> 
+</ul> </li> 
+<li>Choose <strong>Create</strong>. The CloudFormation template creates the Lambda function and an <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) role to run the Lambda function.</li> 
+<li>On the <strong>Stacks</strong> page, select <code>TerminateSCProductsProvisioned</code> stack.</li> 
+<li>In the detail pane, choose <strong>Outputs</strong>&nbsp;to view the output of your stack.</li> 
+</ol> 
+<p>After CloudFormation successfully creates a stack, the <strong>Outputs</strong> tab displays the following result:</p> 
+<li><code>TerminateProvisionedProductsLambdaFunction</code>: Value displays the name of the <code>TerminateProvisionedProducts</code> Lambda function. Note the same.</li> 
+<p>You will run the <code>TerminateProvisionedProducts</code> Lambda function to decommission products provisioned from your portfolio.</p> 
+<h3>Run the Lambda function</h3> 
+<p>Next, run the <code>TerminateProvisionedProducts</code> Lambda function. This Lambda function finds all products of the portfolio, and then for each product, it finds all provisioned products. Finally, it terminates all provisioned products found.</p> 
+<h4>Warning</h4> 
+<p>Do not run this Lambda function if you are sharing a product between portfolios. For each product in the portfolio, the Lambda function finds and terminates all provisioned products. Running this function on a portfolio that contains a product shared with another portfolio can lead to unexpected results such as inadvertently deleting the product provisioned from other portfolios.</p> 
+<p>To run the Lambda function do the following.</p> 
+<ol> 
+<li>Sign in to the AWS Management Console and select&nbsp;<strong>Lambda</strong> in the&nbsp;<strong>Services</strong>&nbsp;menu.</li> 
+<li>Select <strong>Functions</strong> from the navigation pane.</li> 
+<li>In the <strong>Functions</strong> pane, choose the name of the <code>TerminateProvisionedProducts</code> Lambda function you noted earlier.</li> 
+<li>Choose the <strong>Select a test event</strong> drop-down list then select <strong>Configure test events</strong>.</li> 
+<li>On the <strong>Configure test event</strong> page, select <strong>Create new test event</strong>, specify the event name as <code>TerminateSCProducts</code>.</li> 
+<li>Leave the text in the editor as it is. The Lambda function does not require any input.</li> 
+<li>Choose <strong>Create</strong>.</li> 
+<li>Next, choose <strong>Test</strong>.</li> 
+</ol> 
+<p>After the function executes, you will see the output containing a list of terminated provisioned products.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/11/Screen-Shot-2018-01-11-at-9.40.05-AM.png" /></p> 
+<p>The AWS Service Catalog uses the role specified in the launch constraint to terminate the provisioned product. The Lambda function may not be able to clean-up resources if launch constraints are not properly configured and you would need to discover all resources that did not get cleaned up.</p> 
+<h3>Discover resources that did not get cleaned-up</h3> 
+<p>In this step, you will use <a href="http://docs.aws.amazon.com/awsconsolehelpdocs/latest/gsg/resource-groups.html" target="_blank" rel="noopener noreferrer">Resource Groups</a> to discover the resources associated with the portfolio decommissioned in the previous section. In this blog post series (see <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">Part 1</a>), we use <code>Portfolio-Name</code> as the <strong>Key</strong> and <code>Training Portfolio</code> as the <strong>Value</strong>. If you are cleaning-up some other portfolio, then use tag-option you created on the portfolio you decommissioned in the previous section.</p> 
+<ol> 
+<li>Sign in to the AWS Management Console. On the navigation bar, choose&nbsp;<strong>Resource Groups</strong>, and then under Classic groups, choose&nbsp;<strong>Create a classic Group</strong>.</li> 
+<li>On the&nbsp;<strong>Create a resource group</strong>&nbsp;page, for&nbsp;<strong>Group name</strong>, type <code>Training Portfolio Resources</code>.</li> 
+<li>For&nbsp;<strong>Tags</strong>, choose an appropriate key in the first box. In the box, next to the first box, select an appropriate value.</li> 
+<li>Choose <strong>Save</strong>.</li> 
+<li>The console will list all the resources associated with the tag you provided. Review the items displayed in the navigation pane.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/02/img2-1024x466.png" /></p> 
+<p>AWS Service Catalog associated the tag you specified during portfolio creation to all resources provisioned, this means that you can see the resources that did not get cleaned up with the Lambda function in the navigation pane. If you see any resources, clean them up manually.</p> 
+<p>Congratulations! You have successfully decommissioned all products provisioned from your portfolio.</p> 
+<h3>Summary</h3> 
+<p>This blog-post is Part two of a <a href="https://aws.amazon.com/blogs/mt/control-aws-resources-available-to-your-users-using-aws-service-catalog/" target="_blank" rel="noopener noreferrer">two-part series</a> of blog posts. It shows how you can use AWS Lambda to decommission all products provisioned from a portfolio. The series shows how you can use AWS Service Catalog to control what your IAM users can launch, and Part two shares a sample Lambda function that cleans up products provisioned from a portfolio.</p> 
+<p>AWS Service Catalog allows you to centrally manage commonly deployed IT services, and helps you achieve consistent governance and meet your compliance requirements, while enabling you to quickly deploy only the approved IT services you need.</p> 
+<p>If you have questions about implementing the solution described in this post, start a new thread on the&nbsp;<a href="https://forums.aws.amazon.com/forum.jspa?forumID=198" target="_blank" rel="noopener noreferrer">AWS Service Catalog Forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://internal-cdn.amazon.com/badgephotos.amazon.com/?uid=kwwaikar" /> Kanchan Waikar is an AWS Marketplace Solutions Architect at Amazon Web Services. She enjoys helping customers build architectures using AWS, AWS Marketplace products, and AWS Service Catalog.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/Ha_EC2-Management-tools_SOCIAL.jpg" /> 
 <b class="lb-b blog-post-title" property="name headline">Enable Modular and Reusable Configuration Using Composite AWS Systems Manager Documents</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1116,111 +1421,6 @@ return(IValue)
 <p>When users authenticate to AWS through federation, access to AWS Service Catalog is managed through an IAM role. In such cases, an organization might require excluding access to AWS Service Catalog products) for certain users. This can be accomplished by creating an Amazon DynamoDB table with a list of users who have access to products and then modifying the sc-get-user-id Lambda function so the function will query the table and return status FAILED when user doesn’t have permission to provision a given product. The name of the product can be passed to the Lambda function as additional parameter directly from CloudFormation template.</p> 
 <b>About the Author</b> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/19/remek.jpg" /><br /> Remek Hetman is a Senior Cloud Infrastructure Architect with the Amazon Web Services ProServe team. He works with AWS Enterprise customers providing technical guidance and assistance for Infrastructure, DevOps, and big data to help them make the best use of AWS services. Outside of work he enjoys spending time actively as well as pursing his passion – astronomy.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Automating IAM Roles For Cross-Account Access Series Overview</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Erin McGill</span></span> | on 
-<time property="datePublished" datetime="2017-12-14T13:26:20+00:00">14 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/automating-iam-roles-for-cross-account-access-series-overview/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>The <a href="https://aws.amazon.com/blogs/apn/">AWS Partner Network Blog</a> has recently published a series describing a method to automate the creation of an <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html">IAM role</a> for <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html">cross-account access</a>, and how to collect the information needed for a partner to assume the role after creation. This post gives readers an overview of the series, summarizing each of the individual posts with links back to the original content for further reading.</p> 
-<p>As a reminder, cross-account IAM roles <a href="https://aws.amazon.com/blogs/apn/securely-accessing-customer-aws-accounts-with-cross-account-iam-roles/">allow customers to grant access</a> to resources within their account to a partner or other third parties while enabling the customers to maintain their security posture. Cross-account roles allow the customer to delegate access without the need to distribute key material, and without the burden on the third party to safely handle key material after receipt.</p> 
-<p>The blog series kicked off with a <a href="https://aws.amazon.com/blogs/apn/easing-the-creation-of-cross-account-roles-for-customers/">post</a> that explained how to create a custom launch stack URL for AWS CloudFormation. The URL will take users directly to the CloudFormation Create Stack wizard, with values for the Amazon S3 template location, stack name, and default parameters already populated. The launch stack URL eliminates the need to exchange template files with the customer, and ensures that the customer is using the proper template with the correct values.</p> 
-<p><span id="more-1250"></span></p> 
-<p>The <a href="https://aws.amazon.com/blogs/apn/generating-custom-aws-cloudformation-templates-with-lambda-to-create-cross-account-roles/">second post</a> describes how to use an AWS Lambda function to populate a AWS CloudFormation template with uniquely generated values. The series example uses an <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html">External ID</a>, an ID that is unique for each end user. This value needs to be set within the CloudFormation template. When triggered, the Lambda function pulls down the default template, inserts a generated unique External ID into the template, and uploads the customized template to an S3 bucket. Once the template upload is complete, the end user is presented with a custom launch stack URL containing the unique template Amazon S3 location. Finally, we demonstrated how to use the Launch Stack icon to make the URL more visible to users.</p> 
-<p>The <a href="https://aws.amazon.com/blogs/apn/collecting-information-from-aws-cloudformation-resources-created-in-external-accounts-with-custom-resources/">third post</a> details how to reliably return the Amazon Resource Name (ARN) of the cross-account role created by AWS CloudFormation to a third party. As a reminder, the third party must use the ARN, as well as the ExternalID, when assuming the role in the end user’s account. The post demonstrates a CloudFormation <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html">custom resource</a> designed to send the ARN back to the third-party account, which consumes the ARN and stores it for later use.</p> 
-<p>The <a href="https://aws.amazon.com/blogs/apn/wrap-up-cross-account-role-onboarding-workflow/">final post</a> of the series brings the details of the previous three blog posts together into one cohesive solution. It shows how to implement the automation of cross-account role creation for customer onboarding using the techniques described in each post in a completed workflow. The workflow creates a smoother onboarding experience for the customer while creating a secure way for the third party account to create resources within the customer account.</p> 
-<p>We hope that the blog series can help you and your company improve your customer on-boarding experience. You can avoid the sharing of sensitive keys and the error-prone approach of requiring your customers to cut and paste information in their account and your on-boarding portal.</p> 
-<hr /> 
-<p><strong>About the Author</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/07/headshot-Erin-220x300.png" />Erin McGill is a Solutions Architect in the AWS Partner Program with a focus on DevOps and automation tooling.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Service Catalog Hub and Spoke Model: How to Automate the Deployment and Management of Service Catalog to Many Accounts</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Jason Norton</span></span> | on 
-<time property="datePublished" datetime="2017-12-14T13:05:36+00:00">14 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-service-catalog-hub-and-spoke-model-how-to-automate-the-deployment-and-management-of-service-catalog-to-many-accounts/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Many organizations may have tens to hundreds of accounts and thousands of users that require services in AWS. Enforcing organizational governance controls for deploying services requires time and resources to build the necessary guardrails, security controls, and auditing. Using the AWS Service Catalog hub and spoke model and launch constraints, I’ll show you how to centrally manage Service Catalog deployments in a master/child account relationship. I’ll also show you how to enforce service constraints that allow users to self-provision AWS products, often reducing deployment costs, time, and management.</p> 
-<p>Before diving into the details, first I’ll discuss the Service Catalog components.<span id="more-1889"></span></p> 
-<b>Service Catalog components</b> 
-<h3>Product</h3> 
-<p>An AWS Service Catalog product is an IT service (VPC, web server, n-tier environment, database, etc.) that you want to make available for deployment on AWS.</p> 
-<h3>Portfolio</h3> 
-<p>An AWS Service Catalog portfolio is a collection of products and their configuration information, plus launch and access controls.</p> 
-<h3>Constraint</h3> 
-<p>An AWS Service Catalog constraint is a restriction on the ways that specific AWS resources can be deployed for a product, e.g., template constraints to allow only certain EC2 instance sizes.</p> 
-<h3>Provisioned Product</h3> 
-<p>An AWS Service Catalog product is launched using an AWS CloudFormation process. The collection of launched services is called a provisioned product. You might also see this collection of launched services referred to as a landscape.</p> 
-<b>Implementation overview</b> 
-<p>If you need to centrally manage AWS Service Catalog portfolios and products and then deploy across multiple accounts you can use a master Service Catalog account. Use this account to deploy the minimum portfolio, products, and constraints. Then you can share the master portfolios to child accounts where they are imported. Products that form the imported master portfolios are added to local portfolios in the child account. Constraints, tags, and users for these products can be added so that users in the child account can deploy any AWS CloudFormation stack implemented as a product.</p> 
-<p>This is called the AWS Service Catalog hub and spoke model.</p> 
-<p><strong>Hub and spoke model</strong></p> 
-<li>One master account – Creates baseline products and shares the portfolio</li> 
-<li>Multiple child accounts – Import portfolios and leverage the products</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Master_Child-1024x552.png" /></p> 
-<p><strong>AWS Service Catalog administration</strong></p> 
-<p>The hub-spoke model allows you to deploy Service Catalog portfolios and products centrally and locally in an account.</p> 
-<p><strong>Two methods of leveraging shared portfolios</strong></p> 
-<p>Imported portfolio – leverage the imported portfolio</p> 
-<li>Launch and template constraints are inherited</li> 
-<li>Constraints cannot be modified</li> 
-<p>Local Portfolios – Create a local portfolio and import products from the shared portfolio.</p> 
-<li>Only template constraints are inherited</li> 
-<li>You can create and assign additional template constraints</li> 
-<li>You have to assign launch constraints</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Process-1024x497.png" /></p> 
-<p><strong>Walkthrough</strong><br /> Prerequisites:</p> 
-<li>Two AWS Accounts</li> 
-<li>Administrator IAM permissions to each account</li> 
-<li>Access keys or AWS STS Credentials for CLI access to each account</li> 
-<li>Download the python scripts from <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ServiceCatalogAgileGovernance.zip">here</a>.</li> 
-<p><strong>Note:</strong> Before running the following Python scripts, make sure that your AWS_DEFAULT_PROFILE is set to the correct account for deployment and that you have the proper administrative permissions.</p> 
-<p>Files included in the repo:</p> 
-<p>Master_SC_Single_Portfolio_Deploy_v1.py</p> 
-<li>Python script that creates a Service Catalog portfolio, two products for the portfolio from the CloudFormation scripts that follow, template constraints, and tagging to enforce organization governance controls. The script shares the portfolio with selected child accounts.</li> 
-<p>Child_SC_Single_Portfolio_Deploy_v1.py</p> 
-<li>Python script that creates a local Service Catalog portfolio in a child account and imports the two products created in the master account, discussed previously. Creates launch constraints for each product to limit launching resources to a single IAM role and appropriate tagging.</li> 
-<li>LAMP_Single_Instance_v1.template</li> 
-<li>LAMP_Launch_Constraint.json</li> 
-<li>Linux_Single_Instance_v1.template</li> 
-<li>Linux_Instance_Launch_Constraint.json</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Implementation-1024x678.png" /></p> 
-<p>A link to the python code can be found <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ServiceCatalogAgileGovernance.zip">here</a>.</p> 
-<p><strong>Master Service Catalog deployment</strong></p> 
-<p>$ export AWS_DEFAULT_PROFILE=Master_Service_Catalog_Profile</p> 
-<p>1. Upload CFTs and constraint files to the Amazon S3 bucket that the Service Catalog master account has access to:</p> 
-<li>LAMP_Single_Instance_v1.template</li> 
-<li>Linux_Single_Instance_v1.template</li> 
-<li>LAMP_Launch_Constraint.json</li> 
-<li>Linux_Instance_Launch_Constraint.json</li> 
-<p>2. Run the master deployment script with the bucket name from step 1 as a command line argument. Additional command line arguments can be any AWS accounts that you want to share the Master Portfolio and Products with:</p> 
-<p>$ python Master_SC_Single_Portfolio_Deploy_v1.py bucketname share_account_1 share_account_2</p> 
-<p>3. Copy the portfolio ID provided by this script for deploying Service Catalog in the child account.</p> 
-<p>Your Linux Portfolio ID is: port-xxxxxxxxxxxxx</p> 
-<p><strong>Child Service Catalog deployment</strong></p> 
-<p>4. For each child account that you shared with in the previous master Service catalog section, do the following steps:</p> 
-<p>$ export AWS_DEFAULT_PROFILE=Child_Service_Catalog_Profile</p> 
-<p>5. Run the child deployment script with the portfolio ID of the master Service Catalog portfolio that you created in step 1:</p> 
-<p>$ python Child_SC_Single_Portfolio_Deploy_v1.py port-xxxxxxxxxxxxx</p> 
-<p><strong>After deployment</strong></p> 
-<p>6. To ensure that everything deployed properly, check your master and child accounts for portfolios, products, and constraints.</p> 
-<p>7. Add users in the child account to use the portfolio that you created.</p> 
-<p>8. Test launching products in the child account. Users must have an Amazon EC2 key pair to deploy products.</p> 
-<p>a. Notice when deploying the LAMP Instance that users are constrained to specific parameter values. When deploying the Linux single instance users are restricted to specific Security Groups (“WebServerSecurityGroup”) that were created by the LAMP instance product.</p> 
-<p><strong>Summary</strong><br /> In this blog post I demonstrate the value of deploying the AWS Service Catalog in a hub and spoke model. In addition, I explain the process and have provided code samples. These samples show you how to automate a deployment across many AWS accounts and constrain users to specific AWS resource values to meet organization governance controls.</p> 
-<p><strong>About the Author</strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/21/Norton-Bio-Shot-150x150.jpg" /></p> 
-<p>Jason Norton is a Sr. Consultant with Professional Services&nbsp;who loves showing his customers the possibilities.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

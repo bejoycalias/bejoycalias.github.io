@@ -190,6 +190,298 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/08/18/cross-account-integration-with-amazon-sns_img1-1260x459.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Cross-Account Integration with Amazon SNS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T12:51:03+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-queue-service-sqs/" title="View all posts in Amazon Simple Queue Service (SQS)*"><span property="articleSection">Amazon Simple Queue Service (SQS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-2726" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2726&amp;disqus_title=Cross-Account+Integration+with+Amazon+SNS&amp;disqus_url=https://aws.amazon.com/blogs/compute/cross-account-integration-with-amazon-sns/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2726');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h4>Contributed by Zak Islam, Senior Manager, Software Development, AWS Messaging</h4> 
+<p>&nbsp;</p> 
+<p><a href="https://aws.amazon.com/sns/">Amazon Simple Notification Service</a>&nbsp;(Amazon SNS)&nbsp;is a fully managed AWS service that makes it easy to decouple your application components and fan-out messages. SNS provides topics (similar to topics in message brokers such as RabbitMQ or ActiveMQ) that you can use to create 1:1, 1:N, or N:N producer/consumer design patterns. For more information about how to send messages from SNS to Amazon SQS, AWS Lambda, or HTTP(S) endpoints in the same account, see <a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.html">Sending Amazon SNS Messages to Amazon SQS Queues</a>.</p> 
+<p>SNS can be used to send messages within a single account or to resources in different accounts to create administrative isolation. This enables administrators to grant only the minimum level of permissions required to process a workload (for example, limiting the scope of your application account to only send messages and to deny deletes). This approach is commonly known as the “principle of least privilege.” If you are interested, read more about AWS’s <a href="https://aws.amazon.com/answers/account-management/aws-multi-account-security-strategy/">multi-account security strategy</a>.</p> 
+<p>This is great from a security perspective, but why would you want to share messages between accounts? It may sound scary, but it’s a common practice to isolate application components (such as producer and consumer) to operate using different AWS accounts to lock down privileges in case credentials are exposed. In this post, I go slightly deeper and explore how to set up your SNS topic so that it can route messages to SQS queues that are owned by a separate AWS account.</p> 
+<b>Potential use cases</b> 
+<p style="text-align: left">First, look at a common order processing design pattern:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_1.png" /></a></p> 
+<p><span id="more-2726"></span>This is a simple architecture. A web server submits an order directly to an SNS topic, which then fans out messages to two SQS queues. One SQS queue is used to track all incoming orders for audits (such as anti-entropy, comparing the data of all replicas and updating each replica to the newest version). The other is used to pass the request to the order processing systems.</p> 
+<p>Imagine now that a few years have passed, and your downstream processes no longer scale, so you are kicking around the idea of a re-architecture project. To thoroughly test your system, you need a way to replay your production messages in your development system. Sure, you can build a system to replicate and replay orders from your production environment in your development environment. Wouldn’t it be easier to subscribe your development queues to the production SNS topic so you can test your new system in real time? That’s exactly what you can do here.</p> 
+<p>Here’s another use case. As your business grows, you recognize the need for more metrics from your order processing pipeline. The analytics team at your company has built a metrics aggregation service and ingests data via a central SQS queue. Their architecture is as follows:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/03/cross_acct_integration_sns_image_2.png" /></a></p> 
+<p>Again, it’s a fairly simple architecture. All data is ingested via SQS queues (master_ingest_queue, in this case). You subscribe the master_ingest_queue, running under the analytics team’s AWS account, to the topic that is in the order management team’s account.</p> 
+<b>Making it work</b> 
+<p>Now that you’ve seen a few scenarios, let’s dig into the details. There are a couple of ways to link an SQS queue to an SNS topic (subscribe a queue to a topic):</p> 
+<ol> 
+<li>The queue owner can create a subscription to the topic.</li> 
+<li>The topic owner can subscribe a queue in another account to the topic.</li> 
+</ol> 
+<b>Queue owner subscription</b> 
+<p>What happens when the queue owner subscribes to a topic? In this case, assume that the topic owner has given permission to the subscriber’s account to call the Subscribe API action using the topic ARN (Amazon Resource Name). For the examples below, also assume the following:</p> 
+<li>&nbsp;<em>Topic_Owner</em> is the identifier for the account that owns the topic <em>MainTopic</em></li> 
+<li><em>Queue_Owner</em> is the identifier for the account that owns the queue subscribed to the main topic</li> 
+<p>To enable the subscriber to subscribe to a topic, the topic owner must add the sns:Subscribe and topic ARN to the topic policy via the AWS Management Console, as follows:</p> 
+<code class="lang-json">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Id&quot;:&quot;MyTopicSubscribePolicy&quot;,
+&quot;Statement&quot;:[{
+&quot;Sid&quot;:&quot;Allow-other-account-to-subscribe-to-topic&quot;,
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Principal&quot;:{
+&quot;AWS&quot;:&quot;Topic_Owner&quot;
+},
+&quot;Action&quot;:&quot;sns:Subscribe&quot;,
+&quot;Resource&quot;:&quot;arn:aws:sns:us-east-1:Queue_Owner:MainTopic&quot;
+}
+]
+}</code> 
+<p>After this has been set up, the subscriber (using account <em>Queue_Owner</em>) can call Subscribe to link the queue to the topic. After the queue has been successfully subscribed, SNS starts to publish notifications. In this case, neither the topic owner nor the subscriber have had to process any kind of confirmation message.</p> 
+<b>Topic owner subscription</b> 
+<p>The second way to subscribe an SQS queue to an SNS topic is to have the <em>Topic_Owner</em> account initiate the subscription for the queue from account <em>Queue_Owner</em>. In this case, SNS first sends a confirmation message to the queue. To confirm the subscription, a user who can read messages from the queue must visit the URL specified in the&nbsp;SubscribeURL&nbsp;value in the message. Until the subscription is confirmed, no notifications published to the topic are sent to the queue. To confirm a subscription, you can use the SQS console or the&nbsp;ReceiveMessage&nbsp;API action.</p> 
+<b>What’s next?</b> 
+<p>In this post, I covered a few simple use cases but the principles can be extended to complex systems as well. As you architect new systems and refactor existing ones, think about where you can leverage queues (SQS) and topics (SNS) to build a loosely coupled system that can be quickly and easily extended to meet your business need.</p> 
+<p>For step by step instructions, see&nbsp;<a href="http://docs.aws.amazon.com/sns/latest/dg/SendMessageToSQS.cross.account.html">Sending Amazon SNS messages to an Amazon SQS queue in a different account</a>. You can also visit the following resources to get started working with message queues and topics:</p> 
+<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-messages-distributed-applications/">Send Messages Between Distributed Applications with Amazon SQS</a></span></li> 
+<li><span style="color: #000000">10-minute Tutorial: <a href="https://aws.amazon.com/getting-started/tutorials/send-fanout-event-notifications/">Send&nbsp;Fanout Event Notifications with Amazon SNS and Amazon SQS</a></span></li> 
+<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</a></li> 
+<li>Blog:&nbsp;<a href="https://aws.amazon.com/blogs/compute/building-scalable-applications-and-microservices-adding-messaging-to-your-toolbox/">Building Scalable Applications and Microservices: Adding Messaging to Your Toolbox</a></li> 
+<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sns/getting-started/">Getting started with Amazon SNS</a></li> 
+<li>Other resources:&nbsp;<a href="https://aws.amazon.com/sqs/getting-started/">Getting started with Amazon SQS</a></li> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-2726');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/route-53-healthcheck.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Building a Multi-region Serverless Application with Amazon API Gateway and AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Stefano Buliani</span></span> | on 
+<time property="datePublished" datetime="2017-11-13T14:28:20+00:00">13 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-route-53/" title="View all posts in Amazon Route 53*"><span property="articleSection">Amazon Route 53*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/building-a-multi-region-serverless-application-with-amazon-api-gateway-and-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3143" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3143&amp;disqus_title=Building+a+Multi-region+Serverless+Application+with+Amazon+API+Gateway+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-a-multi-region-serverless-application-with-amazon-api-gateway-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3143');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+This post written by:&nbsp;Magnus Bjorkman – Solutions Architect 
+<p>Many customers are looking to run their services at global scale, deploying their backend to multiple regions. In this post, we describe how to deploy a Serverless API into multiple regions and how to leverage <a title="Amazon Route 53" href="https://aws.amazon.com/route53/" target="_blank" rel="noopener noreferrer">Amazon Route 53</a> to route the traffic between regions. We use latency-based routing and health checks to achieve an active-active setup that can fail over between regions in case of an issue. We leverage the new regional API endpoint feature in <a title="Amazon API Gateway" href="https://aws.amazon.com/api-gateway" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a> to make this a seamless process for the API client making the requests. This post does not cover the replication of your data, which is another aspect to consider when deploying applications across regions.</p> 
+<h3>Solution overview</h3> 
+<p>Currently, the default API endpoint type in API Gateway is the edge-optimized API endpoint, which enables clients to access an API through an Amazon CloudFront distribution. This typically improves connection time for geographically diverse clients. By default, a custom domain name is globally unique and the edge-optimized API endpoint would invoke a Lambda function in a single region in the case of Lambda integration. You can’t use this type of endpoint with a Route 53 active-active setup and fail-over.</p> 
+<p>The new regional API endpoint in API Gateway moves the API endpoint into the region and the custom domain name is unique per region. This makes it possible to run a full copy of an API in each region and then use Route 53 to use an active-active setup and failover. The following diagram shows how you do this:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/active-active-architecture.png" /></p> 
+<li>Deploy your Rest API stack, consisting of API Gateway and Lambda, in two regions, such as us-east-1 and us-west-2.</li> 
+<li>Choose the regional API endpoint type for your API.</li> 
+<li>Create a custom domain name and choose the regional API endpoint type for that one as well. In both regions, you are configuring the custom domain name to be the same, for example, helloworldapi.replacewithyourcompanyname.com</li> 
+<li>Use the host name of the custom domain names from each region, for example, xxxxxx.execute-api.us-east-1.amazonaws.com and xxxxxx.execute-api.us-west-2.amazonaws.com, to configure record sets in Route 53 for your client-facing domain name, for example, helloworldapi.replacewithyourcompanyname.com</li> 
+<p>The above solution provides an active-active setup for your API across the two regions, but you are not doing failover yet. For that to work, set up a health check in Route 53:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/route-53-healthcheck.png" /></p> 
+<p>A Route 53 health check must have an endpoint to call to check the health of a service. You could do a simple ping of your actual Rest API methods, but instead provide a specific method on your Rest API that does a deep ping. That is, it is a Lambda function that checks the status of all the dependencies.</p> 
+<p>In the case of the Hello World API, you don’t have any other dependencies. In a real-world scenario, you could check on dependencies as databases, other APIs, and external dependencies. Route 53 health checks themselves cannot use your custom domain name endpoint’s DNS address, so you are going to directly call the API endpoints via their region unique endpoint’s DNS address.</p> 
+<h3>Walkthrough</h3> 
+<p>The following sections describe how to set up this solution. You can find the complete solution at the <a title="Multi region serverless app GitHub sample" href="https://github.com/aws-samples/blog-multi-region-serverless-service/" target="_blank" rel="noopener noreferrer">blog-multi-region-serverless-service GitHub repo</a>. Clone or download the repository locally to be able to do the setup as described.</p> 
+<h4>Prerequisites</h4> 
+<p>You need the following resources to set up the solution described in this post:</p> 
+<li><a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html" target="_blank" rel="noopener noreferrer">AWS CLI</a></li> 
+<li>An S3 bucket in each region in which to deploy the solution, which can be used by the AWS Serverless Application Model (SAM). You can use the following CloudFormation templates to create buckets in us-east-1 and us-west-2: 
+<li>us-east-1: <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=SAMS3Bucket&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/building-a-multi-region-serverless-application/create-s3-bucket.yaml" target="_blank" rel="noopener noreferrer"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" /></a></li> 
+<li>us-west-2: <a href="https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=SAMS3Bucket&amp;templateURL=https://s3.amazonaws.com/computeblog-us-west-2/building-a-multi-region-serverless-application/create-s3-bucket.yaml" target="_blank" rel="noopener noreferrer"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" /></a></li> 
+</ul> </li> 
+<li>A hosted zone registered in Amazon Route 53. This is used for defining the domain name of your API endpoint, for example, <em>helloworldapi.replacewithyourcompanyname.com</em>. You can use a third-party domain name registrar and then <a title="Configure Route 53 DNS" href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/MigratingDNS.html" target="_blank" rel="noopener noreferrer">configure the DNS in Amazon Route 53</a>, or you can <a title="Purchase domain from Route 53" href="http://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-register.html" target="_blank" rel="noopener noreferrer">purchase a domain directly from Amazon Route 53.</a></li> 
+<h4>Deploy API with health checks in two regions</h4> 
+<p>Start by creating a small “Hello World” Lambda function that sends back a message in the region in which it has been deployed.</p> 
+<code class="lang-python">
+&quot;&quot;&quot;Return message.&quot;&quot;&quot;
+import logging
+logging.basicConfig()
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+def lambda_handler(event, context):
+&quot;&quot;&quot;Lambda handler for getting the hello world message.&quot;&quot;&quot;
+region = context.invoked_function_arn.split(':')[3]
+logger.info(&quot;message: &quot; + &quot;Hello from &quot; + region)
+return {
+&quot;message&quot;: &quot;Hello from &quot; + region
+}
+</code> 
+<p>Also create a Lambda function for doing a health check that returns a value based on another environment variable (either “ok” or “fail”) to allow for ease of testing:</p> 
+<code class="lang-python">
+&quot;&quot;&quot;Return health.&quot;&quot;&quot;
+import logging
+import os
+logging.basicConfig()
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+def lambda_handler(event, context):
+&quot;&quot;&quot;Lambda handler for getting the health.&quot;&quot;&quot;
+logger.info(&quot;status: &quot; + os.environ['STATUS'])
+return {
+&quot;status&quot;: os.environ['STATUS']
+}
+</code> 
+<p>Deploy both of these using an AWS <a title="Serverless Application Model (SAM)" href="https://github.com/awslabs/serverless-application-model" target="null">Serverless Application Model (SAM)</a> template. SAM is a CloudFormation extension that is optimized for serverless, and provides a standard way to create a complete serverless application. You can find the full <a title="Hello World SAM template" href="https://github.com/aws-samples/blog-multi-region-serverless-service/blob/master/helloworld-api/helloworld-sam.yaml" target="null">helloworld-sam.yaml</a> template in the blog-multi-region-serverless-service GitHub repo.</p> 
+<p>A few things to highlight:</p> 
+<li>You are using inline Swagger to define your API so you can substitute the current region in the x-amazon-apigateway-integration section.</li> 
+<li>Most of the Swagger template covers CORS to allow you to test this from a browser.</li> 
+<li>You are also using substitution to populate the environment variable used by the “Hello World” method with the region into which it is being deployed.</li> 
+<p>The Swagger allows you to use the same SAM template in both regions.</p> 
+<p>You can only use SAM from the AWS CLI, so do the following from the command prompt. First, deploy the SAM template in us-east-1 with the following commands, replacing “&lt;your bucket in us-east-1&gt;” with a bucket in your account:</p> 
+<code class="lang-bash">
+&gt; cd helloworld-api
+&gt; aws cloudformation package --template-file helloworld-sam.yaml --output-template-file /tmp/cf-helloworld-sam.yaml --s3-bucket &lt;your bucket in us-east-1&gt; --region us-east-1
+&gt; aws cloudformation deploy --template-file /tmp/cf-helloworld-sam.yaml --stack-name multiregionhelloworld --capabilities CAPABILITY_IAM --region us-east-1
+</code> 
+<p>Second, do the same in us-west-2:</p> 
+<code class="lang-bash">
+&gt; aws cloudformation package --template-file helloworld-sam.yaml --output-template-file /tmp/cf-helloworld-sam.yaml --s3-bucket &lt;your bucket in us-west-2&gt; --region us-west-2
+&gt; aws cloudformation deploy --template-file /tmp/cf-helloworld-sam.yaml --stack-name multiregionhelloworld --capabilities CAPABILITY_IAM --region us-west-2
+</code> 
+<p>The API was created with the default endpoint type of <strong>Edge Optimized</strong>. Switch it to <strong>Regional</strong>. In the Amazon API Gateway console, select the API that you just created and choose the wheel-icon to edit it.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/api-gateway-edit-api.png" /></p> 
+<p>In the edit screen, select the <strong>Regional</strong> endpoint type and save the API. Do the same in both regions.</p> 
+<p>Grab the URL for the API in the console by navigating to the method in the <strong>prod</strong> stage.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/api-gateway-endpoint-link.png" /></p> 
+<p>You can now test this with curl:</p> 
+<code class="lang-bash">
+&gt; curl https://2wkt1cxxxx.execute-api.us-west-2.amazonaws.com/prod/helloworld
+{&quot;message&quot;: &quot;Hello from us-west-2&quot;}
+</code> 
+<p>Write down the domain name for the URL in each region (for example, <em>2wkt1cxxxx.execute-api.us-west-2.amazonaws.com</em>), as you need that later when you deploy the Route 53 setup.</p> 
+<h4>Create the custom domain name</h4> 
+<p>Next, create an Amazon API Gateway custom domain name endpoint. As part of using this feature, you must have a hosted zone and domain available to use in Route 53 as well as an SSL certificate that you use with your specific domain name.</p> 
+<p>You can create the SSL certificate by using AWS Certificate Manager. In the ACM console, choose <strong>Get started</strong> (if you have no existing certificates) or <strong>Request a certificate</strong>. Fill out the form with the domain name to use for the custom domain name endpoint, which is the same across the two regions:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/acm-request-certificate.png" /></p> 
+<p>Go through the remaining steps and <a title="Validate ACM certificate" href="http://docs.aws.amazon.com/acm/latest/userguide/gs-acm-validate.html" target="_blank" rel="noopener noreferrer">validate the certificate</a> for each region before moving on.</p> 
+<p>You are now ready to create the endpoints. In the Amazon API Gateway console, choose <strong>Custom Domain Names</strong>, <strong>Create Custom Domain Name</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/api-gateway-custom-domain-name.png" /></p> 
+<p>A few things to highlight:</p> 
+<li>The domain name is the same as what you requested earlier through ACM.</li> 
+<li>The endpoint configuration should be regional.</li> 
+<li>Select the ACM Certificate that you created earlier.</li> 
+<li>You need to create a base path mapping that connects back to your earlier API Gateway endpoint. Set the base path to v1 so you can version your API, and then select the API and the prod stage.</li> 
+<p>Choose <strong>Save</strong>. You should see your newly created custom domain name:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/api-gateway-custom-domain-save.png" /></p> 
+<p>Note the value for <strong>Target Domain Name</strong> as you need that for the next step. Do this for both regions.</p> 
+<h4>Deploy Route 53 setup</h4> 
+<p>Use the global Route 53 service to provide DNS lookup for the Rest API, distributing the traffic in an active-active setup based on latency. You can find the full CloudFormation template in the <a title="Multi region serverless application GitHub sample" href="https://github.com/aws-samples/blog-multi-region-serverless-service/blob/master/helloworld-dns/helloworld-dns.yaml" target="_blank" rel="noopener noreferrer">blog-multi-region-serverless-service GitHub repo</a>.</p> 
+<p>The template sets up health checks, for example, for us-east-1:</p> 
+<code class="lang-yaml">
+HealthcheckRegion1:
+Type: &quot;AWS::Route53::HealthCheck&quot;
+Properties:
+HealthCheckConfig:
+Port: &quot;443&quot;
+Type: &quot;HTTPS_STR_MATCH&quot;
+SearchString: &quot;ok&quot;
+ResourcePath: &quot;/prod/healthcheck&quot;
+FullyQualifiedDomainName: !Ref Region1HealthEndpoint
+RequestInterval: &quot;30&quot;
+FailureThreshold: &quot;2&quot;
+</code> 
+<p>Use the health check when you set up the record set and the latency routing, for example, for us-east-1:</p> 
+<code class="lang-yaml">
+Region1EndpointRecord:
+Type: AWS::Route53::RecordSet
+Properties:
+Region: us-east-1
+HealthCheckId: !Ref HealthcheckRegion1
+SetIdentifier: &quot;endpoint-region1&quot;
+HostedZoneId: !Ref HostedZoneId
+Name: !Ref MultiregionEndpoint
+Type: CNAME
+TTL: 60
+ResourceRecords:
+- !Ref Region1Endpoint
+</code> 
+<p>You can create the stack by using the following link, copying in the domain names from the previous section, your existing hosted zone name, and the main domain name that is created (for example, hellowordapi.replacewithyourcompanyname.com): <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=multiregiondns&amp;templateURL=https://s3.amazonaws.com/computeblog-us-east-1/building-a-multi-region-serverless-application/helloworld-dns.yaml" target="_blank" rel="noopener noreferrer"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" /></a></p> 
+<p>The following screenshot shows what the parameters might look like:<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/route-53-healthcheck-setup.png" /></p> 
+<p>Specifically, the domain names that you collected earlier would map according to following:</p> 
+<li>The domain names from the API Gateway “prod”-stage go into Region1HealthEndpoint and Region2HealthEndpoint.</li> 
+<li>The domain names from the custom domain name’s target domain name goes into Region1Endpoint and Region2Endpoint.</li> 
+<h4>Using the Rest API from server-side applications</h4> 
+<p>You are now ready to use your setup. First, demonstrate the use of the API from server-side clients. You can demonstrate this by using curl from the command line:</p> 
+<code class="lang-bash">
+&gt; curl https://hellowordapi.replacewithyourcompanyname.com/v1/helloworld/
+{&quot;message&quot;: &quot;Hello from us-east-1&quot;}
+</code> 
+<h4>Testing failover of Rest API in browser</h4> 
+<p>Here’s how you can use this from the browser and test the failover. Find all of the files for this test in the <a title="Browser client" href="https://github.com/aws-samples/blog-multi-region-serverless-service/blob/master/browser-client/" target="_blank" rel="noopener noreferrer">browser-client</a> folder of the blog-multi-region-serverless-service GitHub repo.</p> 
+<p>Use this html file:</p> 
+<code class="lang-html">
+&lt;!DOCTYPE HTML&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;/&gt;
+&lt;meta http-equiv=&quot;X-UA-Compatible&quot; content=&quot;IE=edge&quot;/&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;/&gt;
+&lt;title&gt;Multi-Region Client&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div&gt;
+&lt;b&gt;Test Client&lt;/b&gt;
+&lt;p id=&quot;client_result&quot;&gt;
+&lt;/p&gt;
+&lt;script src=&quot;https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;settings.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;client.js&quot;&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code> 
+<p>The html file uses this JavaScript file to repeatedly call the API and print the history of messages:</p> 
+<code class="lang-js">
+var messageHistory = &quot;&quot;;
+(function call_service() {
+$.ajax({
+url: helloworldMultiregionendpoint+'v1/helloworld/',
+dataType: &quot;json&quot;,
+cache: false,
+success: function(data) {
+messageHistory+=&quot;&lt;p&gt;&quot;+data['message']+&quot;&lt;/p&gt;&quot;;
+$('#client_result').html(messageHistory);
+},
+complete: function() {
+// Schedule the next request when the current one's complete
+setTimeout(call_service, 10000);
+},
+error: function(xhr, status, error) {
+$('#client_result').html('ERROR: '+status);
+}
+});
+})();
+</code> 
+<p>Also, make sure to update the settings in settings.js to match with the API Gateway endpoints for the DNS-proxy and the multi-regional endpoint for the Hello World API: <code>var helloworldMultiregionendpoint = &quot;https://hellowordapi.replacewithyourcompanyname.com/&quot;;</code></p> 
+<p>You can now open the HTML file in the browser (you can do this directly from the file system) and you should see something like the following screenshot:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/browser-test-client-1.png" /></p> 
+<p>You can test failover by changing the environment variable in your health check Lambda function. In the Lambda console, select your health check function and scroll down to the <strong>Environment variables</strong> section. For the <strong>STATUS</strong> key, modify the value to <strong>fail</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/lambda-change-environment-variable.png" /></p> 
+<p>You should see the region switch in the test client:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/08/browser-test-client-2.png" /></p> 
+<p>During an emulated failure like this, the browser might take some additional time to switch over due to connection keep-alive functionality. If you are using a browser like Chrome, you can <a title="Chrome kill connections" href="https://support.google.com/chrome/a/answer/6271171?hl=en" target="_blank" rel="noopener noreferrer">kill all the connections</a> to see a more immediate fail-over: <code>chrome://net-internals/#sockets</code></p> 
+<h3>Summary</h3> 
+<p>You have implemented a simple way to do multi-regional serverless applications that fail over seamlessly between regions, either being accessed from the browser or from other applications/services. You achieved this by using the capabilities of Amazon Route 53 to do latency based routing and health checks for fail-over. You unlocked the use of these features in a serverless application by leveraging the new regional endpoint feature of Amazon API Gateway.</p> 
+<p>The setup was fully scripted using CloudFormation, the AWS Serverless Application Model (SAM), and the AWS CLI, and it can be integrated into deployment tools to push the code across the regions to make sure it is available in all the needed regions. For more information about cross-region deployments, see <a title="Cross-region code deployment" href="https://aws.amazon.com/blogs/devops/building-a-cross-regioncross-account-code-deployment-solution-on-aws/" target="_blank" rel="noopener noreferrer">Building a Cross-Region/Cross-Account Code Deployment Solution on AWS on the AWS DevOps blog</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3143');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/10/25/figure1-756x630.jpeg" /> 
 <b class="lb-b blog-post-title" property="name headline">Bringing Datacenter-Scale Hardware-Software Co-design to the Cloud with FireSim and Amazon EC2 F1 Instances</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1208,191 +1500,6 @@ return authResponse
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2917');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Automating Amazon EBS Snapshot Management with AWS Step Functions and Amazon CloudWatch Events</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-09-18T13:06:35+00:00">18 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-elastic-block-storage-ebs/" title="View all posts in Amazon Elastic Block Storage (EBS)*"><span property="articleSection">Amazon Elastic Block Storage (EBS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2753" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2753&amp;disqus_title=Automating+Amazon+EBS+Snapshot+Management+with+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automating-amazon-ebs-snapshot-management-with-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2753');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Brittany.jpeg" /></a></p> 
-<p><strong>Brittany Doncaster, Solutions Architect</strong></p> 
-<p>Business continuity is important for building mission-critical workloads on AWS. As an AWS customer, you might define recovery point objectives (RPO) and recovery time objectives (RTO) for different tier applications in your business. After the RPO and RTO requirements are defined, it is up to your architects to determine how to meet those requirements.</p> 
-<p>You probably store persistent data in <a href="https://aws.amazon.com/ebs/">Amazon EBS</a> volumes, which live within a single Availability Zone. And, following best practices, you take snapshots of your EBS volumes to back up the data on <a href="https://aws.amazon.com/s3">Amazon S3</a>, which provides 11 9's of durability. If you are following these best practices, then you've probably recognized the need to manage the number of snapshots you keep for a particular EBS volume and delete older, unneeded snapshots. Doing this cleanup helps save on storage costs.</p> 
-<p>Some customers also have policies stating that backups need to be stored a certain number of miles away as part of a disaster recovery (DR) plan. To meet these requirements, customers copy their EBS snapshots to the DR region. Then, the same snapshot management and cleanup has to also be done in the DR region.</p> 
-<p>All of this snapshot management logic consists of different components. You would first tag your snapshots so you could manage them. Then, determine how many snapshots you currently have for a particular EBS volume and assess that value against a retention rule. If the number of snapshots was greater than your retention value, then you would clean up old snapshots. And finally, you might copy the latest snapshot to your DR region. All these steps are just an example of a simple snapshot management workflow. But how do you automate something like this in AWS? How do you do it without servers?</p> 
-<p>One of the most powerful AWS services released in 2016 was <a href="http://aws.amazon.com/cloudwatch">Amazon CloudWatch Events</a>. It enables you to build event-driven IT automation, based on events happening within your AWS infrastructure. CloudWatch Events integrates with <a href="https://aws.amazon.com/lambda">AWS Lambda</a> to let you execute your custom code when one of those events occurs. However, the actions to take based on those events aren't always composed of a single Lambda function. Instead, your business logic may consist of multiple steps (like in the case of the example snapshot management flow described earlier). And you may want to run those steps in sequence or in parallel. You may also want to have retry logic or exception handling for each step.</p> 
-<p><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> serves just this purpose―to help you coordinate your functions and microservices. Step Functions enables you to simplify your effort and pull the error handling, retry logic, and workflow logic out of your Lambda code. Step Functions integrates with Lambda to provide a mechanism for building complex serverless applications. Now, you can kick off a Step Functions state machine based on a CloudWatch event.</p> 
-<p>In this post, I discuss how you can target Step Functions in a CloudWatch Events rule. This allows you to have event-driven snapshot management based on snapshot completion events firing in CloudWatch Event rules.</p> 
-<p>As an example of what you could do with Step Functions and CloudWatch Events, we've developed a <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">reference architecture</a> that performs management of your EBS snapshots.</p> 
-<b id="toc_1">Automating EBS Snapshot Management with Step Functions</b> 
-<p>This architecture assumes that you have already <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/TakeScheduledSnapshot.html">set up CloudWatch Events to create the snapshots on a schedule</a> or that you are using some other means of creating snapshots according to your needs.</p> 
-<p>This architecture covers the pieces of the workflow that need to happen after a snapshot has been created.</p> 
-<li>It <a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-for-ebs-snapshots/">creates a CloudWatch Events rule</a> to invoke a Step Functions state machine execution when an EBS snapshot is created.</li> 
-<li>The state machine then tags the snapshot, cleans up the oldest snapshots if the number of snapshots is greater than the defined number to retain, and copies the snapshot to a DR region.</li> 
-<li>When the DR region snapshot copy is completed, another state machine kicks off in the DR region. The new state machine has a similar flow and uses some of the same Lambda code to clean up the oldest snapshots that are greater than the defined number to retain.</li> 
-<li>Also, both state machines demonstrate how you can use Step Functions to handle errors within your workflow. Any errors that are caught during execution result in the execution of a Lambda function that writes a message to an SNS topic. Therefore, if any errors occur, you can subscribe to the SNS topic and get notified.</li> 
-<p>The following is an architecture diagram of the reference architecture:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture1_Arch.png" /></a></p> 
-<b id="toc_2">Creating the Lambda functions and Step Functions state machines</b> 
-<p>First, pull the code from GitHub and use the <a href="https://aws.amazon.com/cli">AWS CLI</a> to create S3 buckets for the Lambda code in the primary and DR regions. For this example, assume that the primary region is us-west-2 and the DR region is us-east-2. Run the following commands, replacing the italicized text in &lt;&gt; with your own unique bucket names.</p> 
-<code class="language-none">git clone https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt.git
-cd aws-step-functions-ebs-snapshot-mgmt/
-aws s3 mb s3://<i>&lt;primary region bucket name&gt;</i> --region us-west-2
-aws s3 mb s3://<i>&lt;DR region bucket name&gt;</i> --region us-east-2</code> 
-<p>Next, use the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a> (SAM), which uses AWS CloudFormation to deploy the Lambda functions and Step Functions state machines in the primary and DR regions. Replace the italicized text in &lt;&gt; with the S3 bucket names that you created earlier.</p> 
-<code class="language-none">aws cloudformation package --template-file PrimaryRegionTemplate.yaml --s3-bucket <i>&lt;primary region bucket name&gt;</i>  --output-template-file tempPrimary.yaml --region us-west-2
-aws cloudformation deploy --template-file tempPrimary.yaml --stack-name ebsSnapshotMgmtPrimary --capabilities CAPABILITY_IAM --region us-west-2
-aws cloudformation package --template-file DR_RegionTemplate.yaml --s3-bucket <i>&lt;DR region bucket name&gt;</i> --output-template-file tempDR.yaml  --region us-east-2
-aws cloudformation deploy --template-file tempDR.yaml --stack-name ebsSnapshotMgmtDR --capabilities CAPABILITY_IAM --region us-east-2</code> 
-<b id="toc_3">CloudWatch event rule verification</b> 
-<p>The CloudFormation templates deploy the following resources:</p> 
-<li>The Lambda functions that are coordinated by Step Functions</li> 
-<li>The Step Functions state machine</li> 
-<li>The SNS topic</li> 
-<li>The CloudWatch Events rules that trigger the state machine execution</li> 
-<p>So, all of the CloudWatch event rules have been created for you by performing the preceding commands. The next section demonstrates how you could create the CloudWatch event rule manually. To jump straight to testing the workflow, see the “Testing in your Account” section. Otherwise, you begin by setting up the CloudWatch event rule in the primary region for the createSnapshot event and also the CloudWatch event rule in the DR region for the copySnapshot command.</p> 
-<p>First, open the CloudWatch console in the primary region.</p> 
-<p>Choose <strong>Create Rule</strong> and create a rule for the createSnapshot command, with your newly created Step Function state machine as the target.</p> 
-<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
-<li><strong>Service Name</strong>: EC2</li> 
-<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
-<li><strong>Specific Event</strong>: createSnapshot</li> 
-<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then choose the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture2_CWE_Rule.png" /></a></p> 
-<p>Choose <strong>Configure Details</strong> and give the rule a name and description.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture3_CWE_Rule_config.png" /></a></p> 
-<p>Choose <strong>Create Rule</strong>. You now have a CloudWatch Events rule that triggers a Step Functions state machine execution when the EBS snapshot creation is complete.</p> 
-<p>Now, set up the CloudWatch Events rule in the DR region as well. This looks almost same, but is based off the copySnapshot event instead of createSnapshot.</p> 
-<p>In the upper right corner in the console, switch to your DR region. Choose <strong>CloudWatch</strong>, <strong>Create Rule</strong>.</p> 
-<p>For <strong>Event Source</strong>, choose <strong>Event Pattern</strong> and specify the following values:</p> 
-<li><strong>Service Name</strong>: EC2</li> 
-<li><strong>Event Type</strong>: EBS Snapshot Notification</li> 
-<li><strong>Specific Event</strong>: copySnapshot</li> 
-<p>For <strong>Target</strong>, choose <strong>Step Functions state machine</strong>, then select the state machine created by the CloudFormation commands. Choose <strong>Create a new role for this specific resource</strong>. Your completed rule should look like in the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture4_CWE_Target.png" /></a></p> 
-<p>As in the primary region, choose <strong>Configure Details</strong> and then give this rule a name and description. Complete the creation of the rule.</p> 
-<b id="toc_4">Testing in your account</b> 
-<p>To test this setup, open the EC2 console and choose <strong>Volumes</strong>. Select a volume to snapshot. Choose <strong>Actions</strong>, <strong>Create Snapshot</strong>, and then create a snapshot.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture5_EBS_Snapshot.png" /></a></p> 
-<p>This results in a new execution of your state machine in the primary and DR regions. You can view these executions by going to the Step Functions console and selecting your state machine.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture6_Steps.png" /></a></p> 
-<p>From there, you can see the execution of the state machine.</p> 
-<p>Primary region state machine:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture7_Steps_Execute.png" /></a></p> 
-<p>DR region state machine:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/05/Picture8_Steps_Execute_DR.png" /></a></p> 
-<p>I've also provided CloudFormation templates that perform all the earlier setup without using git clone and running the CloudFormation commands. Choose the <strong>Launch Stack</strong> buttons below to launch the primary and DR region stacks in Dublin and Ohio, respectively. From there, you can pick up at the Testing in Your Account section above to finish the example. All of the code for this example architecture is located in the <a href="https://github.com/awslabs/aws-step-functions-ebs-snapshot-mgmt">aws-step-functions-ebs-snapshot-mgmt</a> AWSLabs repo.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=step-functions-ebs-mgmt-primary&amp;templateURL=https://s3-eu-west-1.amazonaws.com/step-functions-ref-archs-eu-west-1/PrimaryRegionTemplateV2.json"><img width="100%" src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" /></a><br /> <strong>DR Region us-east-2 (Ohio) </strong></p> 
-<b id="toc_5">Summary</b> 
-<p>This reference architecture is just an example of how you can use Step Functions and CloudWatch Events to build event-driven IT automation. The possibilities are endless:</p> 
-<li>Use this pattern to perform other common cleanup type jobs such as managing Amazon RDS snapshots, old versions of Lambda functions, or old Amazon ECR images—all triggered by scheduled events.</li> 
-<li>Use Trusted Advisor events to identify unused EC2 instances or EBS volumes, then coordinate actions on them, such as alerting owners, stopping, or snapshotting.</li> 
-<p>Happy coding and please let me know what useful state machines you build!</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2753');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Automate Your IT Operations Using AWS Step Functions and Amazon CloudWatch Events</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
-<time property="datePublished" datetime="2017-09-14T11:29:33+00:00">14 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-personal-health-dashboard/" title="View all posts in AWS Personal Health Dashboard*"><span property="articleSection">AWS Personal Health Dashboard*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2832" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2832&amp;disqus_title=Automate+Your+IT+Operations+Using+AWS+Step+Functions+and+Amazon+CloudWatch+Events&amp;disqus_url=https://aws.amazon.com/blogs/compute/automate-your-it-operations-using-aws-step-functions-and-amazon-cloudwatch-events/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2832');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/download.jpeg" /></a><br /> <strong>Rob Percival, Associate Solutions Architect</strong></p> 
-<p>Are you interested in reducing the operational overhead of your AWS Cloud infrastructure? One way to achieve this is to automate the response to operational events for resources in your AWS account.</p> 
-<p><a href="https://aws.amazon.com/blogs/aws/new-cloudwatch-events-track-and-respond-to-changes-to-your-aws-resources/">Amazon CloudWatch Events</a> provides a near real-time stream of system events that describe the changes and notifications for your AWS resources. From this stream, you can create rules to route specific events to <a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a>, <a href="https://aws.amazon.com/lambda/">AWS Lambda</a>, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">other AWS services</a> for further processing and automated actions.</p> 
-<p>In this post, learn how you can use Step Functions to orchestrate <a href="https://aws.amazon.com/serverless/">serverless</a> IT automation workflows in response to CloudWatch events sourced from <a href="http://docs.aws.amazon.com/health/latest/ug/what-is-aws-health.html">AWS Health</a>, a service that monitors and generates events for your AWS resources. As a real-world example, I show automating the response to a scenario where an <a href="https://aws.amazon.com/iam/">IAM</a> user <a href="http://docs.aws.amazon.com/general/latest/gr/aws-sec-cred-types.html#access-keys-and-secret-access-keys">access key</a> has been exposed.</p> 
-<b id="toc_0">Serverless workflows with Step Functions and Lambda</b> 
-<p>Step Functions makes it easy to develop and orchestrate components of operational response automation using visual workflows. Building automation workflows from individual Lambda functions that perform discrete tasks lets you develop, test, and modify the components of your workflow quickly and seamlessly. As serverless services, Step Functions and Lambda also provide the benefits of more productive development, reduced operational overhead, and no costs incurred outside of when the workflows are actively executing.</p> 
-<b id="toc_1">Example workflow</b> 
-<p>As an example, this post focuses on automating the response to an event generated by AWS Health when an IAM access key has been publicly exposed on GitHub. This is a diagram of the automation workflow:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEArch.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEArch.png" /></a></p> 
-<p>AWS proactively monitors popular code repository sites for IAM access keys that have been publicly exposed. Upon detection of an exposed IAM access key, AWS Health generates an AWS_RISK_CREDENTIALS_EXPOSED event in the AWS account related to the exposed key. A configured CloudWatch Events rule detects this event and invokes a Step Functions state machine. The state machine then orchestrates the automated workflow that deletes the exposed IAM access key, summarizes the recent API activity for the exposed key, and sends the summary message to an Amazon SNS topic to notify the subscribers―in that order.</p> 
-<p>The corresponding Step Functions state machine diagram of this automation workflow can be seen below:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEStateMachine.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/12/CWEStateMachine.png" /></a></p> 
-<p>While this particular example focuses on IT automation workflows in response to the AWS_RISK_CREDENTIALS_EXPOSEDevent sourced from AWS Health, it can be generalized to integrate with other events from these services, <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/EventTypes.html">other event-generating AWS services</a>, and even <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html">run on a time-based schedule</a>.</p> 
-<b id="toc_2">Walkthrough</b> 
-<p>To follow along, use the code and resources found in the <a href="https://github.com/aws/aws-health-tools/tree/master/automated-actions/AWS_RISK_CREDENTIALS_EXPOSED">aws-health-tools</a> GitHub repo. The code and resources include an <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> template, in addition to instructions on how to use it.</p> 
-<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=AWSHealthCredsExposed&amp;templateURL=https://s3.amazonaws.com/aws-health-tools-assets/cloudformation-templates/risk_credentials_exposed.output.yaml"><img width="100%" src="https://camo.githubusercontent.com/c8a1bc998060aa99bd4f459aee30a9a762b914d6/687474703a2f2f646f63732e6177732e616d617a6f6e2e636f6d2f415753436c6f7564466f726d6174696f6e2f6c61746573742f5573657247756964652f696d616765732f636c6f7564666f726d6174696f6e2d6c61756e63682d737461636b2d627574746f6e2e706e67" /></a></p> 
-<p>The Step Functions state machine execution starts with the exposed keys event details in JSON, a sanitized example of which is provided below:</p> 
-<code class="language-json">{
-&quot;version&quot;: &quot;0&quot;,
-&quot;id&quot;: &quot;121345678-1234-1234-1234-123456789012&quot;,
-&quot;detail-type&quot;: &quot;AWS Health Event&quot;,
-&quot;source&quot;: &quot;aws.health&quot;,
-&quot;account&quot;: &quot;123456789012&quot;,
-&quot;time&quot;: &quot;2016-06-05T06:27:57Z&quot;,
-&quot;region&quot;: &quot;us-east-1&quot;,
-&quot;resources&quot;: [],
-&quot;detail&quot;: {
-&quot;eventArn&quot;: &quot;arn:aws:health:us-east-1::event/AWS_RISK_CREDENTIALS_EXPOSED_XXXXXXXXXXXXXXXXX&quot;,
-&quot;service&quot;: &quot;RISK&quot;,
-&quot;eventTypeCode&quot;: &quot;AWS_RISK_CREDENTIALS_EXPOSED&quot;,
-&quot;eventTypeCategory&quot;: &quot;issue&quot;,
-&quot;startTime&quot;: &quot;Sat, 05 Jun 2016 15:10:09 GMT&quot;,
-&quot;eventDescription&quot;: [
-{
-&quot;language&quot;: &quot;en_US&quot;,
-&quot;latestDescription&quot;: &quot;A description of the event is provided here&quot;
-}
-],
-&quot;affectedEntities&quot;: [
-{
-&quot;entityValue&quot;: &quot;ACCESS_KEY_ID_HERE&quot;
-}
-]
-}
-}</code> 
-<p>After it's invoked, the state machine execution proceeds as follows.</p> 
-<b id="toc_3">Step 1: Delete the exposed IAM access key pair</b> 
-<p>The first thing you want to do when you determine that an IAM access key has been exposed is to delete the key pair so that it can no longer be used to make API calls. This Step Functions <em>task</em> state deletes the exposed access key pair detailed in the incoming event, and retrieves the IAM user associated with the key to look up API activity for the user in the next step. The user name, access key, and other details about the event are passed to the next step as JSON.</p> 
-<p>This state contains a powerful error-handling feature offered by Step Functions <em>task</em> states called a <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-errors.html#amazon-states-language-fallback-states"><em>catch</em> configuration</a>. Catch configurations allow you to reroute and continue state machine invocation at new states depending on potential errors that occur in your <em>task</em> function. In this case, the <em>catch</em> configuration skips to Step 3. It immediately notifies your security team that errors were raised in the <em>task</em> function of this step (Step 1), when attempting to look up the corresponding IAM user for a key or delete the user's access key.</p> 
-<p><strong>Note:</strong> Step Functions also offers a <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-errors.html#amazon-states-language-retrying-after-error"><em>retry</em> configuration</a> for when you would rather retry a <em>task</em> function that failed due to error, with the option to specify an increasing time interval between attempts and a maximum number of attempts.</p> 
-<b id="toc_4">Step 2: Summarize recent API activity for key</b> 
-<p>After you have deleted the access key pair, you'll want to have some immediate insight into whether it was used for malicious activity in your account. Another <em>task</em> state, this step uses <a href="https://aws.amazon.com/cloudtrail/">AWS CloudTrail</a> to look up and summarize the most recent API activity for the IAM user associated with the exposed key. The summary is in the form of counts for each API call made and resource type and name affected. This summary information is then passed to the next step as JSON. This step requires information that you obtained in Step 1. Step Functions ensures the successful completion of Step 1 before moving to Step 2.</p> 
-<b id="toc_5">Step 3: Notify security</b> 
-<p>The summary information gathered in the last step can provide immediate insight into any malicious activity on your account made by the exposed key. To determine this and further secure your account if necessary, you must notify your security team with the gathered summary information.</p> 
-<p>This final <em>task</em> state generates an email message providing in-depth detail about the event using the API activity summary, and publishes the message to an SNS topic subscribed to by the members of your security team.</p> 
-<p>If the <em>catch</em> configuration of the <em>task</em> state in Step 1 was triggered, then the security notification email instead directs your security team to log in to the console and navigate to the <a href="http://docs.aws.amazon.com/health/latest/ug/getting-started-phd.html">Personal Health Dashboard</a> to view more details on the incident.</p> 
-<b id="toc_6">Lessons learned</b> 
-<p>When implementing this use case with Step Functions and Lambda, consider the following:</p> 
-<li>One of the most important parts of implementing automation in response to operational events is to ensure visibility into the response and resolution actions is retained. Step Functions and Lambda enable you to orchestrate your granular response and resolution actions that provides direct visibility into the state of the automation workflow.</li> 
-<li>This basic workflow currently executes these steps serially with a <em>catch</em> configuration for error handling. More sophisticated workflows can leverage the <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-parallel-state.html">parallel execution</a>, <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html">branching logic</a>, and <a href="http://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-wait-state.html">time delay</a> functionality provided by Step Functions.</li> 
-<li>Catch and retry configurations for task states allow for orchestrating reliable workflows while maintaining the granularity of each Lambda function. Without leveraging a catch configuration in Step 1, you would have had to duplicate code from the function in Step 3 to ensure that your security team was notified on failure to delete the access key.</li> 
-<li>Step Functions and Lambda are serverless services, so there is no cost for these services when they are not running. Because this IT automation workflow only runs when an IAM access key is exposed for this account (which is hopefully rare!), the total monthly cost for this workflow is essentially $0.</li> 
-<b id="toc_7">Conclusion</b> 
-<p>Automating the response to operational events for resources in your AWS account can free up the valuable time of your engineers. Step Functions and Lambda enable granular IT automation workflows to achieve this result while gaining direct visibility into the orchestration and state of the automation.</p> 
-<p>For more examples of how to use Step Functions to automate the operations of your AWS resources, or if you'd like to see how Step Functions can be used to build and orchestrate serverless applications, visit <a href="https://aws.amazon.com/step-functions/getting-started/">Getting Started</a> on the <a href="https://aws.amazon.com/step-functions">Step Functions</a> website.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2832');
 });
 </script> 
 </article> 
