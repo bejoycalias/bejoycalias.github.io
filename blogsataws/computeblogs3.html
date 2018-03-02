@@ -190,6 +190,128 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Implementing Canary Deployments of AWS Lambda Functions with Alias Traffic Shifting</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2017-11-30T11:25:26+00:00">30 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codedeploy/" title="View all posts in AWS CodeDeploy*"><span property="articleSection">AWS CodeDeploy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3399" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3399&amp;disqus_title=Implementing+Canary+Deployments+of+AWS+Lambda+Functions+with+Alias+Traffic+Shifting&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3399');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of Ryan Green, Software Development Engineer, AWS Serverless</em></p> 
+<p>The concepts of <a href="https://d0.awsstatic.com/whitepapers/AWS_Blue_Green_Deployments.pdf">blue/green</a> and canary deployments have been around for a while now and have been well-established as best-practices for reducing the risk of software deployments.</p> 
+<p>In a traditional, horizontally scaled application, copies of the application code are deployed to multiple nodes (instances, containers, on-premises servers, etc.), typically behind a load balancer. In these applications, deploying new versions of software to too many nodes at the same time can impact application availability as there may not be enough healthy nodes to service requests during the deployment. This aggressive approach to deployments also drastically increases the blast radius of software bugs introduced in the new version and does not typically give adequate time to safely assess the quality of the new version against production traffic.</p> 
+<p>In such applications, one commonly accepted solution to these problems is to <a href="http://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html">slowly and incrementally</a> roll out application software across the nodes in the fleet while simultaneously verifying application health (canary deployments). Another solution is to stand up an entirely different fleet and weight (or flip) traffic over to the new fleet after verification, ideally with some production traffic (blue/green). Some teams deploy to a single host (“one box environment”), where the new release can bake for some time before promotion to the rest of the fleet. Techniques like this enable the maintainers of complex systems to safely test in production while minimizing customer impact.</p> 
+<b>Enter Serverless</b> 
+<p>There is somewhat of an impedance mismatch when mapping these concepts to a serverless world. You can’t incrementally deploy your software across a fleet of servers when there are no servers!* In fact, even the term “deployment” takes on a different meaning with functions as a service (FaaS). In <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, a “deployment” can be roughly modeled as a call to <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/create-function.html">CreateFunction</a>, <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-function-code.html">UpdateFunctionCode</a>, or <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> (I won’t get into the semantics of whether updating configuration counts as a deployment), all of which may affect the version of code that is invoked by clients.</p> 
+<p>The abstractions provided by Lambda remove the need for developers to be concerned about servers and Availability Zones, and this provides a powerful opportunity to greatly simplify the process of deploying software.<br /> <em>*Of course there are servers, but they are abstracted away from the developer.</em></p> 
+<b>Traffic shifting with Lambda aliases</b> 
+<p>Before the release of <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-traffic-shifting-using-aliases.html">traffic shifting for Lambda aliases</a>, deployments of a Lambda function could only be performed in a single “flip” by updating function code for version $LATEST, or by updating an alias to target a different function version. After the update propagates, typically within a few seconds, 100% of function invocations execute the new version. Implementing canary deployments with this model required the development of an additional routing layer, further adding development time, complexity, and invocation latency.<br /> While rolling back a bad deployment of a Lambda function is a trivial operation and takes effect near instantaneously, deployments of new versions for critical functions can still be a potentially nerve-racking experience.</p> 
+<p>With the introduction of alias traffic shifting, it is now possible to trivially implement canary deployments of Lambda functions. By updating additional version weights on an alias, invocation traffic is routed to the new function versions based on the weight specified. Detailed <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html">CloudWatch metric</a>s for the alias and version can be analyzed during the deployment, or other health checks performed, to ensure that the new version is healthy before proceeding.</p> 
+<p>Note: Sometimes the term “canary deployments” refers to the release of software to a subset of users. In the case of alias traffic shifting, the new version is released to some percentage of all users. It’s not possible to shard based on identity without adding an additional routing layer.</p> 
+<h3>Examples</h3> 
+<p>The simplest possible use of a canary deployment looks like the following:</p> 
+<code># Update $LATEST version of function
+aws lambda update-function-code --function-name myfunction ….
+# Publish new version of function
+aws lambda publish-version --function-name myfunction
+# Point alias to new version, weighted at 5% (original version at 95% of traffic)
+aws lambda update-alias --function-name myfunction --name myalias --routing-config '{&quot;AdditionalVersionWeights&quot; : {&quot;2&quot; : 0.05} }'
+# Verify that the new version is healthy
+…
+# Set the primary version on the alias to the new version and reset the additional versions (100% weighted)
+aws lambda update-alias --function-name myfunction --name myalias --function-version 2 --routing-config '{}'
+</code> 
+<p>This is begging to be automated! Here are a few options.</p> 
+<h3>Simple deployment automation</h3> 
+<p>This simple Python script runs as a Lambda function and deploys another function (how meta!) by incrementally increasing the weight of the new function version over a prescribed number of steps, while checking the health of the new version. If the health check fails, the alias is rolled back to its initial version. The health check is implemented as a simple check against the existence of Errors metrics in CloudWatch for the alias and new version.</p> 
+<p><a href="https://github.com/awslabs/aws-lambda-deploy">GitHub aws-lambda-deploy repo</a></p> 
+<p><strong>Install:</strong></p> 
+<code>git clone <a href="https://github.com/awslabs/aws-lambda-deploy">https://github.com/awslabs/aws-lambda-deploy</a>
+cd aws-lambda-deploy
+export BUCKET_NAME=[YOUR_S3_BUCKET_NAME_FOR_BUILD_ARTIFACTS]
+./install.sh
+</code> 
+<p><strong>Run:</strong></p> 
+<code># Rollout version 2 incrementally over 10 steps, with 120s between each step
+aws lambda invoke --function-name SimpleDeployFunction --log-type Tail --payload \
+'{&quot;function-name&quot;: &quot;MyFunction&quot;,
+&quot;alias-name&quot;: &quot;MyAlias&quot;,
+&quot;new-version&quot;: &quot;2&quot;,
+&quot;steps&quot;: 10,
+&quot;interval&quot; : 120,
+&quot;type&quot;: &quot;linear&quot;
+}' output
+</code> 
+<p><strong>Description of input parameters</strong></p> 
+<li><strong>function-name</strong>: The name of the Lambda function to deploy</li> 
+<li><strong>alias-name</strong>: The name of the alias used to invoke the Lambda function</li> 
+<li><strong>new-version</strong>: The version identifier for the new version to deploy</li> 
+<li><strong>steps</strong>: The number of times the new version weight is increased</li> 
+<li><strong>interval</strong>: The amount of time (in seconds) to wait between weight updates</li> 
+<li><strong>type</strong>: The function to use to generate the weights. Supported values: “linear”</li> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" /></a></p> 
+<p>Because this runs as a Lambda function, it is subject to the maximum timeout of 5 minutes. This may be acceptable for many use cases, but to achieve a slower rollout of the new version, a different solution is required.</p> 
+<h3>Step Functions workflow</h3> 
+<p>This <a href="https://github.com/awslabs/aws-lambda-deploy/blob/master/template.yml#L119">state machine</a> performs essentially the same task as the simple deployment function, but it runs as an asynchronous workflow in <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a>. A nice property of Step Functions is that the maximum deployment timeout has now increased from 5 minutes to 1 year!</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png" /></a></p> 
+<p>The step function incrementally updates the new version weight based on the steps parameter, waiting for some time based on the interval parameter, and performing health checks between updates. If the health check fails, the alias is rolled back to the original version and the workflow fails.</p> 
+<p>For example, to execute the workflow:</p> 
+<code>export STATE_MACHINE_ARN=`aws cloudformation describe-stack-resources --stack-name aws-lambda-deploy-stack --logical-resource-id DeployStateMachine --output text | cut&nbsp; -d$'\t' -f3`
+aws stepfunctions start-execution --state-machine-arn $STATE_MACHINE_ARN --input '{
+&quot;function-name&quot;: &quot;MyFunction&quot;,
+&quot;alias-name&quot;: &quot;MyAlias&quot;,
+&quot;new-version&quot;: &quot;2&quot;,
+&quot;steps&quot;: 10,
+&quot;interval&quot;: 120,
+&quot;type&quot;: &quot;linear&quot;}'
+</code> 
+<h3>Getting feedback on the deployment</h3> 
+<p>Because the state machine runs asynchronously, retrieving feedback on the deployment requires polling for the execution status using <a href="http://docs.aws.amazon.com/step-functions/latest/apireference/API_DescribeExecution.html">DescribeExecution</a> or implementing an asynchronous notification (using SNS or email, for example) from the Rollback or Finalize functions. A <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html">CloudWatch alarm</a> could also be created to alarm based on the “ExecutionsFailed” metric for the state machine.</p> 
+<h3>A note on health checks and observability</h3> 
+<p>Weighted rollouts like this are considerably more successful if the code is being exercised and monitored continuously. In this example, it would help to have some automation continuously invoking the alias and reporting metrics on these invocations, such as client-side success rates and latencies.</p> 
+<p>The absence of Lambda Errors metrics used in these examples can be misleading if the function is not getting invoked. It’s also recommended to instrument your Lambda functions with custom metrics, in addition to Lambda’s built-in metrics, that can be used to monitor health during deployments.</p> 
+<b>Extensibility</b> 
+<p>These examples could be easily extended in various ways to support different use cases. For example:</p> 
+<li><strong>Health check implementations</strong>: CloudWatch alarms, automatic invocations with payload assertions, querying external systems, etc.</li> 
+<li><strong>Weight increase functions</strong>: Exponential, geometric progression, single canary step, etc.</li> 
+<li><strong>Custom success/failure notifications</strong>: SNS, email, CI/CD systems, service discovery systems, etc.</li> 
+<b>Traffic shifting with SAM and CodeDeploy</b> 
+<p>Using the Lambda <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> operation with additional version weights provides a powerful primitive for you to implement custom traffic shifting solutions for Lambda functions.</p> 
+<p>For those not interested in building custom deployment solutions, <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> provides an intuitive turn-key implementation of this functionality integrated directly into the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a>. Traffic-shifted deployments can be declared in a SAM template, and CodeDeploy manages the function rollout as part of the CloudFormation stack update. CloudWatch alarms can also be configured to trigger a stack rollback if something goes wrong.</p> 
+<p>i.e.</p> 
+<code>MyFunction:
+Type: AWS::Serverless::Function
+Properties:
+FunctionName: MyFunction
+AutoPublishAlias: MyFunctionInvokeAlias
+DeploymentPreference:
+Type: Linear10PercentEvery1Minute
+Role:
+Fn::GetAtt: [ DeploymentRole, Arn ]
+Alarms:
+- { Ref: MyFunctionErrorsAlarm }
+...
+</code> 
+<p>For more information about using CodeDeploy with SAM, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/automating-updates-to-serverless-apps.html">Automating Updates to Serverless Apps</a>.</p> 
+<b>Conclusion</b> 
+<p>It is often the simple features that provide <a href="https://en.wikipedia.org/wiki/Pareto_principle">the most value</a>. As I demonstrated in this post, serverless architectures allow the complex deployment orchestration used in traditional applications to be replaced with a simple Lambda function or Step Functions workflow. By allowing invocation traffic to be easily weighted to multiple function versions, Lambda alias traffic shifting provides a simple but powerful feature that I hope empowers you to easily implement safe deployment workflows for your Lambda functions.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3399');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/ReInvent_HA_Fargate_SOCIAL-1.png" /> 
 <b class="lb-b blog-post-title" property="name headline">AWS Fargate: A Product Overview</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1905,86 +2027,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3212');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3212');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Under the Hood: Task Networking for Amazon ECS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-11-14T21:27:01+00:00">14 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3199" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3199&amp;disqus_title=Under+the+Hood%3A+Task+Networking+for+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3199');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post courtesy of ECS&nbsp;Sr. Software Dev Engineer Anirudh Aithal.</em></p> 
-<p>Today, AWS&nbsp;announced <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-ecs-introduces-awsvpc-networking-mode-for-containers-to-support-full-networking-capabilities/">task networking</a> for <a href="https://aws.amazon.com/ecs">Amazon ECS</a>, which enables <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html">elastic network interfaces</a> to be attached to containers.</p> 
-<p>In this post, I take a closer look at how this new container-native “awsvpc” network mode is implemented using <a href="https://github.com/containernetworking/cni">container networking interface</a> plugins on ECS managed instances (referred to as container instances).</p> 
-<p>This post is a deep dive into how task networking works with Amazon ECS. If you want to learn more about how you can start using task networking for your containerized applications, see <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a>. Cloud Native Computing Foundation (CNCF) hosts the <a href="https://github.com/containernetworking/cni">Container Networking Interface (CNI)</a> project, which consists of a specification and libraries for writing plugins to configure network interfaces in Linux containers. For more about cloud native computing in AWS, see Adrian Cockcroft’s post on <a href="https://medium.com/@adrianco/cloud-native-computing-5f0f41a982bf">Cloud Native Computing</a>.</p> 
-<p><span id="more-3199"></span></p> 
-<b>Container instance setup</b> 
-<p>Before I discuss the details of enabling task networking on container instances, look at how a typical instance looks in ECS.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_1.png" /></p> 
-<p>The diagram above shows a typical container instance. The <a href="https://github.com/aws/amazon-ecs-agent/">ECS agent</a>, which itself is running as a container, is responsible for:</p> 
-<li>Registering the EC2 instance with the ECS backend</li> 
-<li>Ensuring that task state changes communicated to it by the ECS backend are enacted on the container instance</li> 
-<li>Interacting with the Docker daemon to create, start, stop, and monitor</li> 
-<li>Relaying container state and task state transitions to the ECS backend</li> 
-<p>Because the ECS agent is just acting as the supervisor for containers under its management, it offloads the problem of setting up networking for containers to either the Docker daemon (for containers configured with one of Docker’s default networking modes) or a set of CNI plugins (for containers in task with networking mode set to <code class="lang-bash">awsvpc</code>).</p> 
-<p>In either case, network stacks of containers are configured via network namespaces. As per the <code class="lang-bash">ip-netns(8)</code> manual, “<em>A network namespace is logically another copy of the network stack, with its own routes, firewall rules, and network devices</em>.” The network namespace construct makes the partitioning of network stack between processes and containers running on a host possible.</p> 
-<b>Network namespaces and CNI plugins</b> 
-<p>CNI plugins are executable files that comply with the <a href="https://github.com/containernetworking/cni/blob/master/SPEC.md">CNI specification</a> and configure the network connectivity of containers. The CNI project defines a specification for the plugins and provides a library for interacting with plugins, thus providing a consistent, reliable, and simple interface with which to interact with the plugins.</p> 
-<p>You specify the container or its network namespace and invoke the plugin with the ADD command to add network interfaces to a container, and then the DEL command to tear them down. For example, the reference <a href="https://github.com/containernetworking/plugins/tree/master/plugins/main/bridge">bridge plugin</a> adds all containers on the same host into a bridge that resides in the host network namespace.</p> 
-<p>This plugin model fits in nicely with the ECS agent’s “<em>minimal intrusion in the container lifecycle</em>” model, as the agent doesn’t need to concern itself with the details of the network setup for containers. It’s also an extensible model, which allows the agent to switch to a different set of plugins if the need arises in future. Finally, the ECS agent doesn’t need to monitor the liveliness of these plugins as they are only invoked when required.</p> 
-<b>Invoking CNI plugins from the ECS agent</b> 
-<p>When ECS attaches an elastic network interface to the instance and sends the message to the agent to provision the elastic network interface for containers in a task, the elastic network interface (as with any network device) shows up in the global default network namespace of the host. The ECS agent invokes a chain of CNI plugins to ensure that the elastic network interface is configured appropriately in the container’s network namespace. You can review these plugins in the <a href="https://github.com/aws/amazon-ecs-cni-plugins">amazon-ecs-cni-plugins GitHub repo</a>.</p> 
-<p>The first plugin invoked in this chain is the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/eni">ecs-eni</a>&nbsp;plugin,&nbsp;which ensures that the elastic network interface is attached to container’s network namespace and configured with the VPC-allocated IP addresses and the default route to use the subnet gateway. The container also needs to make HTTP requests to the credentials endpoint (hosted by the ECS agent) for getting IAM role credentials. This is handled by the <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ecs-bridge">ecs-bridge</a> and <a href="https://github.com/aws/amazon-ecs-cni-plugins/tree/master/plugins/ipam">ecs-ipam</a> plugins, which are invoked next. The CNI library provides mechanisms to interpret the results from the execution of these plugins, which results in an efficient error handling in the agent. The following diagram illustrates the different steps in this process:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_dd_2.png" /></p> 
-<p>To avoid the race condition between configuring the network stack and commands being invoked in application containers, the ECS agent creates an additional “pause” container for each task before starting the containers in the task definition. It then sets up the network namespace of the pause container by executing the previously mentioned CNI plugins. It also starts the rest of the containers in the task so that they share their network stack of the pause container. This means that all containers in a task are addressable by the IP addresses of the elastic network interface, and they can communicate with each other over the <code class="lang-bash">localhost</code> interface.</p> 
-<p>In this example setup, you have two containers in a task behind an elastic network interface. The following commands show that they have a similar view of the network stack and can talk to each other over the localhost interface.</p> 
-<h3>List the last three containers running on the host (you launched a task with two containers and the ECS agent launched the additional container to configure the network namespace):</h3> 
-<code class="lang-bash"><b>$ docker ps -n 3 --format &quot;{{.ID}}\t{{.Names}}\t{{.Command}}\t{{.Status}}&quot;</b>
-7d7b7fbc30b9	ecs-front-envoy-5-envoy-sds-ecs-ce8bd9eca6dd81a8d101	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
-dfdcb2acfc91	ecs-front-envoy-5-front-envoy-faeae686adf9c1d91000	&quot;/bin/sh -c '/usr/...&quot;	Up 3 days
-f731f6dbb81c	ecs-front-envoy-5-internalecspause-a8e6e19e909fa9c9e901	&quot;./pause&quot;	Up 3 days</code> 
-<h3>List interfaces for these containers and make sure that they are the same:</h3> 
-<code class="lang-bash"><b>$ for id in `docker ps -n 3 -q`; do pid=`docker inspect $id -f '{{.State.Pid}}'`; echo container $id; sudo nsenter -t $pid -n ip link show; done</b>
-container 7d7b7fbc30b9
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
-container dfdcb2acfc91
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff
-container f731f6dbb81c
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1
-link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-3: ecs-eth0@if28: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP mode DEFAULT group default
-link/ether 0a:58:a9:fe:ac:0c brd ff:ff:ff:ff:ff:ff link-netnsid 0
-27: etb2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
-link/ether 02:5a:a1:1a:43:42 brd ff:ff:ff:ff:ff:ff</code> 
-<b>Conclusion</b> 
-<p>All of this work means that you can use the new <code class="lang-bash">awsvpc</code> networking mode and benefit from native networking support for your containers. You can learn more about using <code class="lang-bash">awsvpc</code> mode in <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">Introducing Cloud Native Networking for Amazon ECS Containers</a> or the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html">ECS documentation</a>.</p> 
-<p>I&nbsp;appreciate your feedback in the comments section. You can also reach&nbsp;me on GitHub in either the <a href="https://github.com/aws/amazon-ecs-cni-plugins">ECS CNI Plugins</a> or the <a href="https://github.com/aws/amazon-ecs-agent">ECS Agent</a> repositories.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3199');
 });
 </script> 
 </article> 

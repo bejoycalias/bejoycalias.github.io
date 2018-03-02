@@ -190,6 +190,52 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_2-782x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Maintaining Transport Layer Security All the Way to Your Container: Using the Network Load Balancer with Amazon ECS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2018-01-17T13:32:23+00:00">17 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/elastic-load-balancing/" title="View all posts in Elastic Load Balancing*"><span property="articleSection">Elastic Load Balancing*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/maintaining-transport-layer-security-all-the-way-to-your-container-using-the-network-load-balancer-with-amazon-ecs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3668" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3668&amp;disqus_title=Maintaining+Transport+Layer+Security+All+the+Way+to+Your+Container%3A+Using+the+Network+Load+Balancer+with+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/maintaining-transport-layer-security-all-the-way-to-your-container-using-the-network-load-balancer-with-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3668');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post contributed by AWS Senior Cloud Infrastructure Architect Anabell St Vincent.</em></p> 
+<p>Some systems or applications require Transport Layer Security (TLS) traffic from the client all the way through to the Docker container, without offloading or terminating certificates at a load balancer. Some highly time-sensitive services may require communication over TLS without any decryption and re-encryption in the communication path.</p> 
+<p>There are multiple options for this type of implementation on AWS. One option is to use a service discovery tool to implement the requirements, but that creates overhead from an implementation and management perspective. In this post, I examine the option of using Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs/">Amazon ECS</a>) with a <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-ec2-container-service-now-integrated-with-network-load-balancer-to-support-high-throughput-and-direct-tcp-connections-with-containers/">Network Load Balancer</a>.</p> 
+<p>Amazon ECS is a highly scalable, high-performance service for running Docker containers on AWS. It is integrated with each of the <a href="https://aws.amazon.com/elasticloadbalancing/">Elastic Load Balancing</a> load balancers offered by AWS:</p> 
+<li>The Classic Load Balancer supports application or network level traffic and can be used to pass through the TLS traffic when configured with <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/classic/elb-listener-config.html">TCP listeners</a>. This approach limits the number of containers to be deployed by Amazon ECS to one per EC2 host. This approach is only available for the ECS launch type of EC2, not Fargate. This is due to Classic Load Balancer not supporting target groups, so dynamic port mapping can’t be leveraged for this type of implementation.</li> 
+<li>The Application Load Balancer functions at the application layer, the layer 7 of Open System Interconnection (OSI) and supports HTTP and HTTPS protocols. By operating at layer 7, the Application Load Balancer is able to route traffic based on the request path in the URL. It can also provide SSL offloading or termination of the SSL certificates for applications, by hosting the SSL certificate. The Application Load Balancer integrates well with ECS by providing the functionality of the target groups for the container instances, which allows for port mapping and targeting container groups. Port mappings allows the containers to run on different ports but still be represented by the one port configured on the ALB as part of the target group of the task.</li> 
+<li>The Network Load Balancer, which is a high performance, ultra-low latency load balancer that operates at layer 4. It is designed to handle tens of millions of requests per second while maintaining high throughput at ultra-low latency. Operating at layer 4 networking means that the traffic is passed onto the targets based on the IP addresses and ports as oppose to session information or cookies, as is the case with Application Load Balancers. The Network Load Balancer also supports long-lived TCP connections, which are ideal for WebSocket type of applications . Some applications communicate on TCP protocols rather than solely on HTTP and HTTPS. The Network Load Balancer provides the support to load balance between services that require protocols besides HTTP and HTTPS.</li> 
+<p>The Network Load Balancer is the best option for managing secure traffic as it provides support for TCP traffic pass through, without decrypting and then re-encrypting the traffic. Additionally, the Network Load Balancer supports target groups, which means port mapping can be used, as well as configuring the load balancer as part of the task definition for the containers.</p> 
+<b>Architecture</b> 
+<p>The diagram below shows a high-level architecture with TLS traffic coming from the internet that passes through the VPC to the Network Load Balancer, then to a container without offloading or terminating the certificate in the path.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_1.png" /></p> 
+<p>In this diagram, there are three containers running in an ECS cluster. The ECS cluster can be either the EC2 or <a href="https://aws.amazon.com/fargate/">Fargate</a> launch type.</p> 
+<p>The following diagram shows an architecture that contains two different services deployed in two different ECS clusters.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_2-1.png" /></p> 
+<p>In this architecture, the containers in each of the clusters can reference the other containers securely via the Network Load Balancer without terminating or offloading the certificates until it reaches the destination container.</p> 
+<p>This approach addresses the requirements where containers need to communicate securely whether they are deployed in one VPC, across VPCs, or in separate AWS accounts.</p> 
+<p>The following diagram below shows both TLS connections from the internet, as well as connections from within the same cluster.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_3-2.png" /></p> 
+<p>The above approach is achieved by using the same Network Load Balancer for the cluster to serve two different services. Implement this by using two different <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html">target groups</a> (one for each service) and associating them with the ECS task definition. The containers use the DNS name associated with the Network Load Balancer to access the containers in the other service.</p> 
+<b>Summary</b> 
+<p>The architectures in this post show how the Network Load Balancer integrates seamlessly with ECS and other AWS services, providing end-to-end TLS communication across services without offloading or terminating the certificates. This gives you the ability to use dynamic ports in ECS containers. It can also handle tens of millions of requests per second while maintaining high throughput at ultra-low latency for applications that require the TCP protocol.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3668');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/16/Screen-Shot-2018-01-15-at-10.24.11-PM-1064x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">How To Migrate Multi-Tier Environments Using The AWS Server Migration Service</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1405,128 +1451,6 @@ return &quot;SUCCESS&quot;;
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3409');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Implementing Canary Deployments of AWS Lambda Functions with Alias Traffic Shifting</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
-<time property="datePublished" datetime="2017-11-30T11:25:26+00:00">30 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codedeploy/" title="View all posts in AWS CodeDeploy*"><span property="articleSection">AWS CodeDeploy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3399" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3399&amp;disqus_title=Implementing+Canary+Deployments+of+AWS+Lambda+Functions+with+Alias+Traffic+Shifting&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-canary-deployments-of-aws-lambda-functions-with-alias-traffic-shifting/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3399');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post courtesy of Ryan Green, Software Development Engineer, AWS Serverless</em></p> 
-<p>The concepts of <a href="https://d0.awsstatic.com/whitepapers/AWS_Blue_Green_Deployments.pdf">blue/green</a> and canary deployments have been around for a while now and have been well-established as best-practices for reducing the risk of software deployments.</p> 
-<p>In a traditional, horizontally scaled application, copies of the application code are deployed to multiple nodes (instances, containers, on-premises servers, etc.), typically behind a load balancer. In these applications, deploying new versions of software to too many nodes at the same time can impact application availability as there may not be enough healthy nodes to service requests during the deployment. This aggressive approach to deployments also drastically increases the blast radius of software bugs introduced in the new version and does not typically give adequate time to safely assess the quality of the new version against production traffic.</p> 
-<p>In such applications, one commonly accepted solution to these problems is to <a href="http://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html">slowly and incrementally</a> roll out application software across the nodes in the fleet while simultaneously verifying application health (canary deployments). Another solution is to stand up an entirely different fleet and weight (or flip) traffic over to the new fleet after verification, ideally with some production traffic (blue/green). Some teams deploy to a single host (“one box environment”), where the new release can bake for some time before promotion to the rest of the fleet. Techniques like this enable the maintainers of complex systems to safely test in production while minimizing customer impact.</p> 
-<b>Enter Serverless</b> 
-<p>There is somewhat of an impedance mismatch when mapping these concepts to a serverless world. You can’t incrementally deploy your software across a fleet of servers when there are no servers!* In fact, even the term “deployment” takes on a different meaning with functions as a service (FaaS). In <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, a “deployment” can be roughly modeled as a call to <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/create-function.html">CreateFunction</a>, <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-function-code.html">UpdateFunctionCode</a>, or <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> (I won’t get into the semantics of whether updating configuration counts as a deployment), all of which may affect the version of code that is invoked by clients.</p> 
-<p>The abstractions provided by Lambda remove the need for developers to be concerned about servers and Availability Zones, and this provides a powerful opportunity to greatly simplify the process of deploying software.<br /> <em>*Of course there are servers, but they are abstracted away from the developer.</em></p> 
-<b>Traffic shifting with Lambda aliases</b> 
-<p>Before the release of <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-traffic-shifting-using-aliases.html">traffic shifting for Lambda aliases</a>, deployments of a Lambda function could only be performed in a single “flip” by updating function code for version $LATEST, or by updating an alias to target a different function version. After the update propagates, typically within a few seconds, 100% of function invocations execute the new version. Implementing canary deployments with this model required the development of an additional routing layer, further adding development time, complexity, and invocation latency.<br /> While rolling back a bad deployment of a Lambda function is a trivial operation and takes effect near instantaneously, deployments of new versions for critical functions can still be a potentially nerve-racking experience.</p> 
-<p>With the introduction of alias traffic shifting, it is now possible to trivially implement canary deployments of Lambda functions. By updating additional version weights on an alias, invocation traffic is routed to the new function versions based on the weight specified. Detailed <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html">CloudWatch metric</a>s for the alias and version can be analyzed during the deployment, or other health checks performed, to ensure that the new version is healthy before proceeding.</p> 
-<p>Note: Sometimes the term “canary deployments” refers to the release of software to a subset of users. In the case of alias traffic shifting, the new version is released to some percentage of all users. It’s not possible to shard based on identity without adding an additional routing layer.</p> 
-<h3>Examples</h3> 
-<p>The simplest possible use of a canary deployment looks like the following:</p> 
-<code># Update $LATEST version of function
-aws lambda update-function-code --function-name myfunction ….
-# Publish new version of function
-aws lambda publish-version --function-name myfunction
-# Point alias to new version, weighted at 5% (original version at 95% of traffic)
-aws lambda update-alias --function-name myfunction --name myalias --routing-config '{&quot;AdditionalVersionWeights&quot; : {&quot;2&quot; : 0.05} }'
-# Verify that the new version is healthy
-…
-# Set the primary version on the alias to the new version and reset the additional versions (100% weighted)
-aws lambda update-alias --function-name myfunction --name myalias --function-version 2 --routing-config '{}'
-</code> 
-<p>This is begging to be automated! Here are a few options.</p> 
-<h3>Simple deployment automation</h3> 
-<p>This simple Python script runs as a Lambda function and deploys another function (how meta!) by incrementally increasing the weight of the new function version over a prescribed number of steps, while checking the health of the new version. If the health check fails, the alias is rolled back to its initial version. The health check is implemented as a simple check against the existence of Errors metrics in CloudWatch for the alias and new version.</p> 
-<p><a href="https://github.com/awslabs/aws-lambda-deploy">GitHub aws-lambda-deploy repo</a></p> 
-<p><strong>Install:</strong></p> 
-<code>git clone <a href="https://github.com/awslabs/aws-lambda-deploy">https://github.com/awslabs/aws-lambda-deploy</a>
-cd aws-lambda-deploy
-export BUCKET_NAME=[YOUR_S3_BUCKET_NAME_FOR_BUILD_ARTIFACTS]
-./install.sh
-</code> 
-<p><strong>Run:</strong></p> 
-<code># Rollout version 2 incrementally over 10 steps, with 120s between each step
-aws lambda invoke --function-name SimpleDeployFunction --log-type Tail --payload \
-'{&quot;function-name&quot;: &quot;MyFunction&quot;,
-&quot;alias-name&quot;: &quot;MyAlias&quot;,
-&quot;new-version&quot;: &quot;2&quot;,
-&quot;steps&quot;: 10,
-&quot;interval&quot; : 120,
-&quot;type&quot;: &quot;linear&quot;
-}' output
-</code> 
-<p><strong>Description of input parameters</strong></p> 
-<li><strong>function-name</strong>: The name of the Lambda function to deploy</li> 
-<li><strong>alias-name</strong>: The name of the alias used to invoke the Lambda function</li> 
-<li><strong>new-version</strong>: The version identifier for the new version to deploy</li> 
-<li><strong>steps</strong>: The number of times the new version weight is increased</li> 
-<li><strong>interval</strong>: The amount of time (in seconds) to wait between weight updates</li> 
-<li><strong>type</strong>: The function to use to generate the weights. Supported values: “linear”</li> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/invocation-alias-count.png" /></a></p> 
-<p>Because this runs as a Lambda function, it is subject to the maximum timeout of 5 minutes. This may be acceptable for many use cases, but to achieve a slower rollout of the new version, a different solution is required.</p> 
-<h3>Step Functions workflow</h3> 
-<p>This <a href="https://github.com/awslabs/aws-lambda-deploy/blob/master/template.yml#L119">state machine</a> performs essentially the same task as the simple deployment function, but it runs as an asynchronous workflow in <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a>. A nice property of Step Functions is that the maximum deployment timeout has now increased from 5 minutes to 1 year!</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/30/step-function-lambda-aliases-workflow.png" /></a></p> 
-<p>The step function incrementally updates the new version weight based on the steps parameter, waiting for some time based on the interval parameter, and performing health checks between updates. If the health check fails, the alias is rolled back to the original version and the workflow fails.</p> 
-<p>For example, to execute the workflow:</p> 
-<code>export STATE_MACHINE_ARN=`aws cloudformation describe-stack-resources --stack-name aws-lambda-deploy-stack --logical-resource-id DeployStateMachine --output text | cut&nbsp; -d$'\t' -f3`
-aws stepfunctions start-execution --state-machine-arn $STATE_MACHINE_ARN --input '{
-&quot;function-name&quot;: &quot;MyFunction&quot;,
-&quot;alias-name&quot;: &quot;MyAlias&quot;,
-&quot;new-version&quot;: &quot;2&quot;,
-&quot;steps&quot;: 10,
-&quot;interval&quot;: 120,
-&quot;type&quot;: &quot;linear&quot;}'
-</code> 
-<h3>Getting feedback on the deployment</h3> 
-<p>Because the state machine runs asynchronously, retrieving feedback on the deployment requires polling for the execution status using <a href="http://docs.aws.amazon.com/step-functions/latest/apireference/API_DescribeExecution.html">DescribeExecution</a> or implementing an asynchronous notification (using SNS or email, for example) from the Rollback or Finalize functions. A <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html">CloudWatch alarm</a> could also be created to alarm based on the “ExecutionsFailed” metric for the state machine.</p> 
-<h3>A note on health checks and observability</h3> 
-<p>Weighted rollouts like this are considerably more successful if the code is being exercised and monitored continuously. In this example, it would help to have some automation continuously invoking the alias and reporting metrics on these invocations, such as client-side success rates and latencies.</p> 
-<p>The absence of Lambda Errors metrics used in these examples can be misleading if the function is not getting invoked. It’s also recommended to instrument your Lambda functions with custom metrics, in addition to Lambda’s built-in metrics, that can be used to monitor health during deployments.</p> 
-<b>Extensibility</b> 
-<p>These examples could be easily extended in various ways to support different use cases. For example:</p> 
-<li><strong>Health check implementations</strong>: CloudWatch alarms, automatic invocations with payload assertions, querying external systems, etc.</li> 
-<li><strong>Weight increase functions</strong>: Exponential, geometric progression, single canary step, etc.</li> 
-<li><strong>Custom success/failure notifications</strong>: SNS, email, CI/CD systems, service discovery systems, etc.</li> 
-<b>Traffic shifting with SAM and CodeDeploy</b> 
-<p>Using the Lambda <a href="http://docs.aws.amazon.com/cli/latest/reference/lambda/update-alias.html">UpdateAlias</a> operation with additional version weights provides a powerful primitive for you to implement custom traffic shifting solutions for Lambda functions.</p> 
-<p>For those not interested in building custom deployment solutions, <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> provides an intuitive turn-key implementation of this functionality integrated directly into the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a>. Traffic-shifted deployments can be declared in a SAM template, and CodeDeploy manages the function rollout as part of the CloudFormation stack update. CloudWatch alarms can also be configured to trigger a stack rollback if something goes wrong.</p> 
-<p>i.e.</p> 
-<code>MyFunction:
-Type: AWS::Serverless::Function
-Properties:
-FunctionName: MyFunction
-AutoPublishAlias: MyFunctionInvokeAlias
-DeploymentPreference:
-Type: Linear10PercentEvery1Minute
-Role:
-Fn::GetAtt: [ DeploymentRole, Arn ]
-Alarms:
-- { Ref: MyFunctionErrorsAlarm }
-...
-</code> 
-<p>For more information about using CodeDeploy with SAM, see <a href="http://docs.aws.amazon.com/lambda/latest/dg/automating-updates-to-serverless-apps.html">Automating Updates to Serverless Apps</a>.</p> 
-<b>Conclusion</b> 
-<p>It is often the simple features that provide <a href="https://en.wikipedia.org/wiki/Pareto_principle">the most value</a>. As I demonstrated in this post, serverless architectures allow the complex deployment orchestration used in traditional applications to be replaced with a simple Lambda function or Step Functions workflow. By allowing invocation traffic to be easily weighted to multiple function versions, Lambda alias traffic shifting provides a simple but powerful feature that I hope empowers you to easily implement safe deployment workflows for your Lambda functions.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3399');
 });
 </script> 
 </article> 

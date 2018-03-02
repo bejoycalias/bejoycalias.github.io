@@ -190,6 +190,149 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/27/xray_k8s-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Application Tracing on Kubernetes with AWS X-Ray</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2018-02-28T11:08:06+00:00">28 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-x-ray/" title="View all posts in AWS X-Ray*"><span property="articleSection">AWS X-Ray*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/application-tracing-on-kubernetes-with-aws-x-ray/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-4002" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=4002&amp;disqus_title=Application+Tracing+on+Kubernetes+with+AWS+X-Ray&amp;disqus_url=https://aws.amazon.com/blogs/compute/application-tracing-on-kubernetes-with-aws-x-ray/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4002');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><strong><em>This post was contributed by Christoph Kassen, AWS Solutions Architect</em></strong></p> 
+<p>With the emergence of <a href="https://aws.amazon.com/microservices/">microservices architectures</a>, the number of services that are part of a web application has increased a lot. It’s not unusual anymore to build and operate hundreds of separate microservices, all as part of the same application.</p> 
+<p>Think of a typical e-commerce application that displays products, recommends related items, provides search and faceting capabilities, and maintains a shopping cart. Behind the scenes, many more services are involved, such as clickstream tracking, ad display, targeting, and logging. When handling a single user request, many of these microservices are involved in responding. Understanding, analyzing, and debugging the landscape is becoming complex.</p> 
+<p><a href="https://aws.amazon.com/xray/">AWS X-Ray</a> provides application-tracing functionality, giving deep insights into all microservices deployed. With X-Ray, every request can be traced as it flows through the involved microservices. This provides your DevOps teams the insights they need to understand how your services interact with their peers and enables them to analyze and debug issues much faster.</p> 
+<p>With microservices architectures, every service should be self-contained and use the technologies best suited for the problem domain. Depending on how the service is built, it is deployed and hosted differently.</p> 
+<p>One of the most popular choices for packaging and deploying microservices at the moment is <a href="https://aws.amazon.com/what-are-containers/">containers</a>. The application and its dependencies are clearly defined, the container can be built on CI infrastructure, and the deployment is simplified greatly. Container schedulers, such as Kubernetes and Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs/">Amazon ECS</a>), greatly simplify deploying and running containers at scale.</p> 
+<b>Running X-Ray on Kubernetes</b> 
+<p>Kubernetes is an open-source container management platform that automates deployment, scaling, and management of containerized applications.</p> 
+<p>This post shows you how to run X-Ray on top of Kubernetes to provide application tracing capabilities to services hosted on a Kubernetes cluster. Additionally, X-Ray also works for applications hosted on <a href="https://aws.amazon.com/ecs/">Amazon ECS</a>, <a href="https://aws.amazon.com/elasticbeanstalk/">AWS Elastic Beanstalk</a>, <a href="https://aws.amazon.com/ec2">Amazon EC2</a>, and even when building services with <a href="https://aws.amazon.com/lambda">AWS Lambda</a> functions. This flexibility helps you pick the technology you need while still being able to trace requests through all of the services running within your AWS environment.</p> 
+<p>The complete code, including a simple Node.js based demo application is available in the corresponding&nbsp;<a href="https://github.com/aws-samples/aws-xray-kubernetes">aws-xray-kubernetes</a> GitHub repository, so you can quickly get started with X-Ray.</p> 
+<p>The sample application within the repository consists of two simple microservices, Service-A and Service-B. The following architecture diagram shows how each service is deployed with two Pods on the Kubernetes cluster:</p> 
+<ol> 
+<li>Requests are sent to the Service-A from clients.</li> 
+<li>Service-A then contacts Service-B.</li> 
+<li>The requests are serviced by Service-B.</li> 
+<li>Service-B adds a random delay to each request to show different response times in X-Ray.</li> 
+</ol> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/architecture-diagram-1024x569.jpeg" /></p> 
+<p>To test out the sample applications on your own Kubernetes cluster use the Dockerfiles provided in the GitHub repository, build the two containers, push them to a container registry and apply the yaml configuration with kubectl to your Kubernetes cluster.</p> 
+<b>Prerequisites</b> 
+<p>If you currently do not have a cluster running within your AWS environment, take a look at Amazon Elastic Container Service for Kubernetes (<a href="https://aws.amazon.com/eks">Amazon EKS</a>), or use the instructions from the <a href="https://aws.amazon.com/blogs/compute/kubernetes-clusters-aws-kops/">Manage Kubernetes Clusters on AWS Using Kops</a> blog post to spin up a self-managed Kubernetes cluster.</p> 
+<b>Security Setup for X-Ray</b> 
+<p>The nodes in the Kubernetes cluster hosting web application Pods need IAM permissions so that the Pods hosting the X-Ray daemon can send traces to the X-Ray service backend.</p> 
+<p>The easiest way is to set up a new IAM policy allowing all worker nodes within your Kubernetes cluster to write data to X-Ray. In the IAM console or <a href="https://aws.amazon.com/cli/">AWS CLI</a>, create a new policy like the following:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;xray:PutTraceSegments&quot;,
+&quot;xray:PutTelemetryRecords&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:iam::000000000000:instance-profile/nodes.k8s.cluster.local &quot;
+]
+}
+]
+}</code> 
+<p>Adjust the AWS account ID within the resource. Give the policy a descriptive name, such as <code class="lang-json">k8s-nodes-XrayWriteAccess</code>.</p> 
+<p>Next, attach the policy to the instance profile for the Kubernetes worker nodes. Therefore, select the IAM role assigned to your worker instances (check the EC2 console if you are unsure) and attach the IAM policy created earlier to it. You can attach the IAM permissions directly from the command line with the following command:</p> 
+<p><code class="lang-bash">aws iam attach-role-policy --role-name k8s-nodes --policy-arn arn:aws:iam::000000000000:policy/k8s-nodes-XrayWriteAccess</code></p> 
+<b>Build the X-Ray daemon Docker image</b> 
+<p>The X-Ray daemon is available as a single, statically compiled binary that can be downloaded directly from the AWS website.</p> 
+<p>The first step is to create a Docker container hosting the X-Ray daemon binary and exposing port 2000 via UDP. The daemon is either configured via command line parameters or a configuration file. The most important option is to set the listen port to the correct IP address so that tracing requests from application Pods can be accepted.</p> 
+<p>To build your own Docker image containing the X-Ray daemon, use the Dockerfile shown below.</p> 
+<code class="lang-bash"># Use Amazon Linux Version 1
+FROM amazonlinux:1
+# Download latest 2.x release of X-Ray daemon
+RUN yum install -y unzip &amp;&amp; \
+cd /tmp/ &amp;&amp; \
+curl https://s3.dualstack.us-east-2.amazonaws.com/aws-xray-assets.us-east-2/xray-daemon/aws-xray-daemon-linux-2.x.zip &gt; aws-xray-daemon-linux-2.x.zip &amp;&amp; \
+unzip aws-xray-daemon-linux-2.x.zip &amp;&amp; \
+cp xray /usr/bin/xray &amp;&amp; \
+rm aws-xray-daemon-linux-2.x.zip &amp;&amp; \
+rm cfg.yaml
+# Expose port 2000 on udp
+EXPOSE 2000/udp
+ENTRYPOINT [&quot;/usr/bin/xray&quot;]
+# No cmd line parameters, use default configuration
+CMD [''] </code> 
+<p>This container image is based on Amazon Linux which results in a small container image. To build and tag the container image run <code class="lang-bash">docker build -t xray:latest</code>.</p> 
+<b>Create an Amazon ECR repository</b> 
+<p>Create a repository in Amazon&nbsp;Elastic Container Registry (<a href="https://aws.amazon.com/ecr">Amazon ECR</a>)&nbsp;to hold your X-Ray Docker image. Your Kubernetes cluster uses this repository to pull the image from upon deployment of the X-Ray Pods.</p> 
+<p>Use the following CLI command to create your repository or alternatively the AWS Management Console:</p> 
+<p><code class="lang-bash">aws ecr create-repository --repository-name xray-daemon</code></p> 
+<p>This creates a repository named xray-daemon for you and prints the repository URI used when pushing the image.</p> 
+<p>After the container build completes, push it to your ECR repository with the following push commands for the repository that you just created.</p> 
+<p><code class="lang-bash">docker tag xray-daemon:latest 000000000000.dkr.ecr.eu-west-1.amazonaws.com/xray-daemon:latest</code><br /> <code class="lang-bash">docker push 000000000000.dkr.ecr.eu-west-1.amazonaws.com/xray-daemon:latest</code></p> 
+<p>The resulting repository should look similar to the one shown in the following screenshot.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/ecr-repo-1024x524.jpeg" /></p> 
+<p>You can automate this processes using <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> and <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a>. For instructions how to build Docker containers and push them to ECR automatically, see <a href="https://docs.aws.amazon.com/codebuild/latest/userguide/sample-docker.html">Docker Sample for AWS CodeBuild</a>.</p> 
+<b>Deploy the X-Ray daemon to Kubernetes</b> 
+<p>Make sure that you configure the <code class="lang-bash">kubectl</code> tool properly for your cluster to be able to deploy the X-Ray Pod onto your Kubernetes cluster. After the X-Ray Pods are deployed to your Kubernetes cluster, applications can send tracing information to the X-Ray daemon on their host. The biggest advantage is that you do not need to provide X-Ray as a sidecar container alongside your application. This simplifies the configuration and deployment of your applications and overall saves resources on your cluster.</p> 
+<p>To deploy the X-Ray daemon as Pods onto your Kubernetes cluster, run the following from the cloned GitHub repository:</p> 
+<p><code class="lang-bash">kubectl apply -f xray-k8s-daemonset.yaml</code></p> 
+<p>This deploys and maintains an X-Ray Pod on each worker node, which is accepting tracing data from your microservices and routing it to one of the X-Ray pods. When deploying the container using a DaemonSet, the X-Ray port is also exposed directly on the host. This way, clients can connect directly to the daemon on your node. This avoids unnecessary network traffic going across your cluster.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/xray-diagram-1024x362.jpeg" /></p> 
+<b>Connecting to the X-Ray daemon</b> 
+<p>To integrate application tracing with your applications, use the X-Ray SDK for one of the supported programming languages:</p> 
+<li>Java</li> 
+<li>Node.js</li> 
+<li>.NET (Framework and Core)</li> 
+<li>Go</li> 
+<li>Python</li> 
+<p>The SDKs provide classes and methods for generating and sending trace data to the X-Ray daemon. Trace data includes information about incoming HTTP requests served by the application, and calls that the application makes to downstream services using the AWS SDK or HTTP clients.</p> 
+<p>By default, the X-Ray SDK expects the daemon to be available on <code class="lang-bash">127.0.0.1:2000</code>. This needs to be changed in this setup, as the daemon is not part of each Pod but hosted within its own Pod.</p> 
+<p>The deployed X-Ray DaemonSet exposes all Pods via the Kubernetes service discovery, so applications can use this endpoint to discover the X-Ray daemon. If you deployed to the default namespace, the endpoint is:</p> 
+<p><code class="lang-bash">xray-service.default</code></p> 
+<p>Applications now need to set the daemon address either with the <code class="lang-bash">AWS_XRAY_DAEMON_ADDRESS</code> environment variable (preferred) or directly within the SDK setup code:</p> 
+<p><code class="lang-js">AWSXRay.setDaemonAddress('xray-service.default:2000');</code></p> 
+<p>To set up the environment variable, include the following information in your Kubernetes application deployment description YAML. That exposes the X-Ray service address via the environment variable, where it is picked up automatically by the SDK.</p> 
+<code class="lang-yaml">env:
+- name: AWS_XRAY_DAEMON_ADDRESS 
+value: xray-service.default</code> 
+<p>&nbsp;</p> 
+<b>Sending tracing information to AWS X-Ray</b> 
+<p>Sending tracing information from your application is straightforward with the X-Ray SDKs. The example code below serves as a starting point to instrument your application with traces. Take a look at the two sample applications in the GitHub repository to see how to send traces from Service A to Service B. The diagram below visualizes the flow of requests between the services.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/xray-architecture-1024x589.jpeg" /></p> 
+<p>Because your application is running within containers, enable both the EC2Plugin and ECSPlugin, which gives you information about the Kubernetes node hosting the Pod as well as the container name. Despite the name ECSPlugin, this plugin gives you additional information about your container when running your application on Kubernetes.</p> 
+<code class="lang-java">var app = express();
+//...
+var AWSXRay = require('aws-xray-sdk');
+AWSXRay.config([XRay.plugins.EC2Plugin, XRay.plugins.ECSPlugin]);
+app.use(AWSXRay.express.openSegment('defaultName'));  //required at the start of your routes
+app.get('/', function (req, res) {
+res.render('index');
+});
+app.use(AWSXRay.express.closeSegment());  //required at the end of your routes / first in error handling routes</code> 
+<p>For more information about all options and possibilities to instrument your application code, see the <a href="https://aws.amazon.com/documentation/xray/">X-Ray documentation</a>&nbsp;page for the corresponding SDK information.</p> 
+<p>The picture below shows the resulting service map that provides insights into the flow of requests through the microservice landscape. You can drill down here into individual traces and see which path each request has taken.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/xray-servicemap-1024x403.jpeg" /></p> 
+<p>From the service map, you can drill down into individual requests and see where they originated from and how much time was spent in each service processing the request.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/xray-trace-1024x337.jpeg" /></p> 
+<p>You can also view details about every individual segment of the trace by clicking on it. This displays more details.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/28/xray-segment-info-1024x776.jpeg" /></p> 
+<p>On the <strong>Resources</strong> tab, you will see the Kubernetes Pod picked up by the ECSPlugin, which handled the request, as well as the instance that Pod was running on.</p> 
+<b>Summary</b> 
+<p>In this post, I shared how to deploy and run X-Ray on an existing Kubernetes cluster. Using tracing gives you deep insights into your applications to ease analysis and spot potential problems early. With X-Ray, you get these insights for all your applications running on AWS, no matter if they are hosted on <a href="https://aws.amazon.com/ecs">Amazon ECS</a>, <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, or a Kubernetes cluster.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4002');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/10/Picture1-3.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Building an Immersive VR Streaming Solution on AWS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1534,52 +1677,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3685');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3685');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_2-782x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Maintaining Transport Layer Security All the Way to Your Container: Using the Network Load Balancer with Amazon ECS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2018-01-17T13:32:23+00:00">17 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/elastic-load-balancing/" title="View all posts in Elastic Load Balancing*"><span property="articleSection">Elastic Load Balancing*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/maintaining-transport-layer-security-all-the-way-to-your-container-using-the-network-load-balancer-with-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3668" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3668&amp;disqus_title=Maintaining+Transport+Layer+Security+All+the+Way+to+Your+Container%3A+Using+the+Network+Load+Balancer+with+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/maintaining-transport-layer-security-all-the-way-to-your-container-using-the-network-load-balancer-with-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3668');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post contributed by AWS Senior Cloud Infrastructure Architect Anabell St Vincent.</em></p> 
-<p>Some systems or applications require Transport Layer Security (TLS) traffic from the client all the way through to the Docker container, without offloading or terminating certificates at a load balancer. Some highly time-sensitive services may require communication over TLS without any decryption and re-encryption in the communication path.</p> 
-<p>There are multiple options for this type of implementation on AWS. One option is to use a service discovery tool to implement the requirements, but that creates overhead from an implementation and management perspective. In this post, I examine the option of using Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs/">Amazon ECS</a>) with a <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-ec2-container-service-now-integrated-with-network-load-balancer-to-support-high-throughput-and-direct-tcp-connections-with-containers/">Network Load Balancer</a>.</p> 
-<p>Amazon ECS is a highly scalable, high-performance service for running Docker containers on AWS. It is integrated with each of the <a href="https://aws.amazon.com/elasticloadbalancing/">Elastic Load Balancing</a> load balancers offered by AWS:</p> 
-<li>The Classic Load Balancer supports application or network level traffic and can be used to pass through the TLS traffic when configured with <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/classic/elb-listener-config.html">TCP listeners</a>. This approach limits the number of containers to be deployed by Amazon ECS to one per EC2 host. This approach is only available for the ECS launch type of EC2, not Fargate. This is due to Classic Load Balancer not supporting target groups, so dynamic port mapping can’t be leveraged for this type of implementation.</li> 
-<li>The Application Load Balancer functions at the application layer, the layer 7 of Open System Interconnection (OSI) and supports HTTP and HTTPS protocols. By operating at layer 7, the Application Load Balancer is able to route traffic based on the request path in the URL. It can also provide SSL offloading or termination of the SSL certificates for applications, by hosting the SSL certificate. The Application Load Balancer integrates well with ECS by providing the functionality of the target groups for the container instances, which allows for port mapping and targeting container groups. Port mappings allows the containers to run on different ports but still be represented by the one port configured on the ALB as part of the target group of the task.</li> 
-<li>The Network Load Balancer, which is a high performance, ultra-low latency load balancer that operates at layer 4. It is designed to handle tens of millions of requests per second while maintaining high throughput at ultra-low latency. Operating at layer 4 networking means that the traffic is passed onto the targets based on the IP addresses and ports as oppose to session information or cookies, as is the case with Application Load Balancers. The Network Load Balancer also supports long-lived TCP connections, which are ideal for WebSocket type of applications . Some applications communicate on TCP protocols rather than solely on HTTP and HTTPS. The Network Load Balancer provides the support to load balance between services that require protocols besides HTTP and HTTPS.</li> 
-<p>The Network Load Balancer is the best option for managing secure traffic as it provides support for TCP traffic pass through, without decrypting and then re-encrypting the traffic. Additionally, the Network Load Balancer supports target groups, which means port mapping can be used, as well as configuring the load balancer as part of the task definition for the containers.</p> 
-<b>Architecture</b> 
-<p>The diagram below shows a high-level architecture with TLS traffic coming from the internet that passes through the VPC to the Network Load Balancer, then to a container without offloading or terminating the certificate in the path.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_1.png" /></p> 
-<p>In this diagram, there are three containers running in an ECS cluster. The ECS cluster can be either the EC2 or <a href="https://aws.amazon.com/fargate/">Fargate</a> launch type.</p> 
-<p>The following diagram shows an architecture that contains two different services deployed in two different ECS clusters.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_2-1.png" /></p> 
-<p>In this architecture, the containers in each of the clusters can reference the other containers securely via the Network Load Balancer without terminating or offloading the certificates until it reaches the destination container.</p> 
-<p>This approach addresses the requirements where containers need to communicate securely whether they are deployed in one VPC, across VPCs, or in separate AWS accounts.</p> 
-<p>The following diagram below shows both TLS connections from the internet, as well as connections from within the same cluster.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/nlbECS_3-2.png" /></p> 
-<p>The above approach is achieved by using the same Network Load Balancer for the cluster to serve two different services. Implement this by using two different <a href="http://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html">target groups</a> (one for each service) and associating them with the ECS task definition. The containers use the DNS name associated with the Network Load Balancer to access the containers in the other service.</p> 
-<b>Summary</b> 
-<p>The architectures in this post show how the Network Load Balancer integrates seamlessly with ECS and other AWS services, providing end-to-end TLS communication across services without offloading or terminating the certificates. This gives you the ability to use dynamic ports in ECS containers. It can also handle tens of millions of requests per second while maintaining high throughput at ultra-low latency for applications that require the TCP protocol.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3668');
 });
 </script> 
 </article> 
