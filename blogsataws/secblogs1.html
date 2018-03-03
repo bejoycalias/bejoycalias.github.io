@@ -190,6 +190,137 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/23/federated_auth_with_adfs_1-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Federated Authentication with Active Directory Federation Services (AD FS)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Kevin Higgins</span></span> | on 
+<time property="datePublished" datetime="2018-03-02T16:20:07+00:00">02 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/developer-tools/aws-command-line-interface/" title="View all posts in AWS Command Line Interface*"><span property="articleSection">AWS Command Line Interface*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/aws-federated-authentication-with-active-directory-federation-services-ad-fs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7338" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7338&amp;disqus_title=AWS+Federated+Authentication+with+Active+Directory+Federation+Services+%28AD+FS%29&amp;disqus_url=https://aws.amazon.com/blogs/security/aws-federated-authentication-with-active-directory-federation-services-ad-fs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7338');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Today we’d like to walk you through AWS Identity and Access Management (IAM), federated sign-in through Active Directory (AD) and Active Directory Federation Services (ADFS). With IAM, you can centrally manage users, security credentials such as access keys, and permissions that control which resources users can access. Customers have the option of creating users and group objects within IAM or they can utilize a third-party federation service to assign external directory users access to AWS resources. To streamline the administration of user access in AWS, organizations can utilize a federated solution with an external directory, allowing them to minimize administrative overhead. Benefits of this approach include leveraging existing passwords and password policies, roles and groups. This guide provides a walk-through on how to automate the federation setup across multiple accounts/roles with an Active Directory backing identity store. This will establish the minimum baseline for the authentication architecture, including the initial IdP deployment and elements for federation.</p> 
+<p><span style="text-decoration: underline"><strong>ADFS Federated Authentication Process</strong></span></p> 
+<p>The following describes the process a user will follow to authenticate to AWS using Active Directory and ADFS as the identity provider and identity brokers:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_25.dc86ecbfbbf80af3f553e7374d2a55ad1afb7016.png" /></p> 
+<ol> 
+<li>Corporate user accesses the corporate Active Directory Federation Services portal sign-in page and provides Active Directory authentication credentials.</li> 
+<li>AD FS authenticates the user against Active Directory.</li> 
+<li>Active Directory returns the user’s information, including AD group membership information.</li> 
+<li>AD FS dynamically builds ARNs by using Active Directory group memberships for the IAM roles and user attributes for the AWS account IDs, and sends a signed assertion to the users browser with a redirect to post the assertion to AWS STS.</li> 
+<li>Temporary credentials are returned using STS AssumeRoleWithSAML.</li> 
+<li>The user is authenticated and provided access to the AWS management console.</li> 
+</ol> 
+<p><span style="text-decoration: underline"><strong>Configuration Steps</strong></span></p> 
+<p>Configuration requires setup in the Identity Provider store (e.g. Active Directory), the identity broker (e.g. Active Directory Federation Services), and AWS. It is possible to configure AWS to federate authentication using a variety of third-party SAML 2.0 compliant identity providers, more information can be <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_saml_3rd-party.html">found here</a>.</p> 
+<p><span style="text-decoration: underline"><strong>AWS Configuration</strong></span></p> 
+<p>The configuration steps outlined in this document can be completed to enable federated access to multiple AWS accounts, facilitating a single sign on process across a multi-account AWS environment. Access can also be provided to multiple roles in each AWS account. The roles available to a user are based on their group memberships in the identity provider (IdP). In a multi-role and/or multi-account scenario, role assumption requires the user to select the account and role they wish to assume during the authentication process.</p> 
+<p><span style="text-decoration: underline"><strong>Identity Provider</strong></span></p> 
+<p>A SAML 2.0 identity provider is an IAM resource that describes an identity provider (IdP) service that supports the <a href="https://wiki.oasis-open.org/security">SAML 2.0 (Security Assertion Markup Language 2.0)</a> standard. AWS SAML identity provider configurations can be used to establish trust between AWS and SAML-compatible identity providers, such as Shibboleth or Microsoft Active Directory Federation Services. These enable users in an organization to access AWS resources using existing credentials from the identity provider.</p> 
+<p>A SAML identify provider can be configured using the AWS console by completing the following steps.</p> 
+<p>1. Access the “Identity Providers” section of the AWS IAM console at the following URL: <a href="https://console.aws.amazon.com/iam/home?region=us-east-1#/providers">https://console.aws.amazon.com/iam/home?region=us-east-1#/providers</a>. Click on the “Create Provider” button.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_2.3a1032e31a5de83c858ee1810b1a6842830538b3.png" /></p> 
+<p>2. Select SAML for the provider type. Select a provider name of your choosing (this will become the logical name used in the identity provider ARN). Lastly, download the FederationMetadata.xml file from your ADFS server to your client system file (https://yourADFSserverFQDN/FederationMetadata/2007-06/FederationMetadata.xml). Click “Choose File” and upload it to AWS.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_3.8b3a464702bc5a12d2ca84342040b86575eabb06.png" /></p> 
+<p>3. Click “Next Step” and then verify the information you have entered. Click “Create” to complete the AWS identity provider configuration process.</p> 
+<p><strong>IAM Role Naming Convention for User Access</strong><br /> Once the AWS identity provider configuration is complete, it is necessary to create the roles in AWS that federated users can assume via SAML 2.0. An IAM role is an AWS identity with permission policies that determine what the identity can and cannot do in AWS. In a federated authentication scenario, users (as defined in the IdP) assume an AWS role during the sign-in process. A role should be defined for each access delineation that you wish to define. For example, create a role for each line of business (LOB), or each function within a LOB. Each role will then be assigned a set of policies that define what privileges the users who will be assuming that role will have.</p> 
+<p>The following steps detail how to create a single role. These steps should be completed multiple times to enable assumption of different roles within AWS, as required.</p> 
+<p>1. Access the “Roles” section of the AWS IAM console at the following URL: <a href="https://console.aws.amazon.com/iam/home?region=us-east-1#/roles">https://console.aws.amazon.com/iam/home?region=us-east-1#/roles</a>. Click on the “Create Role” button.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_4.b66327250fe514d1522d9dafba2ec8a77de0725f.png" /></p> 
+<p>2. Select “SAML” as the trusted entity type. Click Next Step.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_5.69a994ecc1645a52e53648efaae211cdfcfaa55a.png" /></p> 
+<p>3. Select your previously created identity provider. Click Next: Permissions.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_6.d5efa7a6b3f8b6e01f1dd9b80c2d2d42d021a2e2.png" /></p> 
+<p>4. The next step requires selection of policies that represent the desired permissions the user should obtain in AWS, once they have authenticated and successfully assumed the role. This can be either a custom policy or preferably an AWS managed policy. AWS recommends leveraging existing <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_job-functions.html">AWS access policies for job functions</a> for common levels of access. For example, the “Billing” AWS Managed policy should be utilized to provide financial analyst access to AWS billing and cost information.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_7.ef4226b439e98c4ecbe39c96479c7cb1388a4362.png" /></p> 
+<p>5.&nbsp;Provide a name for your role. All roles should be created with the prefix ADFS-&lt;rolename&gt; to simplify the identification of roles in AWS that are accessed through the federated authentication process. Next click, “Create Role”.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_8.75deb2c2ef9ab7528e95185865044e1dc09bbb11.png" /></p> 
+<p><span style="text-decoration: underline"><strong>Active Directory Configuration</strong></span></p> 
+<p>Determining how you will create and delineate your AD groups and IAM roles in AWS is crucial to how you secure access to your account and manage resources. SAML assertions to the AWS environment and the respective IAM role access will be managed through regular expression (regex) matching between your on-premises AD group name to an AWS IAM role.</p> 
+<p>One approach for creating the AD groups that uniquely identify the AWS IAM role mapping is by selecting a common group naming convention. For example, your AD groups would start with an identifier, for example AWS-, as this will distinguish your AWS groups from others within the organization. Next, include the 12-digit AWS account number. Finally, add the matching role name within the AWS account. Here is an example:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_9.8631e991b7762154a86c95050781fa2e40d169c4.png" /></p> 
+<p>You should do this for each role and corresponding AWS account you wish to support with federated access. Users in Active Directory can subsequently be added to the groups, providing the ability to assume access to the corresponding roles in AWS. If a user is associated with multiple Active Directory groups and AWS accounts, they will see a list of roles by AWS account and will have the option to choose which role to assume. A user will not be able to assume more than one role at a time, but has the ability to switch between them as needed.</p> 
+<p>Note: Microsoft imposes a limit on the number of groups a user can be a member of (approximately 1,015 groups) due to the size limit for the access token that is created for each security principal. This limitation, however, is not affected by how the groups may or may not be nested.</p> 
+<p><span style="text-decoration: underline"><strong>Active Directory Federation Services Configuration</strong></span></p> 
+<p>ADFS federation occurs with the participation of two parties; the identity or claims provider (in this case the owner of the identity repository – Active Directory) and the relying party, which is another application that wishes to outsource authentication to the identity provider; in this case Amazon Secure Token Service (STS). The relying party is a federation partner that is represented by a claims provider trust in the federation service.</p> 
+<p><span style="text-decoration: underline"><strong>Relying Party</strong></span></p> 
+<p>You can configure a new relying party in Active Directory Federation Services by doing the following.</p> 
+<p>1. From the ADFS Management Console, right-click ADFS and select Add Relying Party Trust.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_10.9fd79859843b0f010de321d51f35f5a94dc5c2e0.png" /></p> 
+<p>2. In the Add Relying Party Trust Wizard, click Start.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_11.09329982f8db9c655a025040b6e1586d09b309a9.png" /></p> 
+<p>3. Check Import data about the relying party published online or on a local network, enter<br /> https://signin.aws.amazon.com/static/saml-metadata.xml, and then click Next. The metadata XML file is a standard SAML metadata document that describes AWS as a relying party.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_12.4932a319727e7185476763684ab525cb38373e2f.png" /></p> 
+<p>Note: SAML federations use metadata documents to maintain information about the public keys and certificates that each party utilizes. At run time, each member of the federation can then use this information to validate that the cryptographic elements of the distributed transactions come from the expected actors and haven’t been tampered with. Since these metadata documents do not contain any sensitive cryptographic material, AWS publishes federation metadata at <a href="https://signin.aws.amazon.com/static/saml-metadata.xml">https://signin.aws.amazon.com/static/saml-metadata.xml</a></p> 
+<p>4. Set the display name for the relying party and then click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_13.185958f6c7870d9b6144b06a274d6049a64b062d.png" /></p> 
+<p>5. We will not choose to enable/configure the MFA settings at this time.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_14.f8d6fdb15f19bcd1f1b4557e429b31802d03c091.png" /></p> 
+<p>6. Select “Permit all users to access this relying party” and click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_15.0e4626b25a2a85532da8c1497b7d02ce9baa01dc.png" /></p> 
+<p>7. Review your settings and then click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_16.e5bbe2e02c7b0bcc73cdd4fee9e5d3840e30eff2.png" /></p> 
+<p>8. Choose Close on the Finish page to complete the Add Relying Party Trust Wizard. AWS is now configured as a relying party.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_26.png.01e599495877e5ad0aa2eba234bee6f83c90a32e.jpg" /></p> 
+<p><span style="text-decoration: underline"><strong>Custom Claim Rules</strong></span></p> 
+<p>Microsoft Active Directory Federation Services (AD FS) uses Claims Rule Language to issue and transform claims between claims providers and relying parties. A claim is information about a user from a trusted source. The trusted source is asserting that the information is true, and that source has authenticated the user in some manner. The claims provider is the source of the claim. This can be information pulled from an attribute store such as Active Directory (AD). The relying party is the destination for the claims, in this case AWS.</p> 
+<p>AD FS provides administrators with the option to define custom rules that they can use to determine the behavior of identity claims with the claim rule language. The Active Directory Federation Services (AD FS) claim rule language acts as the administrative building block to help manage the behavior of incoming and outgoing claims. There are four claim rules that need to be created to effectively enable Active Directory users to assume roles in AWS based on group membership in Active Directory.</p> 
+<p>Right-click on the relying party (in this case Amazon Web Services) and then click Edit Claim Rules</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_19.594240ea64134bc2c79239d9aba7f7de572df07b.png" /></p> 
+<p>Here are the steps used to create the claim rules for NameId, RoleSessionName, Get AD Groups and Roles.</p> 
+<p>1. NameId</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) In the Edit Claim Rules for &lt;relying party&gt; dialog box, click Add Rule.<br /> b) Select Transform an Incoming Claim and then click Next.<br /> c) Use the following settings:</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Claim rule name: NameId<br /> ii) Incoming claim type: Windows Account Name<br /> iii) Outgoing claim type: Name ID<br /> iv) Outgoing name ID format: Persistent Identifier<br /> v) Pass through all claim values: checked</p> 
+<p style="margin-left: 5%;margin-right: 5%">d) Click OK.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_20.982922cd43adf189967386acfb3feb380d6a4de2.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;]<br /> =&gt; issue(Type = &quot;http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier&quot;, Issuer = c.Issuer, OriginalIssuer = c.OriginalIssuer, Value = c.Value, ValueType = c.ValueType, Properties[&quot;http://schemas.xmlsoap.org/ws/2005/05/identity/claimproperties/format&quot;] = &quot;urn:oasis:names:tc:SAML:2.0:nameid-format:persistent&quot;);</code></p> 
+<p>2. RoleSessionName</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Click Add Rule<br /> b) In the Claim rule template list, select Send LDAP Attributes as Claims.<br /> c) Use the following settings:</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Claim rule name: RoleSessionName<br /> ii) Attribute store: Active Directory<br /> iii) LDAP Attribute: E-Mail-Addresses<br /> iv) Outgoing Claim Type: https://aws.amazon.com/SAML/Attributes/RoleSessionName</p> 
+<p style="margin-left: 5%;margin-right: 5%">d) Click OK</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_21.f184e9d25b5213e26499c647704cb60022d05003.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;]<br /> =&gt; issue(store = &quot;Active Directory&quot;, types = (&quot;https://aws.amazon.com/SAML/Attributes/RoleSessionName&quot;), query = &quot;;mail;{0}&quot;, param = c.Value);</code></p> 
+<p>3. Get AD Groups</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Click Add Rule.<br /> b) In the Claim rule template list, select Send Claims Using a Custom Rule and then click Next.<br /> c) For Claim Rule Name, select Get AD Groups, and then in Custom rule, enter the following:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_22.6274a5dddac2a7f58315f2c0cc3fc4f0a69b9505.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;]<br /> =&gt; add(store = &quot;Active Directory&quot;, types = (&quot;http://temp/variable&quot;), query = &quot;;tokenGroups;{0}&quot;, param = c.Value);</code></p> 
+<p>This custom rule uses a script in the claim rule language that retrieves all the groups the authenticated user is a member of and places them into a temporary claim named http://temp/variable. Think of this as a variable you can access later.</p> 
+<p>Note: Ensure there’s no trailing whitespace to avoid unexpected results.</p> 
+<p>4. Role Attributes</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Unlike the two previous claims, here we used custom rules to send role attributes. This is done by retrieving all the authenticated user’s AD groups and then matching the groups that start with to IAM roles of a similar name. I used the names of these groups to create Amazon Resource Names (ARNs) of IAM roles in my AWS account (i.e., those that start with AWS-). Sending role attributes requires two custom rules. The first rule retrieves all the authenticated user’s AD group memberships and the second rule performs the transformation to the roles claim.</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Click Add Rule.<br /> ii) In the Claim rule template list, select Send Claims Using a Custom Rule and then click Next.<br /> iii) For Claim Rule Name, enter Roles, and then in Custom rule, enter the following:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_23.99bb0356c4f02c4cdb9f91888490bf6210bca0cc.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://temp/variable&quot;, Value =~ &quot;(?i)^AWS-([\d]{12})&quot;] =&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/Role&quot;, Value = RegExReplace(c.Value, &quot;AWS-([\d]{12})-&quot;, &quot;arn:aws:iam::$1:saml-provider/idp1,arn:aws:iam::$1:role/&quot;));</code></p> 
+<p>This custom rule uses regular expressions to transform each of the group memberships of the form AWS-&lt;Account Number&gt;-&lt;Role Name&gt; into in the IAM role ARN, IAM federation provider ARN form AWS expects.</p> 
+<p>Note: In the example rule language above idp1 represents the logical name given to the SAML identity provider in the AWS identity provider setup. Please change this based on the logical name you chose in the IAM console for your identity provider.</p> 
+<p><span style="text-decoration: underline"><strong>Adjusting Session Duration</strong></span></p> 
+<p>By default, the temporary credentials that are issued by AWS IAM for SAML federation are valid for an hour. Depending on your organizations security stance, you may wish to adjust. You can allow your federated users to work in the AWS Management Console for up to 12 hours. This can be accomplished by adding another claim rule in your ADFS configuration. To add the rule, do the following:</p> 
+<p style="margin-left: 5%;margin-right: 5%">1. Access ADFS Management Tool on your ADFS Server.<br /> 2. Choose Relying Party Trusts, then select your AWS Relying Party configuration.<br /> 3. Choose Edit Claim Rules.<br /> 4. Choose Add Rule to configure a new rule, and then choose Send claims using a custom rule. Finally, choose Next.<br /> 5. Name your Rule “Session Duration” and add the following rule syntax.<br /> 6. Adjust the value of 28800 seconds (8 hours) as appropriate.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_24.edae1e081bc5baeb1979fc2b398f29a81e35607c.png" /></p> 
+<p>Rule language:<br /> <code>=&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/SessionDuration&quot;, Value = &quot;28800&quot;);</code></p> 
+<p>Note: AD FS 2012 R2 and AD FS 2016 tokens have a sixty-minute validity period by default. This value is configurable on a per-relying party trust basis. In addition to adding the “Session Duration” claim rule, you will also need to update the security token created by AD FS. To update this value, run the following command:</p> 
+<p><code>Set-ADFSRelyingPartyTrust -TargetName “[Display Name]” -TokenLifetime 480</code></p> 
+<p>The Parameter “-TokenLifetime” determines the Lifetime in Minutes. In this example, we set the Lifetime to 480 minutes, eight hours.</p> 
+<p>These are the main settings related to session lifetimes and user authentication. Once updated, any new console session your federated users initiate will be valid for the duration specified in the SessionDuration claim.</p> 
+<p><span style="text-decoration: underline"><strong>API/CLI Access</strong></span><br /> Access to the AWS API and command-line tools using federated access can be accomplished using techniques in the following blog article:</p> 
+<p><a href="https://blogs.aws.amazon.com/security/post/Tx1LDN0UBGJJ26Q/How-to-Implement-Federated-API-and-CLI-Access-Using-SAML-2-0-and-AD-FS">https://blogs.aws.amazon.com/security/post/Tx1LDN0UBGJJ26Q/How-to-Implement-Federated-API-and-CLI-Access-Using-SAML-2-0-and-AD-FS</a></p> 
+<p>This will enable your users to access your AWS environment using their domain credentials through the AWS CLI or one of the AWS SDKs.</p> 
+<p><span style="text-decoration: underline"><strong>Conclusion</strong></span><br /> In this post, I’ve shown you how to provide identity federation, and thus SSO, to the AWS Management Console for multiple accounts using SAML assertions. With this approach, the AWS Security Token service (STS) will provide temporary credentials (via SAML) for the user to ‘assume’ a role (that they have access to use, as denoted by AD Group membership) that has specific permissions associated; as opposed to providing long-term access credentials to the AWS resources. By adopting this model, you will have a secure and robust IAM approach for accessing AWS resources that align with AWS security best practices.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7338');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/26/ha_hero_certificate.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Preparing for AWS Certificate Manager (ACM) Support of Certificate Transparency</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -219,10 +350,10 @@ AWS.Blog.commenting('#aws-comment-trigger-7278');
 <h3>Conclusion</h3> 
 <p>Beginning April 24, 2018, ACM will begin logging all new and renewed certificates by default. If you don’t want a certificate to be logged, you’ll be able to&nbsp;opt out using the AWS API or CLI. However, for Google Chrome to trust the certificate, all issued or imported certificates must have the SCT information embedded in them by April 30, 2018.</p> 
 <p>Regarding existing ACM certificates:</p> 
-<li>No action is required for existing ACM certificates (unless you want to opt out of CloudTrail logging).</li> 
-<li>Certificates issued before the April 30 deadline do not produce CloudTrail based warnings in Google Chrome, so they don’t need to be logged.</li> 
-<li>ACM will not log these certificates, and they will function normally without warnings in Google Chrome.</li> 
-<li>Starting on April 24, ACM will publish existing certificates to CloudTrail logs on a rolling basis as they are renewed.</li> 
+<li>No action is required for existing ACM certificates (unless you want to opt out of Certificate Transparency logging).</li> 
+<li>Certificates issued before the April 30 deadline do not produce Certificate Transparency based warnings in Google Chrome, so they don’t need to be logged.</li> 
+<li>ACM will not log&nbsp;existing ACM certificates, and they will function normally without warnings in Google Chrome.</li> 
+<li>Starting on April 24, ACM will publish existing certificates to Certificate Transparency logs on a rolling basis as they are renewed.</li> 
 <p>If you have comments about this blog post, submit them in the “Comments” section below. If you have questions, start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=206">ACM forum</a>.</p> 
 <p>– Jonathan</p> 
 <p><strong>Interested in additional AWS Security news? Follow the AWS Security Blog <a href="https://twitter.com/AWSsecurityinfo">on Twitter</a>.</strong></p> 
@@ -1043,51 +1174,6 @@ AWS.Blog.commenting('#aws-comment-trigger-7161');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-7161');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/16/PCIBox11.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Adds 16 More Services to Its PCI DSS Compliance Program</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chad Woolf</span></span> | on 
-<time property="datePublished" datetime="2018-01-26T07:49:31+00:00">26 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/aws-adds-16-more-services-to-its-pci-dss-compliance-program/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7094" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7094&amp;disqus_title=AWS+Adds+16+More+Services+to+Its+PCI+DSS+Compliance+Program&amp;disqus_url=https://aws.amazon.com/blogs/security/aws-adds-16-more-services-to-its-pci-dss-compliance-program/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7094');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/16/PCIBox11.jpg" /></p> 
-<p>AWS has added 16 more AWS services to its&nbsp;<a href="https://aws.amazon.com/compliance/pci-dss-level-1-faqs/" target="_blank" rel="noopener noreferrer">Payment Card Industry Data Security Standard</a>&nbsp;(PCI DSS) compliance program, giving you more options, flexibility, and functionality to process and store sensitive payment card data in the AWS Cloud. The services were audited by&nbsp;<a href="https://www.coalfire.com/" target="_blank" rel="noopener noreferrer">Coalfire</a>&nbsp;to ensure that they meet strict&nbsp;<a href="https://www.pcisecuritystandards.org/" target="_blank" rel="noopener noreferrer">PCI DSS standards</a>.</p> 
-<p>The newly compliant AWS services are:</p> 
-<li><a href="https://aws.amazon.com/inspector" target="_blank" rel="noopener noreferrer">Amazon Inspector</a></li> 
-<li><a href="http://aws.amazon.com/macie" target="_blank" rel="noopener noreferrer">Amazon Macie</a></li> 
-<li><a href="https://aws.amazon.com/quicksight" target="_blank" rel="noopener noreferrer">Amazon QuickSight</a></li> 
-<li><a href="https://docs.aws.amazon.com/AmazonS3/latest/dev/transfer-acceleration.html" target="_blank" rel="noopener noreferrer">Amazon S3 Transfer Acceleration</a></li> 
-<li><a href="https://aws.amazon.com/documentation/sagemaker/" target="_blank" rel="noopener noreferrer">Amazon SageMaker</a></li> 
-<li><a href="http://aws.amazon.com/sns" target="_blank" rel="noopener noreferrer">Amazon Simple Notification Service</a></li> 
-<li><a href="http://aws.amazon.com/batch" target="_blank" rel="noopener noreferrer">AWS Batch</a></li> 
-<li><a href="http://aws.amazon.com/codebuild" target="_blank" rel="noopener noreferrer">AWS CodeBuild</a></li> 
-<li><a href="https://aws.amazon.com/lambda/edge/" target="_blank" rel="noopener noreferrer">AWS Lambda@Edge</a></li> 
-<li><a href="http://aws.amazon.com/shield" target="_blank" rel="noopener noreferrer">AWS Shield</a></li> 
-<li><a href="http://aws.amazon.com/snowball" target="_blank" rel="noopener noreferrer">AWS Snowball</a></li> 
-<li><a href="https://aws.amazon.com/snowball-edge/" target="_blank" rel="noopener noreferrer">AWS Snowball Edge</a></li> 
-<li><a href="http://aws.amazon.com/snowmobile/" target="_blank" rel="noopener noreferrer">AWS Snowmobile</a></li> 
-<li><a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a></li> 
-<li><a href="http://aws.amazon.com/xray" target="_blank" rel="noopener noreferrer">AWS X-Ray</a></li> 
-<p>AWS now offers&nbsp;<a href="https://aws.amazon.com/compliance/services-in-scope/" target="_blank" rel="noopener noreferrer">58 services</a>&nbsp;that are officially PCI DSS compliant, giving administrators more service options for implementing a PCI-compliant cardholder environment.</p> 
-<p>For more information about the AWS PCI DSS compliance program, see&nbsp;<a href="https://aws.amazon.com/compliance/resources/" target="_blank" rel="noopener noreferrer">Compliance Resources</a>,&nbsp;<a href="https://aws.amazon.com/compliance/services-in-scope/" target="_blank" rel="noopener noreferrer">AWS Services in Scope by Compliance Program</a>, and&nbsp;<a href="https://aws.amazon.com/compliance/pci-dss-level-1-faqs/" target="_blank" rel="noopener noreferrer">PCI DSS Compliance</a>.</p> 
-<p>– Chad Woolf</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7094');
 });
 </script> 
 </article> 
