@@ -190,6 +190,461 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Manage Credentials in AWS OpsWorks for Puppet Enterprise using Hiera-eyaml</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nick Alteen</span></span> | on 
+<time property="datePublished" datetime="2017-12-28T11:13:04+00:00">28 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/how-to-manage-credentials-in-aws-opsworks-for-puppet-enterprise-using-hiera-eyaml/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>For customers new to configuration management with AWS OpsWorks for Puppet Enterprise (OWPE), a frequently-asked question is “How do I store sensitive data, such as database passwords, for use in my manifests?” Hiera allows you to manage and access data from various backends (data storage locations). By default, Hiera 5 supports YAML, JSON, and HOCON backends and only plaintext data files and values.</p> 
+<p>With some additional configuration, Hiera 5 supports the eyaml backend, which allows administrators to define backend data files with encrypted data (without having to encrypt the file in its entirety). This provides security of data at rest while allowing fast lookup and ease of use/review by administrators. Additionally, plaintext values can be included in the same file. Hiera-eyaml supports encrypted arrays, hashes, and nested arrays/hashes.</p> 
+<p><span id="more-2299"></span></p> 
+<h3>Enabling Hiera-eyaml</h3> 
+<p>The eyaml command line tool is made available for working with encrypted data files. To install and use hiera-eyaml, follow these instructions.</p> 
+gem install hiera-eyaml 
+<p>Import the following modules from the Puppet Forge to your Master.</p> 
+<li>https://forge.puppet.com/puppet/hiera</li> 
+<li>https://forge.puppet.com/puppetlabs/puppetserver_gem</li> 
+<li>https://forge.puppet.com/puppetlabs/inifile</li> 
+<li>https://forge.puppet.com/puppetlabs/stdlib</li> 
+<p>The following example Puppetfile includes the required modules.</p> 
+forge &quot;http://forge.puppetlabs.com&quot;
+# Modules from the Puppet Forge
+mod &quot;puppetlabs/concat&quot;
+mod &quot;puppetlabs/ntp&quot;
+mod &quot;puppetlabs/stdlib&quot;
+mod &quot;puppet/staging&quot;
+mod &quot;puppet-logrotate&quot;
+mod &quot;puppet/nginx&quot;
+mod &quot;puppetlabs/inifile&quot;
+mod &quot;puppetlabs/puppetserver_gem&quot;
+mod &quot;puppet/hiera&quot; 
+<p>Create a profile manifest to configure Hiera. This will enable three hierarchies (Virtual yaml, Nodes yaml, and Default yaml file). In the starter kit provided when creating an AWS OpsWorks for Puppet Enterprise instance, this would be located in <code>[STARTER_KIT]/site/profile/manifests/hiera.pp</code>.</p> 
+class profile::hiera {
+class { 'hiera':
+hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
+hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
+hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
+{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
+{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
+{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
+],
+eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+&nbsp;&nbsp; eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+&nbsp;&nbsp; eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
+&nbsp;&nbsp; &nbsp;create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
+&nbsp;&nbsp;&nbsp; keysdir&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
+&nbsp;&nbsp;&nbsp; provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
+}
+} 
+<p>Ensuring that you are following best practices, you can then add the newly created hiera profile to a role for our Puppet Master. This would be placed in <code>[STARTER_KIT]/site/role/manifests/puppet_master.pp</code>.</p> 
+class role::puppet_master {
+include profile::hiera
+} 
+<p>After steps 2-4 have been completed, and the control repository has been synchronized with the Puppet master (via webhook and puppet-code deploy), the role should be available for classification on the Puppet Master. This can be done in the Classification console under “All Nodes” -&gt; “PE Infrastructure” -&gt; “PE Master”. If for some reason the role is not appearing as a classification option, ensure that you have refreshed class definitions.</p> 
+<p>To quickly synchronize these changes, you can manually execute an Agent run on the Master using the PE console. At this point, the necessary configuration to support hiera-eyaml has been configured. The next steps would be to install encryption keys securely on the Puppet Master.</p> 
+<h3>Secure Key Storage</h3> 
+<p>After eyaml has been configured on the Master, &nbsp;you need to generate and securely store the asymmetric key pairs used for encryption and decryption of sensitive data. This can be done with the <code>eyaml createkeys</code> command from your workstation. The private key should be stored in a secure location that can only be accessed by the Puppet Master and any authorized users. In this case, you can leverage an Amazon S3 bucket with a strict access policy that allows only the OWPE instance’s IAM profile and administrators to our AWS account. The sample policy that follows demonstrates this. With this policy, it is important to ensure that the <code>s3:GetObject</code> and <code>s3:ListBucket</code> permissions are added to the <code>aws-opsworks-cm-ec2</code> role. After the policy has been applied and the OWPE Amazon EC2 role has been updated, have an administrator upload the public and private keys to the bucket.</p> 
+{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Id&quot;: &quot;HieraKeysPolicy&quot;,
+&nbsp; &quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;AllowOpsWorksCMInstanceRole&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::ACCOUNT_ID:role/service-role/aws-opsworks-cm-ec2-role&quot;
+},
+&quot;Action&quot;: [
+&quot;s3:GetObject&quot;,
+&quot;s3:ListBucket&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:s3:::BUCKET_NAME/*&quot;,
+&quot;arn:aws:s3:::BUCKET_NAME&quot;
+]
+},
+{
+&quot;Sid&quot;: &quot;AllowAdminAccess&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;arn:aws:iam::ACCOUNT_ID:user/ADMIN_USER&quot;
+},
+&quot;Action&quot;: &quot;s3:*&quot;,
+&quot;Resource&quot;: [
+&quot;arn:aws:s3:::BUCKET_NAME/*&quot;,
+&quot;arn:aws:s3:::BUCKET_NAME&quot;
+]
+}
+]
+} 
+<p>After this policy has been applied, public and private keys can be generated with the <code>eyaml createkeys</code> command. This will automatically place the key files in a <code>./keys</code> directory on your workstation. The public/private keys can then be uploaded to the S3 bucket, and you can modify the <code>hiera.pp</code> manifest to include importing these files to <code>/etc/puppetlabs/code-staging/keys</code>. This directory is configured as part of the Hiera profile created previously, and is included in the backup/restore procedures.</p> 
+<p>Since these files are not created with in-line content, or from files/templates stored within the module itself, you need to make use of the exec Puppet resource. Since the AWS CLI is installed by default on OWPE Masters, no additional configuration/installation is required. The benefit of this approach is that the AWS CLI will make use of instance profiles to determine access permissions to S3. You need to confirm that the role assigned to nodes in your environment has appropriate S3 permissions (specifically <code>s3:ListBucket</code> on the bucket itself, and <code>s3:GetObject</code> for any key files).</p> 
+<p>First, update the Hiera profile to include importing the public/private key files.</p> 
+class profile::hiera {
+class { 'hiera':
+hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
+hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
+hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
+{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
+{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
+{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
+],
+eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
+create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
+keysdir&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;=&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
+provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
+}
+exec { 'get-private-key':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/private/key.pem /etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
+creates =&gt; '/etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
+}
+exec { 'get-public-key':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/public/key.pem /etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
+creates =&gt; '/etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
+}
+exec { 'update-key-perms':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'chown -R pe-puppet:pe-puppet /etc/puppetlabs/code-staging/keys &amp;&amp; chmod -R 0500 /etc/puppetlabs/code-staging/keys &amp;&amp; chmod 0400 /etc/puppetlabs/code-staging/keys/*.pem',
+require =&gt; [
+Exec['get-private-key'],
+Exec['get-public-key'],
+],
+}
+} 
+<p>After this is complete and deployed to your control repository, run Puppet Agent on the master and deploy the changes with <code>puppet-code deploy --wait --all --config-file .config/puppet-code.conf --token-file .config/puppetlabs/token</code> (executed from the root of your starter kit). To verify the modifications work as intended, test the puppet lookup tool to verify you are able to retrieve data from <code>common.yaml</code>.</p> 
+$ puppet lookup message --explain
+Searching for &quot;message&quot;
+&nbsp; Global Data Provider (hiera configuration version 5)
+&nbsp;&nbsp;&nbsp; Using configuration &quot;/etc/puppetlabs/puppet/hiera.yaml&quot;
+&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Virtual yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/virtual/xenhvm.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;virtual/%{::virtual}.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Path not found
+&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Nodes yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/nodes/opsworks-1703-ohq1bhd0cetefkis.us-east-1.opsworks-cm.io.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;nodes/%{::trusted.certname}.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path not found
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/nodes/RedHat.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;nodes/%{::osfamily}.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path not found
+&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Default yaml file&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/common.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;common.yaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Found key: &quot;message&quot; value: &quot;This node is using common data&quot; 
+<p>Now, you can update the Hiera data within your control repository to include encrypted values. Note that this will require separate additions to the hierarchy specified in the Hiera class. Thus, you must first update <code>hiera.pp</code> to include the additional hierarchy layer.</p> 
+class profile::hiera {
+class { 'hiera':
+hiera_version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '5',
+hiera5_defaults&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; {&quot;datadir&quot; =&gt; &quot;/etc/puppetlabs/code/environments/%{::environment}/hieradata&quot;, &quot;data_hash&quot; =&gt; &quot;yaml_data&quot;},
+hierarchy&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; [
+{&quot;name&quot; =&gt; &quot;Secret Data&quot;, &quot;lookup_key&quot; =&gt; &quot;eyaml_lookup_key&quot;, &quot;paths&quot; =&gt; ['common.eyaml'], &quot;options&quot; =&gt; { &quot;pkcs7_private_key&quot; =&gt; &quot;/etc/puppetlabs/code/keys/private_key.pkcs7.pem&quot;, &quot;pkcs7_public_key&quot; =&gt; &quot;/etc/puppetlabs/code/keys/public_key.pkcs7.pem&quot; } },
+{&quot;name&quot; =&gt; &quot;Virtual yaml&quot;, &quot;path&quot;&nbsp; =&gt;&nbsp; &quot;virtual/%{::virtual}.yaml&quot;},
+{&quot;name&quot; =&gt; &quot;Nodes yaml&quot;, &quot;paths&quot; =&gt;&nbsp; ['nodes/%{::trusted.certname}.yaml', 'nodes/%{::osfamily}.yaml']},
+{&quot;name&quot; =&gt; &quot;Default yaml file&quot;, &quot;path&quot; =&gt;&nbsp; &quot;common.yaml&quot;},
+],
+eyaml&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+eyaml_gpg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; true,
+eyaml_gpg_recipients =&gt;&nbsp; 'mark@example.com,chris@example.com',
+create_keys&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; false,
+keysdir&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; '/etc/puppetlabs/code-staging/keys',
+provider&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =&gt;&nbsp; puppetserver_gem,
+}
+exec { 'get-private-key':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/private/key.pem /etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
+creates =&gt; '/etc/puppetlabs/code-staging/keys/private_key.pkcs7.pem',
+}
+exec { 'get-public-key':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'aws s3api get-object --bucket BUCKET_NAME --key path/to/public/key.pem /etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
+creates =&gt; '/etc/puppetlabs/code-staging/keys/public_key.pkcs7.pem',
+}
+exec { 'update-key-perms':
+path&nbsp;&nbsp;&nbsp; =&gt; ['/usr/bin','/usr/sbin','/bin'],
+cwd&nbsp;&nbsp;&nbsp;&nbsp; =&gt; '/etc/puppetlabs/code-staging',
+command =&gt; 'chown -R pe-puppet:pe-puppet /etc/puppetlabs/code-staging/keys &amp;&amp; chmod -R 0500 /etc/puppetlabs/code-staging/keys &amp;&amp; chmod 0400 /etc/puppetlabs/code-staging/keys/*.pem',
+require =&gt; [
+Exec['get-private-key'],
+Exec['get-public-key'],
+],
+}
+} 
+<p>After this is complete, add an encrypted YAML file with some test data. Note that there is a specific format required when adding encrypted values, as seen in the following snippet.</p> 
+# From the same directory as ./keys/
+eyaml edit CONTROL_REPO/hieradata/common.eyaml 
+<p>For testing purposes, we created a new value.</p> 
+---
+encryptedmessage: DEC::PKCS7['Hello, World!']! 
+<p>After this is complete, you can commit and push the changes to your control repository, sync them with the Puppet Master, and run Puppet Agent on the master to implement the updated Hiera configuration. To validate that this works as expected, output the file contents, and compare them to the output of puppet lookup.</p> 
+$ cat /etc/puppetlabs/code/environments/production/hieradata/common.eyaml
+---
+encryptedmessage: ENC[PKCS7,ENCRYPTED_STRING]
+$ puppet lookup encryptedmessage
+Searching for &quot;encryptedmessage&quot;
+&nbsp; Global Data Provider (hiera configuration version 5)
+&nbsp;&nbsp;&nbsp; Using configuration &quot;/etc/puppetlabs/puppet/hiera.yaml&quot;
+&nbsp;&nbsp;&nbsp; Hierarchy entry &quot;Secret Data&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Path &quot;/etc/puppetlabs/code/environments/production/hieradata/common.eyaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Original path: &quot;common.eyaml&quot;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Found key: &quot;encryptedmessage&quot; value: &quot;'Hello, World!'&quot; 
+<p>At this point, you can add additional hierarchies for environment or fact-based data, and manage sensitive information within. From your manifest code, you can simply query Hiera with the <code>lookup()</code> function as normal. You need to create and maintain encryption keys, and distribute them to administrators who need to manage Hiera data.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/internal-cdn.amazon.com_.jpeg" /></p> 
+<p>&nbsp;</p> 
+<p>Nick Alteen is a Lab Development Engineer at Amazon Web Services, previously a Cloud Support Engineer. In both roles, he enjoys developing training and providing guidance to customers for usage of AWS services to fit their needs.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Tracking AWS Service Catalog products provisioned by individual SAML users</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Remek Hetman</span></span> | on 
+<time property="datePublished" datetime="2017-12-19T11:48:17+00:00">19 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/tracking-aws-service-catalog-products-provisioned-by-individual-saml-users/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>To manage access to the AWS Cloud, many companies prefer <a title="undefined" href="https://aws.amazon.com/iam/details/manage-federation/" target="_blank" rel="noopener noreferrer">Enterprise Federation</a> over AWS Identity and Access Management (IAM) users. Identity federation provides single sign-on (SSO) to access AWS accounts using credentials from the corporate directory. This method of accessing AWS allows companies to utilize their existing identity solutions, such as Active Directory (AD) or Active Directory Federation Services, by mapping users to IAM roles.</p> 
+<p>Another option for managing access to AWS is to use <a title="undefined" href="https://aws.amazon.com/servicecatalog/" target="_blank" rel="noopener noreferrer">AWS Service Catalog</a>. In this blog I’ll show you how to set up AWS Service Catalog to grant users IAM roles for launching AWS resources.</p> 
+<p>AWS Service Catalog allows an organization to create a portfolio of products that can be provisioned by users. This method mitigates the need to grant user permissions to AWS resources and only grants permissions to the service catalog and specific products.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/19/Diagram1-1024x304.png"></span><br /> This diagram shows how users can access products through AWS Service Catalog after they have access to an appropriate IAM role. However, we need a way to distinguish users because multiple users can belong to the same AD group.</p> 
+<p>One way to identify each user is to add the user name parameter to the product template. But this method doesn’t guarantee that the value entered by the user will be correct or match the user name in Active Directory.</p> 
+<p>A better way to accomplish this is to programmatically add the user name to each product template. Let’s take a look at how to accomplish this using AWS Service Catalog.</p> 
+<b>Solution Overview</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/19/Diagram2-1024x404.png" /></p> 
+<p>This Solution Overview diagram shows the architecture of the proposed solution:</p> 
+<ol>
+1. The user provisions a product after authenticating to AWS Service Catalog. 
+</ol> 
+<ol>
+2. AWS Service Catalog launches an AWS CloudFormation template in response to the user’s request. 
+</ol> 
+<ol>
+3. An AWS Lambda function is invoked based on the Amazon CloudWatch rule triggered by the CloudFormation CreateStack event. 
+</ol> 
+<ol>
+4. The Lambda function reads the Active Directory User Name and CloudFormation stack ID from the event record and stores this information in an Amazon DynamoDB database. 
+</ol> 
+<ol>
+5. The CloudFormation template provisions a custom resource that invokes the AWS Lambda function. 
+</ol> 
+<ol>
+6. The Lambda function reads the user name from the Amazon DynamoDB record associated with the CloudFormation stack ID and returns this information back to the CloudFormation template. 
+</ol> 
+<b>Prerequisites</b> 
+<p>Before you begin implementing this solution, be sure to do the following:</p> 
+<ol> 
+<li style="list-style-type: none"> 
+<ol>
+1. Install the AWS CLI: 
+</ol> </li> 
+</ol> 
+<p><a title="undefined" href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">https://aws.amazon.com/cli/</a></p> 
+<ol>
+. 
+</ol> 
+<ol>
+2. Install Python 2.7 (including pip). 
+</ol> 
+<b>Implementation</b> 
+<h3>Step 1: Create an Amazon DynamoDB table</h3> 
+<p>An Amazon DynamoDB table will be used as central location to store the user name and CloudFormation stack ID.</p> 
+<code>aws dynamodb create-table --table-name sc-track-user --attribute-definitions AttributeName=CFStackid,AttributeType=S --key-schema AttributeName=CFStackid,KeyType=HASH --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5</code> 
+<h3>Step 2: Create an IAM role</h3> 
+<p>Create an IAM role that will be associated with both AWS Lambda functions to grant permission to Amazon DynamoDB table.</p> 
+<code>aws iam create-role --role-name sc-lambda-role --assume-role-policy-document &quot;{\&quot;Version\&quot;: \&quot;2012-10-17\&quot;,\&quot;Statement\&quot;:[{\&quot;Effect\&quot;: \&quot;Allow\&quot;,\&quot;Principal\&quot;:{\&quot;Service\&quot;: \&quot;lambda.amazonaws.com\&quot;},\&quot;Action\&quot;: \&quot;sts:AssumeRole\&quot;}]}&quot;</code> 
+<h3>Step 3: Create an IAM policy</h3> 
+<p>1. Create new file name called lambda-access-policy.json and add following context to the file:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;AccessDynamoDB&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;dynamodb:GetItem&quot;,
+&quot;dynamodb:PutItem&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:dynamodb:us-east-1:{your AWS Account No}:table/sc-track-user&quot;
+]
+},
+{
+&quot;Sid&quot;: &quot;CreateCWLogs&quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;
+],
+&quot;Resource&quot;: &quot;*&quot;
+},
+{
+&quot;Sid&quot;: &quot;WriteCWLog&quot;,
+&quot;Action&quot;: [
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:logs:us-east-1: {AWS Account No}:log-group:/aws/lambda/sc-add-user-id:*:*&quot;,
+&quot;arn:aws:logs:us-east-1: {AWS Account No}:log-group:/aws/lambda/sc-get-user-id:*:*&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;
+}
+]
+}
+</code> 
+<p>2. Replace {AWS Account No} with your AWS account number.<br /> 3. Execute the following CLI command:</p> 
+<code>aws iam put-role-policy --role-name sc-lambda-role --policy-name Lambda-DynamoDB-CloudWatch --policy-document file://lambda-access-policy.json</code> 
+<h3>Step 4: Create an AWS Lambda function</h3> 
+<p>Create a Lambda function to store the user name and CloudFormation stack ID.<br /> 1. Create a new file name called adduser.py.<br /> 2. Add the following code to the file:</p> 
+<code class="lang-python">import boto3
+def lambda_handler(event, context):
+dynamodb = boto3.resource('dynamodb',region_name='us-east-1')
+table = dynamodb.Table('sc-track-user')
+stackId = event['detail']['responseElements']['stackId']
+Id = (stackId.split('/'))[-1]
+UserArn = event['detail']['userIdentity']['arn']
+UserAID = (UserArn.split('/'))[-1]
+table.put_item(
+Item={
+'CFStackid' : Id,
+'User' : UserAID
+})
+return ''
+</code> 
+<p>3. Zip file as adduser.zip.<br /> 4. Run the following command:</p> 
+<code>aws lambda create-function --function-name sc-add-user-id --runtime python2.7 --role arn:aws:iam::{AWS Account No}:role/sc-lambda-role --handler adduser.lambda_handler --timeout 30 --zip-file &quot;fileb://adduser.zip&quot;</code> 
+<p><strong>Note</strong>: Before running this command change {AWS Account No} to the correct account number.</p> 
+<h3>Step 5: Create an Amazon CloudWatch Event</h3> 
+<p>An Amazon CloudWatch Event will invoke a Lambda function each time a new CloudFormation stack is created.</p> 
+<p>1. Create the CloudWatch Event:</p> 
+<code>aws events put-rule --name &quot;sc-add-user&quot; --event-pattern &quot;{\&quot;source\&quot;:[\&quot;aws.cloudformation\&quot;],\&quot;detail-type\&quot;:[\&quot;AWS API Call via CloudTrail\&quot;],\&quot;detail\&quot;:{\&quot;eventSource\&quot;:[\&quot;cloudformation.amazonaws.com\&quot;],\&quot;eventName\&quot;:[\&quot;CreateStack\&quot;]}}&quot;</code> 
+<p>2. Add the Lambda function as the target to the event.</p> 
+<code>aws events put-targets --rule sc-add-user --targets &quot;Id&quot;=&quot;LambdaFunction&quot;,&quot;Arn&quot;=&quot;arn:aws:lambda:us-east-1:{AWS Account No}:function:sc-add-user-id&quot;</code> 
+<p>3. Grant permission for your event to invoke the Lambda function.</p> 
+<code>aws lambda add-permission --function-name sc-add-user-id --statement-id LamdaPermission-10 --action lambda:InvokeFunction --principal events.amazonaws.com --source-arn arn:aws:events:us-east-1: {AWS Account No}:rule/sc-add-user</code> 
+<p><strong>Note</strong>: Before running commands change {AWS Account No} to the correct account number, where you need to.</p> 
+<h3>Step 6: Call the AWS Lambda function</h3> 
+<p>This Lambda function will be called by CloudFormation template to retrieve user name from DynamoDB table</p> 
+<p>1. Create a new file name: getuser.py<br /> 2. Add the following code to the file:</p> 
+<code class="lang-python">import json
+import requests
+import os
+import boto3
+from botocore.exceptions import ClientError
+import time
+from requests.auth import HTTPBasicAuth
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+dynamodb = boto3.resource('dynamodb')
+###########################################################################
+# Lambda Handler
+def lambda_handler(event, context):
+stackId = event['ResourceProperties']['stackId']
+Id = (stackId.split('/'))[-1]
+responseStatus = 'SUCCESS'
+responseData = {}
+responseData[&quot;Id&quot;]  = get_user_aid(Id)
+sendResponse(event, context, responseStatus, responseData)
+#Send Response back to CF
+def sendResponse(event, context, responseStatus, responseData):
+responseBody = {'Status': responseStatus,
+'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
+'PhysicalResourceId': responseData[&quot;Id&quot;],
+'StackId': event['StackId'],
+'RequestId': event['RequestId'],
+'LogicalResourceId': event['LogicalResourceId'],
+'Data': responseData}
+try:
+req = requests.put(event['ResponseURL'], data=json.dumps(responseBody))
+if req.status_code != 200:
+print(req.text)
+raise Exception('Received non 200 response while sending response to CFN.')
+return
+except requests.exceptions.RequestException as e:
+print(e)
+raise
+###########################################################################
+# Get User AID
+def get_user_aid(stackId):
+IValue = ''
+table = dynamodb.Table('sc-track-user')
+counter = 0
+while not IValue:
+try:
+response = table.get_item(
+Key={
+'CFStackid': stackId
+}
+)
+if 'Item' in response:
+IValue = response['Item']['User']
+else:
+time.sleep(5)
+except ClientError as e:
+print(e.response['Error']['Message'])
+return(IValue)
+</code> 
+<p>3. The code for our Lambda function requires a requests Python module that is not included in the standard Python library. To install the requests module, use the command that follows. Note that $PWD is the location of the getuser.py file..:</p> 
+<code>pip install -t &quot;$PWD&quot; requests</code> 
+<p>4. Zip getuser.py along with all modules installed in the previous step as getuser.zip.<br /> 5. Execute the following command:</p> 
+<code>aws lambda create-function --function-name sc-get-user-id --runtime python2.7 --role arn:aws:iam::{AWS Account No}:role/sc-lambda-role --handler getuser.lambda_handler --timeout 120 --zip-file &quot;fileb://getuser.zip</code> 
+<h3>Step 7: Modify the CloudFormation template</h3> 
+<p>In the final step, we need to add a custom resource to product CloudFormation templates to retrieve the name of the user who provisions the product.</p> 
+<p>Here is an example of a CloudFormation template for a product:</p> 
+<code class="lang-json">{
+&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
+&quot;Description&quot;: &quot;test-get-user-aid&quot;,
+&quot;Resources&quot;: {
+&quot;UserAID&quot;: {
+&quot;Type&quot;: &quot;Custom::SCUserAID&quot;,
+&quot;Properties&quot;: {
+&quot;ServiceToken&quot;: {
+&quot;Fn::Join&quot;: [ &quot;&quot;,  
+[ &quot;arn:aws:lambda:&quot;, { &quot;Ref&quot;: &quot;AWS::Region&quot; }, &quot;:&quot;, { &quot;Ref&quot;: &quot;AWS::AccountId&quot; }, &quot;:function:sc-get-user-id&quot; ]
+] },
+&quot;stackId&quot;: {
+&quot;Ref&quot;: &quot;AWS::StackId&quot;
+}
+}
+}
+},
+&quot;Outputs&quot;: {
+&quot;Param&quot;: {
+&quot;Value&quot;: {
+&quot;Fn::GetAtt&quot;: [
+&quot;UserAID&quot;,
+&quot;Id&quot;
+]
+}
+}
+}
+}
+</code> 
+<p>The user name returned by our Lambda function can now be used to tag AWS resources launched through this process.</p> 
+<b>Use cases</b> 
+<p>Beside proper tagging resource with correct user name there are examples where described solution come handy. Here are couple of examples:</p> 
+<h3>Custom DNS</h3> 
+<p>In many cases, provisioning products using the AWS Service Catalog requires access over DNS rather than an IP address– for example an HTTPS connection. Since multiple users can launch the same product, the DNS name cannot be hard coded in the CloudFormation template but should be generated dynamically during product provisioning. In such cases, the user ID could be used as a prefix to the DNS name.</p> 
+<h3>AWS Service Catalog product access control</h3> 
+<p>When users authenticate to AWS through federation, access to AWS Service Catalog is managed through an IAM role. In such cases, an organization might require excluding access to AWS Service Catalog products) for certain users. This can be accomplished by creating an Amazon DynamoDB table with a list of users who have access to products and then modifying the sc-get-user-id Lambda function so the function will query the table and return status FAILED when user doesn’t have permission to provision a given product. The name of the product can be passed to the Lambda function as additional parameter directly from CloudFormation template.</p> 
+<b>About the Author</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/19/remek.jpg" /><br /> Remek Hetman is a Senior Cloud Infrastructure Architect with the Amazon Web Services ProServe team. He works with AWS Enterprise customers providing technical guidance and assistance for Infrastructure, DevOps, and big data to help them make the best use of AWS services. Outside of work he enjoys spending time actively as well as pursing his passion – astronomy.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Automating IAM Roles For Cross-Account Access Series Overview</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -810,343 +1265,6 @@ by
 <p>By leveraging Amazon EC2 Systems Manager and other services such as Amazon EC2 and AWS Identity and Access Management (IAM), FINRA was able to build a solution to manage temporary access to our resources running in AWS across multiple environments. Systems Manager is very easy to adopt, and it is extremely reliable and fast. It is a great tool for performing ad-hoc execution of scripts on running instances.</p> 
 <p><em>The content and opinions in this blog are those of the third-party author and AWS is not responsible for the content or accuracy of this post.</em></p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Export EC2 Instance Execution Logs to an S3 Bucket Using CloudWatch Logs, Lambda, and CloudFormation</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Veronika Megler</span></span> | on 
-<time property="datePublished" datetime="2017-11-13T11:12:07+00:00">13 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/how-to-export-ec2-instance-execution-logs-to-an-s3-bucket-using-cloudwatch-logs-lambda-and-cloudformation/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>“We want to get execution logs from our EC2 instances into S3,” my customer said. “Then we can store them and process them later, for optimization, audit, and security review, and so on. We’d like to do it in our CloudFormation stacks, as that’s our execution standard. Can you help us?”</p> 
-<p>This blog post shows you how to build a solution for this problem. We’ll build it using Amazon CloudWatch Logs, AWS Lambda, and some useful capabilities in AWS CloudFormation for customizing EC2 instances.</p> 
-<p><span id="more-1466"></span></p> 
-<b>How it works</b> 
-<p>To export the logs, we add some components to the CloudFormation stack that builds the EC2 instance. The following diagram and code samples show how this solution works in a stand-alone fashion. Later, we’ll discuss other ways to integrate these components into your production infrastructure.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/13/cwexport-arch.png" /></p> 
-<p>We use a CloudFormation stack (1) to create the components shown. When everything is up and running, we have an EC2 instance running a CloudWatch Logs agent (2). The agent routes the configured logs to a CloudWatch Logs log group (3). A Lambda function (4) that’s subscribed to the log group picks up each log and writes it to an existing Amazon S3 bucket (5). Note that there’s some delay from the time a log message is created on the EC2 instance to the time it appears in the S3 bucket.</p> 
-<p>To configure the EC2 instance, we use a neat feature in CloudFormation, the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html" target="_blank" rel="noopener noreferrer">CloudFormation helper functions</a>. These helper functions can be combined to install and update a variety of software packages, configure them, start services, and more. We’ll show you how in this blog.</p> 
-<p>If you’d like to skip ahead and see the code in action, go to “Running the Solution.”</p> 
-<b>The implementation</b> 
-<p>The implementation consists of the following four files, which we’ll discuss later:</p> 
-<p>1.&nbsp;<code>Cwexport-master-template.yaml</code>: This template creates a security group and IAM role for our EC2 instance, and calls two embedded CloudFormation templates to do the real work.</p> 
-<p>2.&nbsp;<code>Cloudwatchlogsexport.yaml</code>: This template creates the CloudWatch log group the logs will be sent to, and defines the Lambda function that will perform the export from the log group to S3. It then creates a CloudWatch Log subscription to automatically send the CloudWatch log streams to the Lambda function.</p> 
-<p>3.&nbsp;<code>Cloudwatch-log-lambda.zip</code>: This zip file contains the code for the Lambda function, packaged along with its prerequisites.</p> 
-<p>4.&nbsp;<code>Run-ec2-instance.yaml</code>: This template creates the EC2 instance, installs the <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AgentReference.html" target="_blank" rel="noopener noreferrer">CloudWatch Log Agent</a>, &nbsp;configures it to export the desired logs, and performs a specified task on startup (in this case, calculating digits of Pi).</p> 
-<p>In practice we first set up the CloudWatch log group and export to Amazon S3, and then set up and configure the EC2 instance.</p> 
-<b>Exporting logs from CloudWatch Logs to S3</b> 
-<p>In Cloudwatchlogsexport.yaml, we first set up the CloudWatch Logs log group itself (<a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-loggroup.html" target="_blank" rel="noopener noreferrer"><code>&quot;AWS::Logs::LogGroup&quot;</code></a>).</p> 
-<p>Next, we define the Lambda function that will perform the actual export. We’ve packaged our Python code into a Lambda deployment package for uploading and deployment by CloudFormation. The function (cloudwatch-log-lambda.py) requires two environment variables, s3BucketName and s3KeyPrefix, to tell it where the log files should be exported to. We specify these variables as inputs to the master CloudFormation script, which passes them to the Lambda function at execution time.</p> 
-<p>The Lambda function receives logs from CloudWatch. For each invocation it unzips the received log file, converts it from JSON into a dictionary, then writes it out to S3 with our naming convention (&lt;s3KeyPrefix&gt;/&lt;logGroup&gt;/&lt;logStream&gt;/&lt;timestamp&gt;). You can see the source code of the Lambda <a title="Lambda code" href="https://management-tools-blog-cf-template-storage.s3.amazonaws.com/cloudwatchlogsexport2s3/cloudwatch-exportlogs2s3-lambda.py" target="_blank" rel="noopener noreferrer">here</a>.</p> 
-<p>Then, we associate the Lambda function and the CloudWatch log group via an <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-subscriptionfilter.html" target="_blank" rel="noopener noreferrer"><code>“AWS::Logs::SubscriptionFilter”</code></a> tag, specifying the Lambda function and the log group it’s subscribing to. This subscription will trigger the Lambda function when new logs are written to the CloudWatch log group, and pass the new log to it.</p> 
-<b>Customizing your EC2 instance</b> 
-<p>The last CloudFormation template, Run-ec2-instance.yaml, starts our EC2 instance. We use CloudFormation tags to customize the properties of the EC2 instance: specifying the EC2 instance type, AMI, the IAM role, VPC, and so on.</p> 
-<p>In our case, we also want to automatically install some software packages (notably, the CloudWatch Logs agent); configure some files; and then start some services – all before the actual processing specified in our UserData section is triggered. We can do so by using some capabilities that CloudFormation provides.</p> 
-<p>First, we use an <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html" target="_blank" rel="noopener noreferrer"><code>AWS::CloudFormation::Init</code></a> tag in the metadata section of our EC2 definition to define customizations. Then we call a <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html" target="_blank" rel="noopener noreferrer">set of provided CloudFormation helper scripts</a> from our EC2 instances’s UserData to implement the definitions before we move on to doing the work we’ve set up the EC2 instance to do. We describe the tag and definitions next.</p> 
-<b>The AWS::CloudFormation::Init tag</b> 
-<p>We use the <code>AWS::CloudFormation::Init</code> type to include metadata for our Amazon EC2 instance. The metadata can later be accessed by the helper scripts. When we execute the helper scripts from our EC2 instance’s UserData, the script looks for resource metadata specified in the AWS::CloudFormation::Init metadata key and uses that information to customize the instance. Here’s the beginning of our definition:</p> 
-<code class="lang-yaml">&nbsp; EC2Instance:
-&nbsp;&nbsp;&nbsp; Type: 'AWS::EC2::Instance'
-&nbsp;&nbsp;&nbsp; Metadata:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 'AWS::CloudFormation::Init':
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; configSets:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; default:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [config]
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; config:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; …</code> 
-<p>The CloudFormation Init tag supports a wide variety of capabilities, which we encourage you to explore. For this EC2 instance we’ll use three: packages, files, and services.</p> 
-<h4>Using CloudFormation::Init to install software</h4> 
-<p>We can use the packages tag to download and install pre-packaged applications and components. For this blog post, we want to install one yum package: awslogs, the AWS CloudWatch Logs agent. Because the software is installed by the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-init.html" target="_blank" rel="noopener noreferrer">cfn-init</a> helper script, we’re limited to the package formats it supports. Currently, on Linux the package formats are apt, msi, python, rpm, rubygems, and yum. We specify the package manager, then each package’s name, and a list of (possibly empty) versions. Because we aren’t sensitive to the version here, we’ll leave the version tag blank. In this case, cfn-init installs the latest version if the package isn’t already installed, or leaves it at the current version if the package is installed.</p> 
-<code class="lang-yaml">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; config:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; packages:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; yum:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; awslogs: []
-...</code> 
-<h4>Configuring files</h4> 
-<p>Next, we want to use CloudFormation to <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/EC2NewInstanceCWL.html" target="_blank" rel="noopener noreferrer">create or modify the CloudWatch Log agent configuration files on the EC2 instance</a>. We can do this by using the “files” key of our <code>AWS::CloudFormation::Init</code>. There are several options for creating the files. Here, we include the desired content for the files directly in the CloudFormation template. We create two <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AgentReference.html" target="_blank" rel="noopener noreferrer">CloudWatch agent configuration files</a> and two CloudFormation helper configuration files:</p> 
-<p><strong>/etc/awslogs/awscli.conf:</strong> This short example shows how an entire file is specified within this tag. The file will contain the default Region, and a plugin setting:</p> 
-<code class="lang-yaml">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; files:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '/etc/awslogs/awscli.conf':
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; content: !Sub |
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [default]
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; region = ${AWS::Region}
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [plugins]
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cwlogs = cwlogs
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mode: '000644'
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; owner: root
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; group: root</code> 
-<p><strong>/etc/awslogs/awslogs.conf:</strong> We specify the local files we want to send to CloudWatch Logs, along with the log stream name to send them to, and other characteristics. The list being exported includes the CloudFormation execution logs. We encourage you to extend the list to include logs for your application or other logs of interest.</p> 
-<p>We’ve configured each selected EC2 instance local log file to go to a log stream that consists of the stack name, followed by the EC2 instance ID, followed by the name of the file. This way, the files associated with one instance are grouped together and are easily findable in CloudWatch. This naming convention can easily be changed.</p> 
-<p>The CloudWatch Logs agent lets us specify the size of the batches, the time stamp formats, the encoding, and more. By default, the logs are sent using enable gzip http content encoding to send compressed payloads to CloudWatch Logs. This decreases CPU usage, lowers Network Out, and decreases put latency. Our Lambda function unzips the files before writing them out.</p> 
-<p><strong>/etc/cfn/cfn-hup.conf and /etc/cfn/hooks.d/cfn-auto-reloader.conf:</strong> These two configuration files are used to configure the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-hup.html" target="_blank" rel="noopener noreferrer">cfn-hup daemon</a>. This daemon detects changes in the EC2 resource metadata and runs user-specified actions when a change is detected. This allows you to make configuration updates on your running Amazon EC2 instances through the UpdateStack API action.</p> 
-<h4>Starting and restarting services</h4> 
-<p>The third section in the metadata that we specify is the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html#aws-resource-init-services" target="_blank" rel="noopener noreferrer">services</a> key. This key defines which services should be enabled or disabled when the instance is launched. The services key also allows you to specify dependencies on sources, packages and files. If a restart is needed after files have been installed, cfn-init will take care of the service restart. In our example, we use this key to restart two services after we’ve created the config files for awslogs and cfn-hup.</p> 
-<code class="lang-yaml">          services:
-sysvinit:
-awslogs:
-enabled: true
-ensureRunning: true
-packages:
-yum:
-- awslogs
-files:
-- '/etc/awslogs/awslogs.conf'
-- '/etc/awslogs/awscli.conf'
-cfn-hup:
-enabled: true
-ensureRunning: true
-files:
-- '/etc/cfn/cfn-hup.conf'
-- '/etc/cfn/hooks.d/cfn-auto-reloader.conf'</code> 
-<h4>Finally: Executing the definitions</h4> 
-<p>Having specified the files to install, config files to set up, and services to be started, we need to ensure that the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-init.html" target="null">cfn-init</a> helper function is run to implement these specifications. In the EC2 instance’s UserData section, we first update the helper scripts and ensure that other yum packages are up-to-date. Then, we execute cfn-init, telling it which resource and CloudFormation stack to use as parameters.</p> 
-<p>Lastly, we call the <a title="undefined" href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-signal.html" target="null">cfn-signal</a> helper function to let CloudFormation know that our EC2 instance is up and ready. We pass it the name of the stack, the Region, and the resource we’re sending a signal for. This signal causes CloudFormation to switch the EC2 instance to “Complete”.</p> 
-<code class="lang-yaml">&nbsp; UserData:
-&nbsp;&nbsp;&nbsp; 'Fn::Base64': !Sub |
-&nbsp;&nbsp;&nbsp; #!/bin/bash -x
-&nbsp;&nbsp;&nbsp; # Use the line below to ensure the CloudFormation helper scripts are updated to the latest version
-&nbsp;&nbsp;&nbsp; # Per: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-helper-scripts-reference.html
-&nbsp;&nbsp;&nbsp; yum install -y aws-cfn-bootstrap
-&nbsp;&nbsp;&nbsp; yum update -y&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-&nbsp;&nbsp;&nbsp; /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2Instance --configsets default --region ${AWS::Region}
-&nbsp;&nbsp;&nbsp; /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --region ${AWS::Region} --resource=EC2Instance</code> 
-<p>Now, we’re ready to actually perform the work of this EC2 instance. In our example, it’s a dummy job that calculates digits of Pi. We’re actually more interested in the log files created.</p> 
-<h3>Running the solution</h3> 
-<p>To see this solution in operation in us-west-2, choose the “Launch Stack” button&nbsp;below.</p> 
-<p>&nbsp;</p> 
-<p>Choose “Next”, then update the parameters shown below for your environment: TheLogsBucketName, VPCId, VPC Subnet and s3BucketForResults (leave the Template Locations as is).</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/Cloudwatchloggroup-stackparms.png" /></p> 
-<p>Click “Next” twice, acknowledge that AWS CloudFormation might create IAM resources with custom names, and click “Create”. Then wait for the CloudFormation master stack and its two nested stacks to reach a status of “CREATE_COMPLETE”.</p> 
-<p>After our EC2 instance is up and running, the files we specified in our CloudWatch Logs agent configuration are exported to CloudWatch. Here’s an example of our log group, as seen in the CloudWatch Logs console:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/Cloudwatch-loggroup-capprechng.png" /></p> 
-<p>The Lambda function receives each log from CloudWatch and unzips it. It then writes the event file out to Amazon S3, giving it an S3 key that consists of the given S3 key prefix, followed by the log group, the log stream name (i.e., the filename), and a timestamp.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/13/cwexport-s3-output.png" /></p> 
-<p>If the logs don’t appear in Amazon S3 as expected, check the Lambda function’s CloudWatch Logs log group for execution errors. The CloudWatch logs for the Lambda function can be found in a log group named: <code>/aws/lambda/&lt;mainstackname&gt;-CWExportStack-CWEc2LogsLambdaFunction-&lt;id&gt;</code>.</p> 
-<h4>The power of change sets</h4> 
-<p>Earlier, we configured a cfn-hup daemon. The cfn-hup helper is a daemon that detects changes in resource metadata and runs user-specified actions when a change is detected. This allows you to make configuration updates on your running Amazon EC2 instances through the UpdateStack API action.</p> 
-<p>Let’s demonstrate the power of the cfn-hup configuration that’s in our CloudFormation stack. In our files definition, we provided the following configuration:</p> 
-<code class="lang-yaml">'/etc/cfn/hooks.d/cfn-auto-reloader.conf':  
-content: !Sub |
-[cfn-auto-reloader-hook]
-triggers=post.update
-path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
-action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=EC2Instance
-runas=root 
-</code> 
-<p>This configuration tells cfn-hup to re-run cfn-init after the stack has been updated.</p> 
-<p>In our case, we’ll make two changes to our EC2 instance. First, we’ll add an additional software package to install: jq. Imagine that there’s a part of our software stack that’s only invoked rarely, and we’re either missing a package or wish to upgrade a version in our running system. Secondly, we’ll add an additional log file export, cloud to our CloudWatch Logs configuration.</p> 
-<p>These changes have been made for you, in another CloudFormation template: &nbsp;run-ec2-instance-changed.yaml. To execute this change through the console, do the following steps.</p> 
-<ol> 
-<li>In the CloudFormation console, select your nested “EC2InstanceStack”.</li> 
-<li>Choose Actions&nbsp;&nbsp;-&gt; Update Stack.</li> 
-<li>You’ll receive a warning that “Performing operations directly on a nested stack may result in an unstable state where it is out-of-sync with the root stack to which it belongs.” But we’ll be very careful here, so select the option “Yes, Update.”</li> 
-<li>Next, select the revised template. Enter the following URL: <code>https://management-tools-blog-cf-template-storage.s3.amazonaws.com/cloudwatchlogsexport2s3/run-ec2-instance-changed.yaml</code>, and choose Next.</li> 
-<li>Click through the next two pages that show the existing template parameters. &nbsp;We won’t be modifying any of them.</li> 
-<li>On the next page, CloudFormation shows the results of analyzing the differences between the new CloudFormation template and the currently running one. The following screenshot shows the differences. We are modifying the EC2 instance only. The changes we’ve made result in “Replacement: False”, telling us that the existing EC2 instance will be modified. Other results there are “True,” which causes the resource to be replaced; or, “Conditional,” which means the resource property will be dynamically evaluated at execution time to determine if it requires replacement or not.</li> 
-</ol> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/cwmod-1.png" /><br /> 7. Choose “Update”.</p> 
-<p>Then, in the CloudFormation console, you can see the update actions as they occur, and their results, as in the screenshot below.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/Cwconsoleduringupdate-1.png" /></p> 
-<p>After waiting a little while for the changes and logs to propagate, you can check the CloudWatch log group. You’ll see a new log stream there, for the cloud-init.log definition we added.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/Cloudwatch-loggroup-cappostchng.png" /></p> 
-<p>In our CloudWatch log group (or in S3), you can review cfn-hup.log and see the moment it’s notified of the CloudFormation template change, and starts the cfn-auto-reloader-hook action.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/06/cfn-hup-log.png" /></p> 
-<p>Then, in cfn-init.log, you can see the installation of the jq software package, and the rewriting of the other files specified in our CloudFormation template.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/30/cfn-init-log-1.png" /></p> 
-<p>Now we’ve successfully updated our running EC2 instance, with additional software and changed configurations. All through our CloudFormation stack. And, we know that the CloudFormation template we now have reflects our running environment. Sweet!</p> 
-<p>Remember to delete the CloudFormation stack when you’re done, to stop incurring fees. If you delete the stack right way, testing the solution will cost only a few cents.</p> 
-<h4>Adapting for production use</h4> 
-<p>To implement, copy the files from s3://management-tools-blog-cf-template-storage.s3.amazonaws.com/cwexportlogs2s3/, and modify as needed for your environment.</p> 
-<p>This implementation demonstrates useful capabilities. However, you should consider modifying some details for production use.</p> 
-<p>In <code>cloudwatchlogsexport.yaml</code>, we’ve created a new log group. Since for demo purposes we’ll be deleting the log group when the CloudFormation stack is removed, we’ve added a commented out line <code>“#DeletionPolicy: Retain”</code> at the end of the definition. Because we’re writing the logs to S3, we don’t need to retain the log group. However, you may also choose to retain the group for some time after the run before expiring it, for additional validation. Also, because there is a delay in writing out the logs created, if you aggressively delete &nbsp;the CloudFormation stack as soon as the EC2 instance is terminated you might remove the Lambda function before the last logs have made it to the S3 bucket. We recommend that you wait a few minutes before deleting the CloudFormation stack.</p> 
-<p>You can also choose to use one log group for many CloudFormation stacks and EC2 instance executions. Using that approach, you would create the CloudWatch Log group and Lambda function once (run <code>Cloudwatchlogsexport.yaml</code> alone), and leave them in place for the long term. As each EC2 instance gets created (<code>run-ec2-instance.yaml</code>), pass it the name of the log group to use. Since we are using the instance ID in the log stream ID, the different executions will still be clearly identified in CloudWatch and in Amazon S3.</p> 
-<h3>Conclusion</h3> 
-<p>By integrating the CloudWatch Logs agent into our CloudFormation stack, your EC2 instance logs can easily be exported to an S3 bucket. After the logs are in S3, you have a myriad of additional options. You can make the EC2 instance logs part of your data lake. You can process them using some analytics tools, such as <a title="undefined" href="https://quicksight.aws/" target="_blank" rel="noopener noreferrer">Amazon QuickSight</a>. You can set up S3 lifecycle rules to automatically archive them for audit purposes, using <a title="undefined" href="https://aws.amazon.com/glacier/" target="_blank" rel="noopener noreferrer">Amazon Glacier</a>. Because all the components are automated using a CloudFormation stack, you can ensure that the logs are being exported and stored consistently. For example, you can integrate this solution into <a title="undefined" href="https://aws.amazon.com/blogs/compute/how-to-provision-complex-on-demand-infrastructures-by-using-amazon-api-gateway-and-aws-lambda/" target="null">requests to provision infrastructure</a>, to ensure that audit trails for all such requests are created in a consistent fashion.</p> 
-<p>The same CloudFormation components can be used to install, configure, and customize many other combinations of software.You’re limited only by your imagination. We hope this blog inspires you to extend your use to other use cases beyond the ones we’ve described here.</p> 
-<h4>About the Author</h4> 
-<p><strong>Veronika Megler, PhD, is a Senior Consultant, Big Data, Analytics &amp; Data Science, for AWS Professional Services.</strong> She enjoys helping customers adopt new technologies to solve new problems and to solve old problems more efficiently and effectively. In her spare time she is passionate about conservation, travel to interesting, beautiful or historic places, expanding her knowledge of arcane subjects, and searching for ultimate expression in Argentine tango.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">The Virtues of YAML CloudFormation and Using CloudFormation Designer to Convert JSON to YAML</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Aaron Fagan</span></span> | on 
-<time property="datePublished" datetime="2017-11-10T09:19:38+00:00">10 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/the-virtues-of-yaml-cloudformation-and-using-cloudformation-designer-to-convert-json-to-yaml/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> provides the framework to define infrastructure-as-code in AWS and, until last year, this could only be written in JSON. However, in 2016, AWS added <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-formats.html">YAML 1.1</a> support for CloudFormation. Let’s take a look at some of the advantages of using YAML over JSON, as well as how to overcome some of the challenges in getting started writing CloudFormation in YAML.</p> 
-<h3>The virtues of YAML</h3> 
-<p>YAML CloudFormation fully supports all of the same features and functions as JSON CloudFormation with some additional features to reduce the length of code and increase readability. Say goodbye to the curly braces and most of the quotation marks of JSON when you use YAML.&nbsp;YAML uses parent nodes, child nodes, and indentation to denote hierarchy rather than curly braces and commas as in JSON.</p> 
-<p>YAML also supports comments using the # character. CloudFormation templates can get complex. Including key comments in the code can make it easier to understand, especially as teams get started with CloudFormation and develop templates together.</p> 
-<p>Let’s look at a code sample. The following YAML and JSON CloudFormation templates perform the same function, they deploy an Amazon Linux EC2 instance serving a webpage via Apache HTTP Server.<span id="more-1918"></span></p> 
-<h3>JSON template</h3> 
-<code class="lang-json">{
-&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
-&quot;Parameters&quot;: {
-&quot;SubnetID&quot;: {
-&quot;Type&quot;: &quot;AWS::EC2::Subnet::Id&quot;,
-&quot;Description&quot;: &quot;Subnet to deploy EC2 instance into&quot;
-},
-&quot;SecurityGroupIDs&quot;: {
-&quot;Type&quot;: &quot;List&lt;AWS::EC2::SecurityGroup::Id&gt;&quot;,
-&quot;Description&quot;: &quot;List of Security Groups to add to EC2 instance&quot;
-},
-&quot;KeyName&quot;: {
-&quot;Type&quot;: &quot;AWS::EC2::KeyPair::KeyName&quot;,
-&quot;Description&quot;: &quot;Name of an existing EC2 KeyPair to enable SSH access to the instance&quot;
-},
-&quot;InstanceType&quot;: {
-&quot;Description&quot;: &quot;EC2 instance type&quot;,
-&quot;Type&quot;: &quot;String&quot;,
-&quot;Default&quot;: &quot;t2.micro&quot;
-}
-},
-&quot;Mappings&quot;: {
-&quot;AWSRegionToAMI&quot;: {
-&quot;us-east-1&quot;: {
-&quot;AMIID&quot;: &quot;ami-0b33d91d&quot;
-},
-&quot;us-east-2&quot;: {
-&quot;AMIID&quot;: &quot;ami-c55673a0&quot;
-}
-}
-},
-&quot;Resources&quot;: {
-&quot;EC2Instance&quot;: {
-&quot;Type&quot;: &quot;AWS::EC2::Instance&quot;,
-&quot;Properties&quot;: {
-&quot;ImageId&quot;: {
-&quot;Fn::FindInMap&quot;: [
-&quot;AWSRegionToAMI&quot;,
-{
-&quot;Ref&quot;: &quot;AWS::Region&quot;
-},
-&quot;AMIID&quot;
-]
-},
-&quot;InstanceType&quot;: {
-&quot;Ref&quot;: &quot;InstanceType&quot;
-},
-&quot;KeyName&quot;: {
-&quot;Ref&quot;: &quot;KeyName&quot;
-},
-&quot;SecurityGroupIds&quot;: {
-&quot;Ref&quot;: &quot;SecurityGroupIDs&quot;
-},
-&quot;SubnetId&quot;: {
-&quot;Ref&quot;: &quot;SubnetID&quot;
-},
-&quot;UserData&quot;: {
-&quot;Fn::Base64&quot;: {
-&quot;Fn::Sub&quot;: &quot;#!/bin/bash -ex\nyum install -y httpd;\necho \&quot;&lt;html&gt;I love YAML CloudFormation!!&lt;/html&gt;\&quot; &gt; /var/www/html/index.html;\ncd /var/www/html;\nchmod 755 index.html;\nservice httpd start;\nchkconfig httpd on;\n&quot;
-}
-},
-&quot;Tags&quot;: [
-{
-&quot;Key&quot;: &quot;Name&quot;,
-&quot;Value&quot;: &quot;CloudFormation Test - YAML&quot;
-},
-{
-&quot;Key&quot;: &quot;Environment&quot;,
-&quot;Value&quot;: &quot;Development&quot;
-}
-]
-}
-}
-}
-}
-</code> 
-<img style="border: 0px;width: 32px;height: 32px;margin-right: 5px !important" src="https://aws-support-gm.s3.amazonaws.com/prod/tiny-url-shrinker/TinyURLShortener-icon-64x64.png" /> 
-<h3 title="Shrink this URL">YAML template</h3> 
-<code class="lang-yaml">AWSTemplateFormatVersion: 2010-09-09
-Parameters:
-SubnetID:
-Type: AWS::EC2::Subnet::Id
-Description: Subnet to deploy EC2 instance into
-SecurityGroupIDs:
-Type: List&lt;AWS::EC2::SecurityGroup::Id&gt;
-Description: List of Security Groups to add to EC2 instance
-KeyName:
-Type: AWS::EC2::KeyPair::KeyName
-Description: &gt;-
-Name of an existing EC2 KeyPair to enable SSH access to the instance
-InstanceType:
-Description: EC2 instance type
-Type: String
-Default: t2.micro
-Mappings:
-AWSRegionToAMI:
-us-east-1:
-AMIID: ami-0b33d91d
-us-east-2:
-AMIID: ami-c55673a0
-Resources:
-EC2Instance:
-Type: AWS::EC2::Instance                     
-Properties:
-ImageId:
-!FindInMap                                 # This is an example of the short form YAML FindInMap function
-- AWSRegionToAMI                         # It accepts three parameters each denoted by a hyphen (-)
-- !Ref AWS::Region
-- AMIID
-InstanceType: !Ref InstanceType
-KeyName: !Ref KeyName
-SecurityGroupIds: !Ref SecurityGroupIDs
-SubnetId: !Ref SubnetID
-UserData:
-Fn::Base64:                                # YAML makes userdata much cleaner
-!Sub |
-#!/bin/bash -ex
-yum install -y httpd;
-echo &quot;&lt;html&gt;I love YAML CloudFormation!!&lt;/html&gt;&quot; &gt; /var/www/html/index.html;
-cd /var/www/html;
-chmod 755 index.html;
-service httpd start;
-chkconfig httpd on;
-Tags:                                      # Tags are an example of a sequence of mappings in YAML,
--                                        # each key/value pair is separated by a hyphen
-Key: Name
-Value: CloudFormation Test - YAML      
--
-Key: Environment
-Value: Development
-</code> 
-<p>From a readability perspective, it’s pretty clear YAML is the winner. The JSON template is 1200 characters with whitespace removed. The YAML template is 972 characters for the exact same functionality with whitespace and comments removed. Shorter templates are not only more readable and make troubleshooting errors easier, but they also allow more resources to be deployed in a single template without hitting <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cloudformation-limits.html">CloudFormation limits</a> for template body size.</p> 
-<h3>Converting a JSON CloudFormation template to YAML</h3> 
-<p>We’ve established there are some advantages to using YAML, but many organizations already have libraries of JSON-formatted CloudFormation templates and employees with expertise writing JSON. Additionally, many publically available code samples are written in JSON along with many <a href="https://aws.amazon.com/quickstart/">AWS QuickStarts</a>. If only there were an easy, secure way to convert JSON CloudFormation to YAML. Old JSON templates could be reused and public samples could be converted to make learning YAML easier.</p> 
-<p>Enter <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/working-with-templates-cfn-designer.html">CloudFormation Designer</a></p> 
-<p>CloudFormation Designer is an easy-to-use graphical user interface to create, edit, and view CloudFormation templates. The Designer is free and is part of the AWS Management Console. One fantastic feature is the ability to convert CloudFormation templates from JSON to YAML, and back again, with the click of a button. There are other online converters out there but the Designer is part of your AWS Management Console, so the code never leaves your possession.</p> 
-<p>&nbsp;</p> 
-<p>Let’s convert our JSON template to YAML:</p> 
-<p>1. Open the AWS Management Console and navigate to the <strong>CloudFormation service</strong>.</p> 
-<p>2. Choose the <strong>Design template</strong> button to open the Designer.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/step2.png" /></p> 
-<p>&nbsp;</p> 
-<p>3. Open the JSON CloudFormation template by choosing the File icon, then choosing <strong>Open</strong> from the menu.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/step3.png" /></p> 
-<p>&nbsp;</p> 
-<p>4. <strong>Select the file</strong>, either a local file on your workstation or a file in an Amazon S3 bucket. This opens the CloudFormation template in Designer. We see the familiar JSON code of our template in the bottom pane. In the upper-right pane, we see a graphical representation of the EC2 instance described in our template. Finally, in the upper-left pane, we can optionally drag and drop a variety of Resource Types onto the canvas to include them in our template.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/step4.png" /></p> 
-<p>&nbsp;</p> 
-<p>5. In the upper right-hand corner of the code pane, note the <strong>Choose template language</strong> radio button. Choose the button next to YAML to convert the template to YAML. Just like that our JSON is perfectly formatted YAML. Choosing the JSON button will convert the template back to JSON.</p> 
-<p>Caution: <em>Converting a commented YAML template to JSON will remove all comments. Comments will not re-appear if the template is toggled back to YAML</em>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/step51.png" /></p> 
-<p>&nbsp;</p> 
-<p>6. <strong>Save</strong> the template in YAML format by once again choosing the File icon and choosing Save from the menu.</p> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/03/step61-1.png" /></p> 
-<h3>Conclusion</h3> 
-<p>In this blog post, we discussed some reasons to convert CloudFormation templates from JSON to YAML format and to code in YAML. We also did a side-by-side comparison of the readability of JSON and YAML using a sample template. Finally, we walked through how to convert existing JSON CloudFormation templates to YAML using CloudFormation Designer. There’s no better time than the present to dive in and get started with CloudFormation YAML. Happy coding!</p> 
-<hr /> 
-<h3>About the Author</h3> 
-<p style="text-align: left"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/badgephotobw-200x300.jpg" />Aaron Fagan is a Senior Cloud Infrastructure Architect on the Boston AWS Professional Services team where he works with Enterprises to accelerate and optimize their adoption of the AWS public cloud. When not coding CloudFormation in YAML, he enjoys weightlifting and cooking.</p> 
-<img style="border: 0px;width: 32px;height: 32px;margin-right: 5px !important" src="https://aws-support-gm.s3.amazonaws.com/prod/tiny-url-shrinker/TinyURLShortener-icon-64x64.png" /> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

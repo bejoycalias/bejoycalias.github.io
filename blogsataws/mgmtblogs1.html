@@ -190,6 +190,250 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/001_arch_diagram.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS Systems Manager to run compliance scans using InSpec by Chef</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Maitreya Ranganath</span></span> | on 
+<time property="datePublished" datetime="2018-03-07T10:16:28+00:00">07 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/using-aws-systems-manager-to-run-compliance-scans-using-inspec-by-chef/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>As described in the <a href="https://d1.awsstatic.com/whitepapers/architecture/AWS-Security-Pillar.pdf">Security Pillar </a>of the <a href="https://aws.amazon.com/architecture/well-architected/">AWS Well-Architected Framework</a>, the careful management of the security configurations of the running systems within your environment forms the foundation of how you will maintain robust, secure, scalable systems.</p> 
+<p><a href="https://www.chef.io/inspec/">InSpec by Chef</a>, an open-source testing framework, provides teams the ability to define and assess system state and status across the entire application lifecycle. InSpec can already be used with AWS OpsWorks for Chef Automate to track the compliance of your infrastructure based on predefined policies. For example, you can describe compliance controls in InSpec and integrate these tests into any stage of your deployment pipeline or choose from a set of pre-packaged InSpec profiles. You can then use the Compliance pane as a unified dashboard to identify issues, remediate them, and track progress for various nodes and profiles.</p> 
+<blockquote> 
+<p><em>“According to the Chef User Survey 2017, 55% of organizations do compliance assessments incompletely or not at all,” says James Casey, Vice President of Partner Engineering and Integration at Chef. “Amazon Web Services and Chef help customers identify and automate compliance by using InSpec, part of Chef’s integration with AWS OpsWorks for Chef Automate. Now, customers have more options to use InSpec’s framework with the addition of InSpec availability through AWS Systems Manager.”</em></p> 
+</blockquote> 
+<p>In this blog post, I’ll focus on three features of AWS Systems Manager that can be used with InSpec:</p> 
+<li><a href="https://aws.amazon.com/systems-manager/features/#Run_Command">Run Command</a>—Provides a simple way of running an ad hoc scan of your infrastructure using InSpec.</li> 
+<li><a href="https://aws.amazon.com/systems-manager/features/#State_Manager">State Manager</a>—Allows you to execute InSpec tests on a schedule so that you can continuously assess the compliance of your systems.</li> 
+<li><a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-compliance.html">Configuration Compliance</a> –Collects and aggregates information about InSpec test results.</li> 
+<p><span id="more-2726"></span>I’ll use the newly defined Systems Manager Document <strong>AWS-RunInSpecChecks</strong> to run InSpec profiles that check the configuration of both Windows and Linux servers against a security baseline.</p> 
+<p>Here’s an outline of the steps:</p> 
+<ol> 
+<li>Launch Systems Manager Managed Instances.</li> 
+<li>Ensure you have an <a href="https://www.inspec.io/docs/reference/profiles/">InSpec Profile</a>. In this blog you will use predefined profiles from the <a href="https://github.com/dev-sec">DevSec Hardening Framework</a> project on GitHub to check both Linux and Windows servers against a security baseline.</li> 
+<li>Execute the InSpec tests using Run Command or State Manager. You don’t need InSpec installed your servers because the scripts will do that for you.</li> 
+<li>View the results of your tests in Compliance.</li> 
+</ol> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/001_arch_diagram.png" /></p> 
+<b>Launch Managed Instances</b> 
+<p>You need at least one <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/managed_instances.html">managed instance</a> that can act as a target of InSpec test execution. You can skip this step if you already have one or more Systems Manager managed instances in your AWS Account.</p> 
+<p>Otherwise, you can launch an AWS CloudFormation stack that launches two Amazon EC2 instances, one Windows Server 2012 R2 Base and one Amazon Linux, to act as test managed instances. The stack also creates an IAM Role and Instance Profile with the AmazonEC2RoleforSSM managed policy.</p> 
+<p>The following link launches the stack in the us-east-1 (N. Virginia) Region:</p> 
+<p><a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=SSM-InSpec&amp;templateURL=https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ssm_inspec_test_servers.template"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/cloudformation-launch-stack.png" /></a></p> 
+<p>The CloudFormation template requires the following parameters:</p> 
+<li><strong>KeyPair</strong>: Choose an Amazon EC2 key pair from the list. Ensure that you have the private key corresponding to the key pair.</li> 
+<li><strong>Subnet</strong>: Choose a subnet where the instances will be launched. Ensure that the subnet has outbound access to Internet addresses and to the Systems Manager API endpoints via an<a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Internet_Gateway.html"> Internet Gateway</a>, a <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html">NAT Gateway</a> or a <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-setting-up-vpc.html">VPC Endpoint for Systems Manager</a>.</li> 
+<li><strong>VpcId</strong>: Choose the VPC for the subnet you chose in Subnet.</li> 
+<p>The CloudFormation stack provides the following outputs:</p> 
+<li><strong>LinuxServer</strong>: The EC2 instance ID of the Linux server.</li> 
+<li><strong>WindowsServer</strong>: The EC2 instance ID of the Windows server.</li> 
+<b>Create a Parameter to store your GitHub token</b> 
+<p>You need a GitHub personal token to download InSpec profiles from GitHub. Follow the steps in <a href="https://github.com/join">Join GitHub</a> to create a GitHub account if you don’t already have one, <a href="https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/">create a token</a> and save the token in a secure location.</p> 
+<p>You can use Parameter Store to store your GitHub personal access token using the <a href="https://aws.amazon.com/cli/">AWS CLI</a>:</p> 
+aws ssm put-parameter --name 'github-personal-token' --description 'GitHub Personal Token' --type SecureString --value '&lt;value&gt;' 
+<p>Or you can perform these steps using the Systems Manager console:</p> 
+<ol> 
+<li>In the AWS Management Console, navigate to the Systems Manager console. Choose <strong>Parameter Store</strong> from the left navigation pane. Then choose <strong>Create Parameter</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/002.png" /></li> 
+<li>For <strong>Name</strong>, type <strong>github-personal-token</strong>.</li> 
+<li>For <strong>Description</strong>, type <strong>GitHub Personal Token</strong>.</li> 
+<li>For <strong>Type</strong>, choose <strong>SecureString</strong> and accept the default KMS Key ID <strong>alias/aws/ssm</strong>.</li> 
+<li>For <strong>Value</strong>, copy and paste the value of the GitHub personal token you saved earlier.</li> 
+<li>Choose <strong>Create parameter</strong> to create the parameter.</li> 
+</ol> 
+<b>Execute InSpec tests on Windows Servers</b> 
+<p>In this step, you’ll execute an InSpec Profile against a Windows server. An InSpec Profile organizes multiple controls to support dependency management and code reuse. Each profile is a standalone structure with its own distribution and execution flow.</p> 
+<ol> 
+<li>Log into the Systems Manager console and choose <strong>Run Command</strong> from the left navigation pane.</li> 
+<li>Choose <strong>Run Command</strong>.</li> 
+<li>In the search bar, choose to search by <strong>Document name prefix</strong>. Choose <strong>Equal</strong> as the condition and type <strong>AWS-Run</strong> as the prefix. From the list of Command documents, choose the document named <strong>AWS-RunInSpecChecks</strong>.</li> 
+<li>Choose the Targets (either instances or tags). You can narrow the list to Windows servers in the search bar by choosing the filter <strong>Platform</strong> and choosing <strong>Windows</strong>.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/003.png" /></li> 
+<li>In the <strong>Command parameters</strong> section, choose <strong>Github</strong> as the <strong>Source Type</strong>. Type the following into the text area for <strong>Source Info</strong> to execute an InSpec profile that checks Windows servers against a <a href="https://github.com/dev-sec/windows-baseline">security baseline</a> defined by the <a href="https://github.com/dev-sec">DevSec Hardening Framework</a> project on GitHub. {
+&quot;owner&quot;:&quot;dev-sec&quot;,
+&quot;repository&quot;:&quot;windows-baseline&quot;,
+&quot;path&quot;: &quot;&quot;,
+&quot;getOptions&quot; : &quot;branch:master&quot;,
+&quot;tokenInfo&quot;:&quot;{{ssm-secure:github-personal-token}}&quot;
+} <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/004.png" /></p></li> 
+<li>Accept the default values for the remaining parameters and choose <strong>Run</strong>.</li> 
+<li>Refresh the Command status page until the status for the instances shown in the <strong>Targets and outputs list</strong> changes from <strong>In Progress</strong> to <strong>Success</strong>.</li> 
+<li>Choose an instance ID from the list to see the output of the command run. Expand the steps shown on the <strong>Output</strong> page to view the command output.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/005.png" /></li> 
+<li>Verify that the output of the runInSpecWindows step shows that the execution was successful and has a line showing the number of tests executed and the number that were compliant and non-compliant. Note that the scripts install the <a href="https://docs.chef.io/about_chefdk.html">Chef Development Kit</a> (chefdk), execute InSpec tests, and then uninstall chefdk. For example: Installing Chef Development Kit
+Installing chefdk from C:\Windows\TEMP\chefdk-2.4.22-1-x64.msi
+Executing InSpec tests
+Completed InSpec checks and put 27 compliant (27 critical, 0 high, 0 low) and 47 non-compliant (39 critical, 0 high, 8 low) items
+Uninstalling Chef Development Kit <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/006.png" /></p></li> 
+</ol> 
+<b>View Compliance items</b> 
+<p>In this step, you’ll view the results of the tests in Systems Manager Compliance.</p> 
+<ol> 
+<li>Log into the Systems Manager console and choose <strong>Explore Built-in insights</strong>.</li> 
+<li>Choose <strong>Compliance</strong> from the navigation pane on the left.</li> 
+<li>A summary of compliance items is shown as a chart, and the list of managed instances is displayed.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/007.png" /></li> 
+<li>Choose a Managed Instance to view a list of compliance items of type Custom:InSpec that were created as a result of the InSpec tests executed. You can see that each item has a descriptive title, the compliance status: whether it is compliant (the test passed) or non-compliant (the test failed), and severity.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/04/008.png" /></li> 
+</ol> 
+<b>Execute InSpec tests on Linux servers</b> 
+<p>To execute InSpec tests on Linux servers, follow the steps in the previous section, but choose one or more Linux servers in Step 4. In Step 6, type the following for Source Info to execute an InSpec profile that checks Linux servers against the <a href="https://github.com/dev-sec/ssh-baseline">SSH baseline</a> defined by the <a href="https://github.com/dev-sec">DevSec Hardening Framework</a> project.</p> 
+{
+&quot;owner&quot;:&quot;dev-sec&quot;,
+&quot;repository&quot;:&quot;ssh-baseline&quot;,
+&quot;path&quot;: &quot;&quot;,
+&quot;getOptions&quot; : &quot;branch:master&quot;,
+&quot;tokenInfo&quot;:&quot;{{ssm-secure:github-personal-token}}&quot;
+} 
+<p>You can also choose to execute a sample cross-platform InSpec profile that checks for open SSH and RDP ports. Type the following for <strong>Source Info</strong> and chose a combination of Linux and Windows servers.</p> 
+{
+&quot;owner&quot;: &quot;awslabs&quot;,
+&quot;repository&quot;: &quot;amazon-ssm&quot;,
+&quot;path&quot;: &quot;Compliance/InSpec/PortCheck&quot;,
+&quot;getOptions&quot;: &quot;branch:master&quot;,
+&quot;tokenInfo&quot;: &quot;{{ssm-secure:github-personal-token}}&quot;
+} 
+<b>Conclusion</b> 
+<p>In this blog post, I have shown how Systems Manager now lets you run compliance scans using InSpec by Chef. The walk-throughs used Run Command to execute individual tests. You can also create <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-state-assoc.html">State Manager Associations</a> to execute these tests on a schedule so that you can continuously assess the compliance of your systems.</p> 
+<p>Visit the <a href="https://aws.amazon.com/systems-manager/">AWS Systems Manager</a> landing page to learn more and get started.</p> 
+<b>Cleaning up</b> 
+<p>If you launched instances using the CloudFormation template described earlier, you can delete those resources to avoid being charged for them going forward.</p> 
+<ol> 
+<li>In the CloudFormation console, choose the stack named <strong>SSM-InSpec</strong>, and from <strong>Actions</strong>, choose <strong>Delete Stack</strong>.</li> 
+<li>Refresh the <strong>Events</strong> tab of the stack until the stack disappears from the stack list.</li> 
+</ol> 
+<h3></h3> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/03/07/author009-1.png" /></p> 
+<p>&nbsp;</p> 
+<p>Maitreya Ranganath is a Solutions Architect with the Enterprise team. He has a focus in Security and Compliance and enjoys helping customers architect secure, scalable, and cost-effective solutions on AWS.</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">How to develop custom AWS Config rules using the Rule Development Kit</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Michael Borchert</span></span> | on 
+<time property="datePublished" datetime="2018-03-06T18:09:41+00:00">06 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-config/" title="View all posts in AWS Config*"><span property="articleSection">AWS Config*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/how-to-develop-custom-aws-config-rules-using-the-rule-development-kit/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>To help customers rapidly prototype, develop, and deploy their custom <a href="https://aws.amazon.com/config">AWS Config</a> rules at scale, AWS introduces a new version of the AWS Config Rule Development Kit (RDK).</p> 
+<p>The RDK is a command-line utility designed to help you to shorten your security and compliance feedback cycles when using Config. It helps you build a continuous compliance framework that your auditors will love. It can be included in an end-to-end DevSecOps pipeline or used interactively from your command line to create and atomically deploy the Config, <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, and <a href="https://aws.amazon.com/iam">IAM</a> resources necessary for your custom Config use case.</p> 
+<p>In this post, I show you how to get started with the RDK.<span id="more-2669"></span></p> 
+<b><strong>Background</strong></b> 
+<p>Config is a native service for continuous compliance. It allows you to track the changes to resources and configurations (configuration items) in your account. You can define rules that detect when configuration items have drifted into undesirable territory.</p> 
+<p>Config has a number of out-of-the-box rules that cover many the common use cases for customers. You can also create custom Config Rules backed by Lambda functions. Many enterprise customers or customers operating in highly regulated industries have special requirements that need specific definitions of compliant. I also see customers using the robust, serverless Config framework to build other housekeeping functionality such as cost and security controls.</p> 
+<b>Getting Started</b> 
+<p>The first steps are to make sure that you have the necessary permissions in your AWS account, and then you can install the tool itself.</p> 
+<h3>Prerequisites</h3> 
+<p>To get started, you need an AWS account, and necessary permissions for modifying Config rules, Lambda functions, and various IAM resources within that account. The <a href="https://github.com/awslabs/aws-config-rdk/blob/master/policy/rdk-minimum-permissions.json">rdk-minimum-permissions.json</a> sample policy document illustrates the required permissions.</p> 
+<p>RDK allows you to author Lambda functions in almost all of the supported languages. It is itself written in Python, and is compatible with both Python 2.7 and 3.6. The recommended installation method is through pip (<code>pip install rdk</code>). To see the source code (or even contribute!), clone the GitHub aws-config-rdk repo.</p> 
+<p>You can make sure that it is installed correctly by typing rdk at a command prompt. You should see usage instructions and an error about required arguments.</p> 
+<code class="lang-bash">
+(rdk-demo) 186590d1e043:rdk-demo USER $ rdk
+usage: rdk [-h] [-p PROFILE] [-k ACCESS_KEY_ID] [-s SECRET_ACCESS_KEY]
+[-r REGION]
+&lt;command&gt; ...
+rdk: error: the following arguments are required: &lt;command&gt;, 
+&lt;command arguments&gt;
+</code> 
+<h3>Runtime-specific prerequisites</h3> 
+<p>Config rules backed by Python and Node.js Lambda functions can be deployed without any additional setup. To use either the Java 8 or .NET Core runtimes, you need some additional components:</p> 
+<li>Java: Use gradle to build your deployment package, so install it somewhere accessible from your CLI.</li> 
+<li>.NET: Microsoft ships a CLI for .NET called “dotnet” that you need installed, as well as the latest release of the .NET Core framework v1.0. These are necessary to build and create Lambda deployment packages for your .NET code.</li> 
+<p>&nbsp;</p> 
+<b>Workflow</b> 
+<p>Now that you have the RDK installed, walk through the steps to create, deploy, and manage your custom Config rules.</p> 
+<h3>Set credentials</h3> 
+<p>RDK uses the boto3 libraries for AWS API access, so any of the standard methods of passing credentials work. For more information about ways to supply your credentials, see options 3 through 8 in <a href="http://boto3.readthedocs.io/en/latest/guide/configuration.html">Credentials</a> in the Boto documentation. Alternately, you can pass them in with the following command-line parameters:</p> 
+<li>–profile</li> 
+<li>–region</li> 
+<li>–access-key-id</li> 
+<li>–secret-access-key</li> 
+<p>&nbsp;</p> 
+<h3>Initialize</h3> 
+<p>Use <code>rdk init</code> to create a working directory. The working directory holds your rule definitions, as well as a snapshot of template files used to build your Config rules. Ideally, your working directory is a local code repo and python virtualenv, but it’s not necessary for just playing around. The <code>init</code> command also configures AWS Config in the account specified by your credentials. Config begins tracking information about your resources and their configurations.</p> 
+<code class="lang-bash">
+(rdk-demo) 1234567890ab:rdk-demo USER$ rdk init
+Running init!
+Found Config Recorder: default
+Found Config Role: arn:aws:iam::123456789012:role/config-role
+Found Bucket: config-bucket-123456789012
+Config Service is ON
+Config setup complete.
+Found code bucket: config-rule-code-bucket-123456789012us-west-2
+</code> 
+<p>&nbsp;</p> 
+<h3>Create or modify</h3> 
+<p>Now it’s time to create some rules!</p> 
+<p>Use <code>rdk create &lt;rulename&gt; --runtime &lt;runtime&gt;</code> to create a local rule folder that contains your initial rule code, as well as some helper code and the parameters used to deploy the rule later. You need to specify a valid Lambda runtime. Optional flags include resource types for triggering on configuration change events, the frequency for scheduled evaluations, and any parameters that Config passes on to the backing Lambda function.</p> 
+<p>To change rule parameters later on, you can use <code>rdk modify &lt;rulename&gt; --&lt;flag&gt; &lt;option&gt;</code> to overwrite any of the options that were previously set for your local rule definition.</p> 
+<code class="lang-bash">
+(rdk-demo) 1234567890ab:rdk-demo USER$ rdk create MyTestRule --runtime python3.6 --resource-types AWS::EC2::Instance
+Running create!
+Defaulting to TwentyFour_Hours Maximum Frequency.
+Local Rule files created.
+</code> 
+<h3>Edit</h3> 
+<p>Navigate to the folder created by create and you see a number of files, depending on the runtime that you selected.</p> 
+<p>Config rules backed by Python or Node.js Lambda functions have a .py or .js file named the same as your<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/02/19/file_structure.png" /> rule name, which is the code template to which to add your custom logic. There are other files associated with each runtime that provide necessary functions to validate inputs, submit compliance results back to Config, and handle errors and logging. You probably don’t need to worry about these.</p> 
+<p>Go ahead and add whatever logic you want based on the CI, rule parameters, or any other data that your function should pull out of your AWS environment. Just make you return a valid compliance result. If you are writing your Lambda function in Java, make sure that you update the build.gradle file with any dependencies that you add.</p> 
+<h3>Deploy</h3> 
+<p>Now you’re ready to deploy your custom rule to AWS!</p> 
+<p>From your working directory, use <code>rdk deploy &lt;rulename&gt;</code> to push your changes out to AWS. This uses AWS CloudFormation behind the scenes to build your Config rule, Lambda function. It also creates the necessary policies and permissions to let them talk to one another. You can list multiple rules to deploy, or use the <code>–all</code> flag to push all of the rules in your working directory. If you are using either Java or .NET, this also compiles your code and packages it appropriately for Lambda deployment.</p> 
+<code class="lang-bash">
+(rdk-demo) 1234567890ab:rdk-demo USER$ rdk deploy MyTestRule
+Running deploy!
+Zipping MyTestRule
+Uploading MyTestRule
+Updating CloudFormation Stack for MyTestRule
+Waiting for CloudFormation stack operation to complete...
+Waiting for CloudFormation stack operation to complete...
+Waiting for CloudFormation stack operation to complete...
+Publishing Lambda code...
+Lambda code updated.
+Config deploy complete.
+</code> 
+<h3>Monitor</h3> 
+<p>After your rule has successfully deployed, you’ll want to know what it’s actually doing!</p> 
+<p>It can be useful to instrument your Lambda function with some logging so that you can have some debugging output about the decisions that your function is making. RDK provides a quick way to get a view into your function with the <code>logs</code> command. It has command-line arguments for how many log events to look back, and also supports the <code>–f</code> flag for continuously polling the log group for the specified function and returning results as they happen.</p> 
+<p>The following is an example of the <code>logs</code> command:</p> 
+<code class="lang-bash">
+(rdk-demo) 1234567890ab:rdk-demo USER$ rdk logs MyTestRule/ -f
+Removing trailing '/'
+2018-02-13 10:55:03 - Tenancy is 'default' - returning COMPLIANT
+2018-02-13 10:55:04 - END RequestId: 482e6306-1069-11e8-8696-8f2e469c4c56
+2018-02-13 10:55:04 - REPORT RequestId: 482e6306-1069-11e8-8696-8f2e469c4c56&nbsp;&nbsp;&nbsp; Dura
+tion: 325.81 ms&nbsp;&nbsp;&nbsp; Billed Duration: 400 ms&nbsp;&nbsp;&nbsp;&nbsp; Memory Size: 25
+6 MB&nbsp;&nbsp;&nbsp; Max Memory Used: 30 MB
+2018-02-13 10:55:04 - END RequestId: 480270e8-1069-11e8-b8de-65b91f7b7901
+2018-02-13 10:55:04 - REPORT RequestId: 480270e8-1069-11e8-b8de-65b91f7b7901&nbsp;&nbsp;&nbsp; Dura
+tion: 264.03 ms&nbsp;&nbsp;&nbsp; Billed Duration: 300 ms&nbsp;&nbsp;&nbsp;&nbsp; Memory Size: 25
+6 MB&nbsp;&nbsp;&nbsp; Max Memory Used: 30 MB
+2018-02-13 11:00:20 - START RequestId: 07029f1c-106a-11e8-921b-c7902649007e Version:
+$LATEST
+2018-02-13 11:00:20 - Tenancy is 'default' - returning COMPLIANT
+2018-02-13 11:00:20 - END RequestId: 07029f1c-106a-11e8-921b-c7902649007e
+2018-02-13 11:00:20 - REPORT RequestId: 07029f1c-106a-11e8-921b-c7902649007e&nbsp;&nbsp;&nbsp; Dura
+tion: 272.61 ms&nbsp;&nbsp;&nbsp; Billed Duration: 300 ms&nbsp;&nbsp;&nbsp;&nbsp; Memory Size: 25
+6 MB&nbsp;&nbsp;&nbsp; Max Memory Used: 31 MB
+</code> 
+<p>From the logs, make sure that your rule is functioning as expected. If you have a bug in your logic, iterate quickly by editing the rule code and re-deploying in seconds.</p> 
+<p>After you’ve deployed your rule and verified that it’s working correctly, you can see your compliance status in the AWS Config console.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/02/19/screen_shot.png" /></p> 
+<p>&nbsp;</p> 
+<b>Conclusion</b> 
+<p>I’m excited about the ways that the RDK can empower AWS customers to build world-class, enterprise-level compliance controls quickly and easily, leaving the heavy-lifting of the machinery and the framework to AWS Config.</p> 
+<p>Config is a powerful component in a cloud-based, end-to-end security and compliance framework. Its ability to track changes over time is a great complement for Amazon CloudWatch Events, which gives you near-real-time responsiveness to individual API calls.</p> 
+<p>To learn more about how these services can work together to provide a comprehensive “Compliance As Code” solution, check out the <a href="https://www.youtube.com/watch?v=VR_4209ewIo">Building the Largest Repo for Serverless Compliance-as-Code (SID205)</a> re:Invent 2017 session.</p> 
+<p>&nbsp;</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/02/19/12fd317-cropped.jpg" />Michael Borchert is a Singapore-based Sr. Cloud Architect with AWS Professional Services. Michael enjoys helping AWS customers automate security, compliance, and development to accelerate all aspects of their cloud journey. In his free time he likes to play music and explore Southeast Asia with his family.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Recovering AWS CloudFormation stacks using ContinueUpdateRollback</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1130,311 +1374,6 @@ ScheduleExpression: &quot;cron(0/5 * ? * MON-FRI *)&quot;
 </tbody> 
 </table> 
 <p></p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS CloudFormation Update: AWS Guard Duty, Amazon Inspector, and Service Discovery, plus 40 resource updates</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Luis Colon</span></span> | on 
-<time property="datePublished" datetime="2018-01-30T10:14:06+00:00">30 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-cloudformation-update-aws-guard-duty-amazon-inspector-and-service-discovery-plus-40-resource-updates/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS CloudFormation recently added support for these recently released AWS services:</p> 
-<li><a href="https://aws.amazon.com/guardduty/"><strong>AWS Guard Duty</strong></a> is an automated threat-detection service that can be quickly enabled, does not require agents to be installed, and monitors unusual account usage using sources like AWS CloudTrail logs, DNS logs, and other sources. With the new AWS CloudFormation resource support, you can create <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-detector.html">detectors</a>, whitelisted <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-ipset.html">IP sets</a>, and identify known malicious IP addresses via <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-guardduty-threatintelset.html">ThreatIntelSets</a>.</li> 
-<li><a href="https://aws.amazon.com/inspector/"><strong>Amazon Inspector</strong></a> is a low-impact, low-cost, agent-based vulnerability scanner.Use it, for example, to automate vulnerability assessments and make them part of your deployment process.&nbsp;With the new AWS CloudFormation resource support, you can take tagged resources and build a <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-resourcegroup.html">resource group</a>, then use the resource group to create an <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-assessmenttarget.html">assessment target</a>.&nbsp;Finally, you can create an <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-inspector-assessmenttemplate.html">assessment template</a>, which is similar to a policy document and determines which rules the service uses to analyze the target hosts, as well as a duration for the assessment run.</li> 
-<li><a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-route-53-releases-auto-naming-api-name-service-management/"><strong>Amazon Route 53 Auto Naming for Service Discovery</strong></a> and the new AWS::ServiceDiscovery resources in CloudFormation make it easy to consume the recently released Route 53 Auto Naming API calls.It can be used, for example, if you’re creating microservices in Amazon ECS and you want to leverage Route 53 to register new service instances and aid in the management and discovery of service names. This is important for <a href="https://aws.amazon.com/ecs/">Amazon ECS</a> deployments, and it helps enable blue/green deployment patterns.&nbsp;With the new AWS CloudFormation resources, you can create either <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-publicdnsnamespace.html">public</a> or <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-privatednsnamespace.html">private</a> DNS namespaces, then create named <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-service.html">services</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-servicediscovery-instance.html">service instances</a> for your microservices.&nbsp;If you’re interested in using these new resources, I recommend checking out this <a href="https://www.slideshare.net/AmazonWebServices/introducing-service-discovery-for-amazon-ecs-con403-reinvent-2017">deck</a> from a session at the AWS re:Invent 2017 conference.</li> 
-<p>Beyond supporting these new services, 40 of the 248 existing supported resources have been updated recently, adding 50 new property types for these resources. The following list summarizes these recent changes, ordered by service name:</p> 
-<p><span id="more-2568"></span></p> 
-<p><strong>Amazon API Gateway</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-deployment.html">AWS::ApiGateway::Deployment</a>, a&nbsp;<em>StageName</em> property has been deprecated on the StageDescription property type</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-method.html">AWS::ApiGateway::Method</a>, an&nbsp;<em>OpeationName</em> property was added to assign a friendly name to an API Gateway method; a&nbsp;<em>RequestValidatorId</em> property was added to associate a request validator with a method; a&nbsp;<em>ContentHandling</em> property was added for <em>Integration</em> and <em>IntegrationResponse</em> property types to specify how to handle request payload content type conversions</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-apikey.html">AWS::ApiGateway::ApiKey</a>, a&nbsp;<em>CustomerID</em> property was added to specify an AWS Marketplace customer identifier; a&nbsp;<em>GenerateDistinctID</em> property was added to indicate whether the key identifier is different from the created API key value</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-authorizer.html">AWS::ApiGateway::Authorizer</a>, an&nbsp;<em>AuthType</em> property was added to specify a customer-defined field that is used in Swagger imports and exports without functional impact</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-domainname.html">AWS::ApiGateway::DomainName</a>, an&nbsp;<em>EndpointConfiguration</em> property was added to specify the endpoint types of an API Gateway domain name; a&nbsp;<em>RegionalCertificateArn</em> property was added to reference a certificate for use by the regional endpoint for a domain name</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigateway-restapi.html">AWS::ApiGateway::RestApi</a>, an&nbsp;<em>EndpointConfiguration</em> property was added to specify the endpoint types of a REST API</li> 
-<p><strong>AWS Auto Scaling</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-applicationautoscaling-scalabletarget.html">AWS::ApplicationAutoScaling::ScalableTarget</a>, a&nbsp;<em>ScheduledActions</em> property was added to specify scheduled actions</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-as-group.html">AWS::AutoScaling::AutoScalingGroup</a>, a&nbsp;<em>LifecycleHookSpecificationList</em> property was added to specify actions to perform when Auto Scaling launches or terminates instances</li> 
-<p><strong>AWS Cloud9</strong></p> 
-<li><a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloud9-environmentec2.html">AWS::Cloud9::EnvironmentEC2</a>&nbsp;creates an Amazon EC2 development environment in AWS Cloud9</li> 
-<p><strong>AWS CodeBuild</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codebuild-project.html">AWS::CodeBuild::Project</a>, a <em>BadgeEnabled</em> property was added to generate a publicly accessible URL for a project’s build badge; a <em>Cache</em> property was added to configure cache settings for build dependencies; a <em>VpcConfig</em> property was added to enable AWS CodeBuild to access resources in an Amazon VPC; a <em>Type</em> property was added in the EnvironmentVariable property type to specify the type of environment variable</li> 
-<p><strong>AWS CodeDeploy</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codedeploy-application.html">AWS::CodeDeploy::Application</a>, a <em>ComputePlatform</em> property was added to specify an AWS Lambda compute platform for AWS CodeDeploy to deploy an application to</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codedeploy-deploymentgroup.html">AWS::CodeDeploy::DeploymentGroup</a>, a <em>TargetGroupInfoList</em> property was added to the <em>LoadBalancerInfo</em> property type to specify information about a target group in Elastic Load Balancing to use in a deployment; a <em>DeploymentType</em> property was added to the <em>DeploymentStyle</em> property type to specify a blue/green deployment on a Lambda compute platform</li> 
-<p><strong>Amazon CloudFront</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cloudfront-distribution.html">AWS::CloudFront::Distribution</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with an Amazon CloudFront distribution; <em>OriginKeepAliveTimeout</em> and <em>OriginReadTimeout</em> properties were added to the <em>CustomOriginConfig</em> property type to specify a custom keep-alive timeout and a custom origin read timeout respectively; an <em>IPV6Enabled</em> property was added to the <em>DistributionConfig</em> property type to specify whether Amazon CloudFront responds to IPv6 DNS requests an IPv6 address for your distribution</li> 
-<li>Use the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudfront-cloudfrontoriginaccessidentity.html">AWS::CloudFront::CloudFrontOriginAccessIdentity</a> resource to specify the origin access identity to associate with the origin of an Amazon CloudFront distribution</li> 
-<li>Use the <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudfront-streamingdistribution.html">AWS::CloudFront::StreamingDistribution</a> resource to specify an Adobe Real-Time Messaging protocol (RTMP) streaming distribution for Amazon CloudFront</li> 
-<p><strong>Amazon EC2</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html">AWS::EC2::SecurityGroup</a>, <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-security-group-egress.html">AWS::EC2::SecurityGroupEgress</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group-ingress.html">AWS::EC2::SecurityGroupIngress</a> resources, a <em>Description</em> property was added to specify the description of security group rules</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html">AWS::EC2::Subnet</a>, an <em>Ipv6CidrBlock</em> property now supports <em>No Interruption</em> updates</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpn-gateway.html">AWS::EC2::VPNGateway</a>, an <em>AmazonSideAsn</em> property was added to specify a private Autonomous System Number (ASN) for the Amazon side of a Border Gateway Protocol (BGP) session</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpn-connection.html">AWS::EC2::VPNConnection</a>, a <em>VpnTunnelOptionsSpecifications</em> property was added to configure tunnel options for a VPN connection</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-spotfleet.html">AWS::EC2::SpotFleet</a>, the <em>SpotPrice</em> property in <em>SpotFleetRequestConfigData</em> property type is now optional</li> 
-<p><strong>Amazon Elastic Container Registry</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecr-repository.html">AWS::ECR::Repository</a>, a <em>LifecyclePolicy</em> property was added to specify a lifecycle policy for an Amazon ECR repository</li> 
-<p><strong>Amazon Elastic Container Service</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-taskdefinition.html">AWS::ECS::TaskDefinition</a>, a <em>LinuxParameters</em> property was added to the <em>ContainerDefinition</em> property type to specify Linux-specific options for an Amazon ECS container; a <em>Cpu</em> property was added to specify the number of CPU units needed for the task; an <em>ExecutionRoleArn</em> property was added to specify the Amazon Resource Name (ARN) of the execution role; Memory property was added to specify the amount of memory in MiB needed for the task; and a <em>RequiresCompatibilities</em> property was added to specify the launch type the task requires</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html">AWS::ECS::Service</a>, a <em>LaunchType</em> property was added to specify the launch type on which to run the service; a <em>NetworkConfiguration</em> property was added to specify the network configuration for the service; a <em>PlatformVersion</em> property was added to specify the platform version on which to run your service</li> 
-<p><strong>AWS Elastic Beanstalk</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-beanstalk-configurationtemplate.html">AWS::ElasticBeanstalk::ConfiguraionTemplate</a>, and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-beanstalk-environment.html">AWS::ElasticBeanstalk::Environment</a>, a <em>ResourceName</em> property was added to the <em>ConfigurationOptionSetting</em> and <em>OptionSetting</em> property types, to specify a resource name for a time-based scaling configuration option</li> 
-<p><strong>Amazon ElastiCache</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticache-replicationgroup.html">AWS::ElastiCache::ReplicationGroup</a>, an <em>AtRestEncryptionEnabled</em> property was added to enable encryption at rest; an <em>AuthToken</em> property was added to specify a password that is used to access a password-protected server; and a <em>TransitEncryptionEnabled</em> property was added to enable in-transit encryption</li> 
-<p><strong>Elastic Load Balancing</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html">AWS::ElasticLoadBalancingV2::TargetGroup</a>, use the <em>TargetGroupName</em> attribute with the <em>Fn::GetAtt</em> function to get the name of an Elastic Load Balancing target group</li> 
-<p><strong>Amazon ElasticSearch Service</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticsearch-domain.html">AWS::Elasticsearch::Domain</a>, a <em>VPCOptions</em> property was added to specify a VPC configuration for the domain</li> 
-<p><strong>Amazon EMR</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-emr-cluster.html">AWS::EMR::Cluster</a>, a <em>CustomAmiId</em> property was added to specify a custom Amazon Linux AMI for a cluster; an&nbsp;<em>EbsRootVolumeSize</em> property was added to specify the size of the EBS root volume for an Amazon EMR cluster</li> 
-<p><strong>Amazon Kinesis</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisanalytics-application.html">AWS::KinesisAnalytics::Application</a>, an <em>InputProcessingConfiguration</em> property was added to the Input property type to transform records as they are received from the stream</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html">AWS::KinesisFirehose::DeliveryStream</a>, use the <em>Arn</em> attribute with the <em>Fn:GetAtt</em> function to get the Amazon Resource Name (ARN) of the delivery stream</li> 
-<p><strong>AWS Key Management Service</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-kms-key.html">AWS::KMS::Key</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with a custom master key</li> 
-<p><strong>AWS Lambda</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-lambda-alias.html">AWS::Lambda::Alias</a>, use the <em>CodeDeployLambdaAliasUpdate</em> update policy to perform an AWS CodeDeploy deployment when the version changes on a resource; you can also use the <em>RoutingConfig</em> property to specify two different versions of an AWS Lambda function, allowing you to dictate what percentage of traffic will invoke each version</li> 
-<p><strong>AWS OpsWorks</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-opsworks-layer.html">AWS::Opsworks::Layer</a> and <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-opsworks-stack.html">AWS::OpsWorks::Stack</a>, a <em>Tags</em> property was added to specify an arbitrary set of tags (key-value pairs) to associate with either a layer or stack</li> 
-<p><strong>Amazon RDS</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-optiongroup.html">AWS::RDS::OptionGroup</a>, an <em>OptionVersion</em> property was added to the <em>OptionConfiguration</em> property type to specify a version for the option</li> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-rds-database-instance.html">AWS::RDS::DBInstance</a>, <em>SourceRegion</em> and <em>KmsKeyId</em> properties were added to create an encrypted read replica from a cross-region source database instance</li> 
-<p><strong>Amazon Route53</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-route53-hostedzone.html">AWS::Route53::HostedZone</a>, a <em>QueryLoggingConfig</em> property was added to specify a configuration for DNS query logging</li> 
-<p><strong>Amazon S3</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html">AWS::S3::Bucket</a>, an <em>AnalyticsConfigurations</em> property was added to configure an analysis filter for an Amazon S3 bucket</li> 
-<p><strong>AWS Systems Manager</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ssm-parameter.html">AWS::SSM::Parameter</a>, an <em>AllowedPattern</em> property was added to specify a regular expression used to validate the parameter value</li> 
-<p><strong>AWS Step Functions</strong></p> 
-<li>For <a href="https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-stepfunctions-statemachine.html">AWS::StepFunctions::StateMachine</a>, you can specify a <em>StateMachineName</em> when creating a state machine, and both <em>DefinitionString</em> and <em>RoleArn</em> can be updated without replacing the state machine.</li> 
-<p>&nbsp;</p> 
-<p>Visit the <a href="https://aws.amazon.com/cloudformation/">CloudFormation</a> details page and <a href="https://aws.amazon.com/documentation/cloudformation/">CloudFormation documentation</a> for more information, as well as the full list of <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-supported-resources.html">supported resources</a>.</p> 
-<h3>About the Author</h3> 
-<table style="height: 250px" width="1107" cellpadding="8"> 
-<tbody> 
-<tr> 
-<td width="63">&nbsp;<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/17/PhoneTool1.jpg" /></td> 
-<td width="391"> <p><strong>Luis Colon is a Senior Developer Advocate for the AWS CloudFormation team.</strong>&nbsp;He works with customers and internal development teams to focus on and improve the developer experience for CloudFormation users. In his spare time, he mixes progressive trance music.</p> <p>&nbsp;</p></td> 
-</tr> 
-</tbody> 
-</table> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Password Rotation for Windows on Amazon EC2 Made Easy with EC2Rescue</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Alessandro Martini</span></span> | on 
-<time property="datePublished" datetime="2018-01-26T17:41:05+00:00">26 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/password-rotation-for-windows-on-amazon-ec2-made-easy-with-ec2rescue/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/Windows-Server-EC2Rescue.html">EC2Rescue for Windows</a> is an easy-to-use tool that you run on an <a href="https://aws.amazon.com/ec2">Amazon EC2</a> Windows Server instance to diagnose and troubleshoot possible problems. A common use of the tool is to <a href="https://aws.amazon.com/premiumsupport/knowledge-center/reset-admin-password/">reset the local administrator password</a>.</p> 
-<p>Password rotation is an important security task in any organization. In addition, setting strong passwords is necessary to ensure that the password doesn’t get hacked by brute force or dictionary attacks.&nbsp;However, these tasks become very challenging to perform manually, particularly when you are dealing with more than a few servers.</p> 
-<p><a href="https://aws.amazon.com/systems-manager">AWS Systems Manager</a> allows you to manage your fleet remotely, and to run commands at scale using Run Command.&nbsp;The Systems Manager Parameter Store feature is integrated with AWS Key Management Service (<a href="https://aws.amazon.com/kms">AWS KMS</a>). Parameter Store allows for string values to be stored encrypted, with granular access controlled by AWS Identity and Access Management (<a href="https://aws.amazon.com/iam">IAM</a>) policies.</p> 
-<p>In this post, I show you how to rotate the local administrator password for your Windows instances using EC2Rescue, and store the rotated password in Parameter Store. By using Systems Manager Maintenance Window, you can then schedule this activity to occur automatically at a frequency of your choosing.</p> 
-<p><span id="more-2155"></span></p> 
-<b><strong>Overview</strong></b> 
-<p>EC2Rescue is available as a Run Command document called <a href="https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-ssm.html">AWSSupport-RunEC2RescueForWindowsTool</a>. The option to reset the local administrator password allows you to specify which KMS key to use to encrypt the randomly generated password.<br /> If your EC2 Windows instances are already enabled with Systems Manager, then the password reset via EC2Rescue Run Command happens online, with no downtime. You can then configure a Systems Manager maintenance window to run AWSSupport-RunEC2RescueForWindowsTool on a schedule (make sure your EC2 instances are running during the maintenance window!).</p> 
-<b><strong>Workflow</strong></b> 
-<p>In this post, I provide step-by-step instructions to configure this solution manually. For those of you who want to see the solution in action with minimal effort, I have created a CloudFormation template that configures everything for you, in the us-west-2 (Oregon) region.</p> 
-<p><a href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?filter=active&amp;templateURL=https:%2F%2Fs3.amazonaws.com%2Fec2rescue%2Fsolutions%2FAWS-ResetWindowsPasswordOnASchedule.template&amp;stackName=ResetWindowsPasswordOnASchedule"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/cloudformation-launch-stack-button.png" /></a></p> 
-<p>&nbsp;</p> 
-<p>Keep reading to learn what is being configured, or jump to the <strong>Deploy the solution</strong> section for a description of the template parameters.</p> 
-<h3><strong>Define a KMS key</strong></h3> 
-<p>First, you create a KMS key specifically to encrypt Windows passwords. This gives you control over which users and roles can encrypt these passwords, and who can then decrypt them. I recommend that you create a new KMS key dedicated to this task to better manage access.</p> 
-<h4><strong>Create a JSON file for the Key policy</strong></h4> 
-<p>In a text editor of your choosing, copy and paste the following policy. Replace <span style="color: #ff0000"><strong>ACCOUNTID</strong></span> with your AWS Account ID.&nbsp;<strong>Administrators</strong>&nbsp;is the IAM role name that you want to allow to&nbsp;decrypt the rotated passwords, and&nbsp;<strong>EC2SSMRole&nbsp;</strong>is the IAM role name attached to your EC2 instances. Save the file as&nbsp;<em>RegionalPasswordEncryptionKey-Policy.json</em>.</p> 
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Id&quot;: &quot;key-policy&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;Allow access for Key Administrators&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:role/<strong>Administrators</strong>&quot;
-},
-&quot;Action&quot;: [
-&quot;kms:Create*&quot;,
-&quot;kms:Describe*&quot;,
-&quot;kms:Enable*&quot;,
-&quot;kms:List*&quot;,
-&quot;kms:Put*&quot;,
-&quot;kms:Update*&quot;,
-&quot;kms:Revoke*&quot;,
-&quot;kms:Disable*&quot;,
-&quot;kms:Get*&quot;,
-&quot;kms:Delete*&quot;,
-&quot;kms:ScheduleKeyDeletion&quot;,
-&quot;kms:CancelKeyDeletion&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;
-},
-{
-&quot;Sid&quot;: &quot;Allow decryption&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:role/<strong>Administrators</strong>&quot;
-},
-&quot;Action&quot;: &quot;kms:Decrypt&quot;,
-&quot;Resource&quot;: &quot;*&quot;
-},
-{
-&quot;Sid&quot;: &quot;Allow encryption&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:role/<strong>EC2SSMRole</strong>&quot;
-},
-&quot;Action&quot;: &quot;kms:Encrypt&quot;,
-&quot;Resource&quot;: &quot;*&quot;
-}
-]
-}
- 
-<p><strong>Create the key and its alias (user-friendly name)</strong><br /> Use the following CLI command to create a KMS key that the IAM role <strong>Administrators</strong> can manage, and that the IAM role <strong>EC2SSMRole</strong> can use for encryption only:</p> 
-aws kms create-key \
-–-policy file://RegionalPasswordEncryptionKey-Policy.json \
---description &quot;Key used to encrypt local Administrator passwords stored in SSM Parameter Store.&quot;
-Output:
-{
-&quot;KeyMetadata&quot;:
-{
-&quot;Origin&quot;: &quot;AWS_KMS&quot;,
-&quot;KeyId&quot;: &quot;<strong>88eea0b7-0508-4318-a0bc-feee4a5250a3</strong>&quot;,
-&quot;Description&quot;: &quot;Key used to encrypt local Administrator passwords stored in SSM Parameter Store.&quot;,
-(...)
-}
-}
- 
-<p>Use the following CLI command to create an alias for the KMS key:</p> 
-aws kms create-alias \
---alias-name alias/WindowsPasswordRotation-EncryptionKey \
---target-key-id <strong>88eea0b7-0508-4318-a0bc-feee4a5250a3
-</strong> 
-<h3><strong>Define a maintenance window</strong></h3> 
-<p>Use a maintenance window to schedule the password reset. Here is the CLI command to schedule such activity every Sunday at 5AM UTC:</p> 
-aws ssm create-maintenance-window \
---name &quot;windows-password-rotation&quot; \
---schedule &quot;cron(0 5 ? * SUN *)&quot; \
---duration 2 \
---cutoff 1 \
---no-allow-unassociated-targets
-Output:
-{ &quot;WindowId&quot;: &quot;<strong>mw-0f2c58266a8c49246</strong>&quot; }
- 
-<h3><strong>Define a target</strong></h3> 
-<p>Use tags to identify which instances to reset the password. For example, you can reset all instances tagged with tag key <strong>Environment</strong> with value <strong>Production</strong>.</p> 
-aws ssm register-target-with-maintenance-window \
---window-id &quot;<strong>mw-0f2c58266a8c49246</strong>&quot; \
---targets &quot;Key=tag:<strong>Environment</strong>,Values=<strong>Production</strong>&quot; \
---owner-information &quot;Production Servers&quot; \
---resource-type &quot;INSTANCE&quot;
-Output:
-{
-&quot;WindowTargetId&quot;: &quot;<strong>a5fc445b-a7f1-4591-b528-98440832da41</strong>&quot;
-}
- 
-<h3><strong>Define a maintenance window IAM role</strong></h3> 
-<p>These steps are only necessary if you haven’t configured a maintenance window before. Skip this section if you already have your IAM role with the AmazonSSMMaintenanceWindowRole AWS Managed Policy attached.</p> 
-<h4><strong>Create a JSON file for the role trust policy</strong></h4> 
-<p>In a text editor of your choosing, copy and paste the following trust policy. Save the file as <em>AutomationMWRole-Trust-Policy.json</em>.</p> 
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Service&quot;: &quot;ssm.amazonaws.com&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}
-]
-}
- 
-<h4><strong>Create the IAM role and attach the Amazon managed policy for SSM maintenance window</strong></h4> 
-<p>Use the following CLI two commands to create the IAM role&nbsp;<strong>AutomationMWRole&nbsp;</strong>and associate the&nbsp;AmazonSSMMaintenanceWindowRole&nbsp;AWS Managed Policy<strong>.</strong></p> 
-aws iam create-role \
---role-name <strong>AutomationMWRole</strong> \
---assume-role-policy-document file://AutomationMWRole-Trust-Policy.json
-aws iam attach-role-policy \
---policy-arn arn:aws:iam::aws:policy/service-role/AmazonSSMMaintenanceWindowRole \
---role-name AutomationMWRole
- 
-<h3><strong>Define a task</strong></h3> 
-<p>EC2Rescue is available as a Run Command document called <a href="https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2rw-ssm.html">AWSSupport-RunEC2RescueForWindowsTool</a>. This document allows you to run EC2Rescue remotely on your instances. One of the available options is the ability to reset the local administrator password. As the final configuration step, create a Run Command task that runs AWSSupport-RunEC2RescueForWindowsTool with the following parameters:</p> 
-<li>Command = ResetAccess</li> 
-<li>Parameters = KMS Key ID</li> 
-<p>Rotated passwords are saved in Parameter Store encrypted with the KMS key to use. Here is the CLI command using the KMS key, target, maintenance window and role that you previously generated:</p> 
-aws ssm register-task-with-maintenance-window \
---targets &quot;Key=WindowTargetIds,Values=<strong>a5fc445b-a7f1-4591-b528-98440832da41</strong>&quot; \
---task-arn &quot;AWSSupport-RunEC2RescueForWindowsTool&quot; \
---service-role-arn &quot;arn:aws:iam::<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:role/AutomationMWRole&quot; \
---window-id &quot;<strong>mw-0f2c58266a8c49246</strong>&quot; \
---task-type &quot;RUN_COMMAND&quot; \
---task-parameters&nbsp; &quot;{\&quot;Command\&quot;:{ \&quot;Values\&quot;: [\&quot;ResetAccess\&quot;] }, \&quot;Parameters\&quot;:{ \&quot;Values\&quot;: [\&quot;<strong>88eea0b7-0508-4318-a0bc-feee4a5250a3</strong>\&quot;] } }&quot; \
---max-concurrency 5 \
---max-errors 1 \
---priority 1
-Output:
-{
-&quot;WindowTaskId&quot;: &quot;<strong>a3571731-c64c-4e43-be8d-7b543942a179</strong>&quot;
-}
- 
-<p>Your Windows instances need to be enabled for Systems Manager, and to have additional IAM permissions to be able to write to Parameter Store. You can accomplish this by adding the following policy to the existing IAM roles associated with your Windows instances:</p> 
-{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;ssm:PutParameter&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:ssm:*:<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:parameter/EC2Rescue/Passwords/*&quot;
-]
-}
-]
-}
- 
-<p>Save the policy as&nbsp;<em>EC2Rescue-ResetAccess-Policy.json</em>. Here are the CLI commands to create a new IAM customer managed policy and attach it to an existing Systems Manager IAM role for EC2 (in this example, <strong>EC2SSMRole</strong>).</p> 
-aws iam create-policy \
---policy-name EC2Rescue-ResetAccess-Policy \
---policy-document file://EC2Rescue-ResetAccess-Policy.json
-aws iam attach-role-policy \
---policy-arn arn:aws:iam::<span style="color: #ff0000"><strong>ACCOUNTID</strong></span>:policy/EC2Rescue-ResetAccess-Policy \
---role-name <strong>EC2SSMRole
-</strong> 
-<b><strong>Deploy the solution</strong></b> 
-<p>To simplify the deployment of this solution, I have created an AWS CloudFormation template that configures all the parts described earlier in this post, and deploys this solution in us-west-2 (Oregon).</p> 
-<p><a href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?filter=active&amp;templateURL=https:%2F%2Fs3.amazonaws.com%2Fec2rescue%2Fsolutions%2FAWS-ResetWindowsPasswordOnASchedule.template&amp;stackName=ResetWindowsPasswordOnASchedule"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/cloudformation-launch-stack-button.png" /></a></p> 
-<p>&nbsp;</p> 
-<p>These are the parameters that the template requires:</p> 
-<li><strong>Target</strong> 
-<li>Tag key to filter your instances</li> 
-<li>Tag value to filter your instances</li> 
-<li>Cron expression for the maintenance window</li> 
-</ul> </li> 
-<li><strong>Permissions</strong> 
-<li>Existing IAM role name you are using for your Systems Manager-enabled EC2 instances, which will be authorized to encrypt the passwords.</li> 
-</ul> </li> 
-<li><strong>Security</strong> 
-<li>Current IAM role name that you are using to deploy this CloudFormation template. The role is authorized to decrypt the passwords and manage the KMS key.</li> 
-</ul> </li> 
-<p>The following figure shows the CloudFormation console, with the default template parameters and the existing EC2 IAM role named <strong>EC2SSMRole</strong>, as well as the administrative IAM role <strong>Administrators</strong>, which you use to create the CloudFormation stack.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/cfn-parameters.png" /></p> 
-<p>The deployment takes few minutes. Here is a sample maintenance window, which was last executed on October 29th 2017.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/mw.png" /></p> 
-<p>Parameter Store has an encrypted parameter for each production Windows instance. You can decrypt each value from the console if you have kms:decrypt permissions on the key used to encrypt the password.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/24/ps.png" /></p> 
-<b><strong>Conclusion</strong></b> 
-<p>In this post, I showed you how to enhance the security of an EC2 environment by automating secure password rotation. Passwords are rotated on a schedule, and these actions are logged in AWS CloudTrail. Passwords are stored in Parameter Store with a KMS key, so that you have granular control over who has access to the encrypted passwords with IAM policies.<br /> As long as your EC2 Windows instances are running during the maintenance window and are configured to work with Systems Manager, the local administrator password is rotated automatically. Additional maintenance windows can be created for other environments, or new targets added to the existing maintenance window (such as development, staging, or QA environments).</p> 
-<p><strong>About the Author</strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/02/AMartini.jpg" />Alessandro Martini is a Senior Cloud Support Engineer in the AWS Support organization. He likes working with customers, understanding and solving problems, and writing blog posts that outline solutions on multiple AWS products. He also loves pizza, especially when there is no pineapple on it.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
