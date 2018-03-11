@@ -191,6 +191,155 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Introducing Cloud Native Networking for Amazon ECS Containers</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T21:27:04+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3212" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3212&amp;disqus_title=Introducing+Cloud+Native+Networking+for+Amazon+ECS+Containers&amp;disqus_url=https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3212');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of ECS Sr. Software Dev Engineer Anirudh Aithal.</em></p> 
+<p>Today, AWS announced <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-ecs-introduces-awsvpc-networking-mode-for-containers-to-support-full-networking-capabilities/">task networking</a> for Amazon ECS. This feature brings <a href="https://aws.amazon.com/ec2">Amazon EC2</a> networking capabilities to tasks using <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html">elastic network interfaces</a>.</p> 
+<p>An elastic network interface is a virtual network interface that you can attach to an instance in a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Introduction.html">VPC</a>. When you launch an EC2 virtual machine, an elastic network interface is automatically provisioned to provide networking capabilities for the instance.</p> 
+<p>A task is a logical group of running containers. Previously, tasks running on <a href="https://aws.amazon.com/ecs">Amazon ECS</a> shared the elastic network interface of their EC2 host. Now, the new <code class="lang-bash">awsvpc</code> networking mode lets you attach an elastic network interface directly to a task.</p> 
+<p>This simplifies network configuration, allowing you to treat each container just like an EC2 instance with full networking features, segmentation, and security controls in the VPC.</p> 
+<p>In this post, I cover how <code class="lang-bash">awsvpc</code> mode works and show you how you can start using elastic network interfaces with your tasks running on ECS.<span id="more-3212"></span></p> 
+<b>Background: &nbsp;Elastic network interfaces in EC2</b> 
+<p>When you launch EC2 instances within a VPC, you don’t have to configure an additional overlay network for those instances to communicate with each other. By default, routing tables in the VPC enable seamless communication between instances and other endpoints. This is made possible by virtual network interfaces in VPCs called elastic network interfaces. Every EC2 instance that launches is automatically assigned an elastic network interface (the primary network interface). All networking parameters—such as subnets, security groups, and so on—are handled as properties of this primary network interface.</p> 
+<p>Furthermore, an IPv4 address is allocated to every elastic network interface by the VPC at creation (the primary IPv4 address). This primary address is unique and routable within the VPC. This effectively makes your VPC a flat network, resulting in a simple networking topology.</p> 
+<p>Elastic network interfaces can be treated as fundamental building blocks for connecting various endpoints in a VPC, upon which you can build higher-level abstractions. This allows elastic network interfaces to be leveraged for:</p> 
+<li>VPC-native IPv4 addressing and routing (between instances and other endpoints in the VPC)</li> 
+<li>Network traffic isolation</li> 
+<li>Network policy enforcement using ACLs and firewall rules (security groups)</li> 
+<li>IPv4 address range enforcement (via subnet CIDRs)</li> 
+<b>Why use awsvpc?</b> 
+<p>Previously, ECS relied on the networking capability provided by Docker’s default networking behavior to set up the network stack for containers. With the default bridge network mode, containers on an instance are connected to each other using the docker0 bridge. Containers use this bridge to communicate with endpoints outside of the instance, using the primary elastic network interface of the instance on which they are running. Containers share and rely on the networking properties of the primary elastic network interface, including the firewall rules (security group subscription) and IP addressing.</p> 
+<p>This means you cannot address these containers with the IP address allocated by Docker (it’s allocated from a pool of locally scoped addresses), nor can you enforce finely grained network ACLs and firewall rules. Instead, containers are addressable in your VPC by the combination of the IP address of the primary elastic network interface of the instance, and the host port to which they are mapped (either via static or dynamic port mapping). Also, because a single elastic network interface is shared by multiple containers, it can be difficult to create easily understandable network policies for each container.</p> 
+<p>The <code class="lang-bash">awsvpc</code> networking mode addresses these issues by provisioning elastic network interfaces on a per-task basis. Hence, containers no longer share or contend use these resources. This enables you to:</p> 
+<li>Run multiple copies of the container on the same instance using the same container port without needing to do any port mapping or translation, simplifying the application architecture.</li> 
+<li>Extract higher network performance from your applications as they no longer contend for bandwidth on a shared bridge.</li> 
+<li>Enforce finer-grained access controls for your containerized applications by associating security group rules for each Amazon ECS task, thus improving the security for your applications.</li> 
+<p>Associating security group rules with a container or containers in a task allows you to restrict the ports and IP addresses from which your application accepts network traffic. For example, you can enforce a policy allowing SSH access to your instance, but blocking the same for containers. Alternatively, you could also enforce a policy where you allow HTTP traffic on port 80 for your containers, but block the same for your instances. Enforcing such security group rules greatly reduces the surface area of attack for your instances and containers.</p> 
+<p>ECS manages the lifecycle and provisioning of elastic network interfaces for your tasks, creating them on-demand and cleaning them up after your tasks stop. You can specify the same properties for the task as you would when launching an EC2 instance. This means that containers in such tasks are:</p> 
+<li>Addressable by IP addresses and the DNS name of the elastic network interface</li> 
+<li>Attachable as ‘IP’ targets to Application Load Balancers and Network Load Balancers</li> 
+<li>Observable from VPC flow logs</li> 
+<li>Access controlled by security groups</li> 
+<p>&shy;This also enables you to run multiple copies of the same task definition on the same instance, without needing to worry about port conflicts. You benefit from higher performance because you don’t need to perform any port translations or contend for bandwidth on the shared docker0 bridge, as you do with the bridge networking mode.</p> 
+<b>Getting started</b> 
+<p>If you don’t already have an ECS cluster, you can create one using the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/create_cluster.html">create cluster wizard</a>. In this post, I use&nbsp;“<code class="lang-bash">awsvpc-demo</code>” as the cluster name. Also, if you are following along with the command line instructions, make sure that you have the latest version of the <a href="https://aws.amazon.com/cli/">AWS CLI</a>&nbsp;or <a href="https://aws.amazon.com/tools/">SDK</a>.</p> 
+<h3>Registering the task definition</h3> 
+<p>The only change to make in your task definition for task networking is to set the <code class="lang-bash">networkMode</code> parameter to <code class="lang-bash">awsvpc</code>. In the <a href="https://console.aws.amazon.com/ecs/">ECS console</a>, enter this value for <strong>Network Mode</strong>.</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_intro_1.png" /></p> 
+<p>If you plan on registering a container in this task definition with an ECS service, also specify a container port in the task definition. This example specifies an NGINX container exposing port 80:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_intro_2.png" /></p> 
+<p>This creates a task definition named “<code class="lang-bash">nginx-awsvpc&quot;</code> with networking mode set to <code class="lang-bash">awsvpc</code>. The following commands illustrate registering the task definition from the command line:</p> 
+<code class="lang-bash"><strong>$ cat nginx-awsvpc.json</strong>
+{
+&quot;family&quot;: &quot;nginx-awsvpc&quot;,
+&quot;networkMode&quot;: &quot;awsvpc&quot;,
+&quot;containerDefinitions&quot;: [
+{
+&quot;name&quot;: &quot;nginx&quot;,
+&quot;image&quot;: &quot;nginx:latest&quot;,
+&quot;cpu&quot;: 100,
+&quot;memory&quot;: 512,
+&quot;essential&quot;: true,
+&quot;portMappings&quot;: [
+{
+&quot;containerPort&quot;: 80,
+&quot;protocol&quot;: &quot;tcp&quot;
+}
+]
+}
+]
+}
+</code> 
+<strong><code class="lang-bash">$ aws ecs register-task-definition --cli-input-json file://./nginx-awsvpc.json</code></strong> 
+<h3>Running the task</h3> 
+<p>To run a task with this task definition, navigate to the cluster in the Amazon ECS console and choose <strong>Run new task</strong>. Specify the task definition as “<code class="lang-bash">nginx-awsvpc</code>“. Next, specify the set of subnets in which to run this task. You must have instances registered with ECS in at least one of these subnets. Otherwise, ECS can’t find a candidate instance to attach the elastic network interface.</p> 
+<p>You can use the console to narrow down the subnets by selecting a value for <strong>Cluster VPC</strong>:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_intro_3.png" /></p> 
+<p>Next, select a security group for the task. For the purposes of this example, create a new security group that allows ingress only on port 80. Alternatively, you can also select security groups that you’ve already created.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_intro_4.png" /></p> 
+<p>Next, run the task by choosing <strong>Run Task</strong>.</p> 
+<p>You should have a running task now. If you look at the details of the task, you see that it has an elastic network interface allocated to it, along with the IP address of the elastic network interface:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/tn_intro_5.png" /></p> 
+<p>You can also use the command line to do this:</p> 
+<code class="lang-bash"><strong>$ aws ecs run-task --cluster awsvpc-ecs-demo --network-configuration &quot;awsvpcConfiguration={subnets=[&quot;subnet-c070009b&quot;],securityGroups=[&quot;sg-9effe8e4&quot;]}&quot; nginx-awsvpc $ aws ecs describe-tasks --cluster awsvpc-ecs-demo --task $ECS_TASK_ARN --query tasks[0]</strong>
+{
+&quot;taskArn&quot;: &quot;arn:aws:ecs:us-west-2:xx..x:task/f5xx-...&quot;,
+&quot;group&quot;: &quot;family:nginx-awsvpc&quot;,
+&quot;attachments&quot;: [
+{
+&quot;status&quot;: &quot;ATTACHED&quot;,
+&quot;type&quot;: &quot;ElasticNetworkInterface&quot;,
+&quot;id&quot;: &quot;xx..&quot;,
+&quot;details&quot;: [
+{
+&quot;name&quot;: &quot;subnetId&quot;,
+&quot;value&quot;: &quot;subnet-c070009b&quot;
+},
+{
+&quot;name&quot;: &quot;networkInterfaceId&quot;,
+&quot;value&quot;: &quot;eni-b0aaa4b2&quot;
+},
+{
+&quot;name&quot;: &quot;macAddress&quot;,
+&quot;value&quot;: &quot;0a:47:e4:7a:2b:02&quot;
+},
+{
+&quot;name&quot;: &quot;privateIPv4Address&quot;,
+&quot;value&quot;: &quot;10.0.0.35&quot;
+}
+]
+}
+],
+...
+&quot;desiredStatus&quot;: &quot;RUNNING&quot;,
+&quot;taskDefinitionArn&quot;: &quot;arn:aws:ecs:us-west-2:xx..x:task-definition/nginx-awsvpc:2&quot;,
+&quot;containers&quot;: [
+{
+&quot;containerArn&quot;: &quot;arn:aws:ecs:us-west-2:xx..x:container/62xx-...&quot;,
+&quot;taskArn&quot;: &quot;arn:aws:ecs:us-west-2:xx..x:task/f5x-...&quot;,
+&quot;name&quot;: &quot;nginx&quot;,
+&quot;networkBindings&quot;: [],
+&quot;lastStatus&quot;: &quot;RUNNING&quot;,
+&quot;networkInterfaces&quot;: [
+{
+&quot;privateIpv4Address&quot;: &quot;10.0.0.35&quot;,
+&quot;attachmentId&quot;: &quot;xx..&quot;
+}
+]
+}
+]
+}</code> 
+<p>When you describe an “awsvpc” task, details of the elastic network interface are returned via the “attachments” object. You can also get this information from the “containers” object. For example:</p> 
+<code class="lang-bash"><strong>$ aws ecs describe-tasks --cluster awsvpc-ecs-demo --task $ECS_TASK_ARN --query tasks[0].containers[0].networkInterfaces[0].privateIpv4Address</strong>
+&quot;10.0.0.35&quot;</code> 
+<b>Conclusion</b> 
+<p>The nginx container is now addressable in your VPC via the <code>10.0.0.35</code> IPv4 address. You did not have to modify the security group on the instance to allow requests on port 80, thus improving instance security. Also, you ensured that all ports apart from port 80 were blocked for this application without modifying the application itself, which makes it easier to manage your task on the network. You did not have to interact with any of the elastic network interface API operations, as ECS handled all of that for you.</p> 
+<p>You can read more about the task networking feature in the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html">ECS documentation</a>. For a detailed look at how this new networking mode is implemented on an instance, see <a href="https://aws.amazon.com/blogs/compute/under-the-hood-task-networking-for-amazon-ecs/">Under the Hood: Task Networking for Amazon ECS</a>.</p> 
+<p>Please use the comments section below to send your feedback.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3212');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Under the Hood: Task Networking for Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1272,185 +1421,6 @@ AWS.Blog.commenting('#aws-comment-trigger-2928');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2928');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Creating a Cost-Efficient Amazon ECS Cluster for Scheduled Tasks</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-09-28T10:44:39+00:00">28 SEP 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/creating-a-cost-efficient-amazon-ecs-cluster-for-scheduled-tasks/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2947" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2947&amp;disqus_title=Creating+a+Cost-Efficient+Amazon+ECS+Cluster+for+Scheduled+Tasks&amp;disqus_url=https://aws.amazon.com/blogs/compute/creating-a-cost-efficient-amazon-ecs-cluster-for-scheduled-tasks/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2947');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<table> 
-<tbody> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/28/mperi_profile.jpeg" /></td> 
-</tr> 
-<tr> 
-<td style="padding: 0px 30px 0px 0px"><b>Madhuri Peri</b><br /> Sr. DevOps Consultant</td> 
-</tr> 
-</tbody> 
-</table> 
-<p>When you use Amazon Relational Database Service (<a href="https://aws.amazon.com/rds/">Amazon RDS</a>), depending on the logging levels on the RDS instances and the volume of transactions, you could generate a lot of log data. To ensure that everything is running smoothly, many customers search for log error patterns using different log aggregation and visualization systems, such as Amazon Elasticsearch Service, Splunk, or other tool of their choice. A module needs to periodically retrieve the RDS logs using the SDK, and then send them to Amazon S3. From there, you can stream them to your log aggregation tool.</p> 
-<p>One option is writing an <a href="https://aws.amazon.com/lambda">AWS Lambda</a> function to retrieve the log files. However, because of the time that this function needs to execute, depending on the volume of log files retrieved and transferred, it is possible that Lambda could time out on many instances.&nbsp; Another approach is launching an Amazon EC2 instance that runs this job periodically. However, this would require you to run an EC2 instance continuously, not an optimal use of time or money.</p> 
-<p>Using&nbsp;the new Amazon CloudWatch integration with Amazon EC2 Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>), you&nbsp;can&nbsp;trigger this job to run in a container on an existing Amazon ECS cluster. Additionally, this would allow you to improve costs by running containers on a fleet of Spot Instances.</p> 
-<p>In this post, I will show you how to use the new scheduled tasks (<a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/scheduled_tasks.html">cron</a>) feature in Amazon ECS and launch tasks&nbsp;using CloudWatch events, while leveraging Spot Fleet to maximize availability and cost optimization for containerized workloads.</p> 
-<p><span id="more-2947"></span></p> 
-<b>Architecture</b> 
-<p>The following diagram shows how the various components described schedule a task that retrieves log files from&nbsp;Amazon RDS database instances, and deposits the logs into an S3 bucket.</p> 
-<p>Amazon ECS cluster container instances are using Spot Fleet, which is a perfect match for the workload that needs to run when it can. This improves cluster costs.</p> 
-<p>The task definition defines which Docker image to retrieve from the Amazon&nbsp;EC2 Container Registry (Amazon ECR)&nbsp;repository and run on the Amazon ECS cluster.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-arch-1024x790.png" /></p> 
-<p>The container image has Python code functions to make AWS API calls using boto3. It iterates over the RDS database instances, retrieves the logs, and deposits them in the S3 bucket. Many customers choose these logs to be delivered to their centralized log-store. CloudWatch Events defines the schedule for when the container task has to be launched.</p> 
-<b>Walkthrough</b> 
-<p>To provide the basic framework, we have built an AWS CloudFormation <a href="https://github.com/awslabs/aws-ecs-scheduled-tasks/blob/master/cloudformation/ecs-spot-fleet.yaml">template</a> that creates the following resources:</p> 
-<li>Amazon ECR repository for storing the Docker image to be used in the task definition</li> 
-<li>S3 bucket that holds the transferred logs</li> 
-<li>Task definition, with image name and S3 bucket as environment variables provided via input parameter</li> 
-<li>CloudWatch Events rule</li> 
-<li>Amazon ECS cluster</li> 
-<li>Amazon ECS container instances using Spot Fleet</li> 
-<li>IAM roles required for the container instance profiles</li> 
-<h3>Before you begin</h3> 
-<p>Ensure that <a href="https://git-scm.com/book/en/v2/Getting-Started-Installing-Git">Git</a>, <a href="https://docs.docker.com/engine/installation/">Docker</a>, and the <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html">AWS CLI</a> are installed on your computer.</p> 
-<p>In your AWS account, instantiate one Amazon Aurora instance using the console. For more information, see <a href="http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Aurora.CreateInstance.html">Creating an Amazon Aurora DB Cluster</a>.</p> 
-<h3>Implementation Steps</h3> 
-<ol> 
-<li>Clone the code from GitHub that performs RDS API calls to retrieve the log files.<br /> <code>git clone https://github.com/awslabs/aws-ecs-scheduled-tasks.git</code></li> 
-<li>Build and tag the image.<br /> <code>cd aws-ecs-scheduled-tasks/container-code/src &amp;&amp; ls</code><p></p> <code class="lang-bash">Dockerfile		rdslogsshipper.py	requirements.txt</code> <p><code>docker build -t rdslogsshipper .</code></p> <code class="lang-bash">Sending build context to Docker daemon 9.728 kB
-Step 1 : FROM python:3
----&gt; 41397f4f2887
-Step 2 : WORKDIR /usr/src/app
----&gt; Using cache
----&gt; 59299c020e7e
-Step 3 : COPY requirements.txt ./
----&gt; 8c017e931c3b
-Removing intermediate container df09e1bed9f2
-Step 4 : COPY rdslogsshipper.py /usr/src/app
----&gt; 099a49ca4325
-Removing intermediate container 1b1da24a6699
-Step 5 : RUN pip install --no-cache-dir -r requirements.txt
----&gt; Running in 3ed98b30901d
-Collecting boto3 (from -r requirements.txt (line 1))
-Downloading boto3-1.4.6-py2.py3-none-any.whl (128kB)
-Collecting botocore (from -r requirements.txt (line 2))
-Downloading botocore-1.6.7-py2.py3-none-any.whl (3.6MB)
-Collecting s3transfer&lt;0.2.0,&gt;=0.1.10 (from boto3-&gt;-r requirements.txt (line 1))
-Downloading s3transfer-0.1.10-py2.py3-none-any.whl (54kB)
-Collecting jmespath&lt;1.0.0,&gt;=0.7.1 (from boto3-&gt;-r requirements.txt (line 1))
-Downloading jmespath-0.9.3-py2.py3-none-any.whl
-Collecting python-dateutil&lt;3.0.0,&gt;=2.1 (from botocore-&gt;-r requirements.txt (line 2))
-Downloading python_dateutil-2.6.1-py2.py3-none-any.whl (194kB)
-Collecting docutils&gt;=0.10 (from botocore-&gt;-r requirements.txt (line 2))
-Downloading docutils-0.14-py3-none-any.whl (543kB)
-Collecting six&gt;=1.5 (from python-dateutil&lt;3.0.0,&gt;=2.1-&gt;botocore-&gt;-r requirements.txt (line 2))
-Downloading six-1.10.0-py2.py3-none-any.whl
-Installing collected packages: six, python-dateutil, docutils, jmespath, botocore, s3transfer, boto3
-Successfully installed boto3-1.4.6 botocore-1.6.7 docutils-0.14 jmespath-0.9.3 python-dateutil-2.6.1 s3transfer-0.1.10 six-1.10.0
----&gt; f892d3cb7383
-Removing intermediate container 3ed98b30901d
-Step 6 : COPY . .
----&gt; ea7550c04fea
-Removing intermediate container b558b3ebd406
-Successfully built ea7550c04fea</code> </li> 
-<li>Run the <a href="https://github.com/awslabs/aws-ecs-scheduled-tasks.git">CloudFormation stack</a> and get the names for the Amazon ECR repo and S3 bucket. In the stack, choose <b>Outputs</b>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-cf.png" /></li> 
-<li>Open the ECS console and choose <b>Repositories</b>. The rdslogs repo has been created. Choose <b>View Push Commands</b> and follow the instructions to connect to the repository and push the image for the code that you built in Step 2. The screenshot shows the final result:<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/917_scheduledtasks-cf2.png" /></li> 
-<li>Associate the CloudWatch scheduled task with the created Amazon ECS Task Definition, using a new CloudWatch event rule that is scheduled to run at intervals. The following rule is scheduled to run every 15 minutes:<br /> <code>aws --profile default --region us-west-2 events put-rule --name demo-ecs-task-rule&nbsp; --schedule-expression &quot;rate(15 minutes)&quot;</code><p></p> <code class="lang-bash">{
-&nbsp; &nbsp; &quot;RuleArn&quot;: &quot;arn:aws:events:us-west-2:12345678901:rule/demo-ecs-task-rule&quot;
-}</code> </li> 
-<li>CloudWatch requires IAM permissions to place a task on the Amazon ECS cluster when the CloudWatch event rule is executed, in addition to an IAM role that can be assumed by CloudWatch Events. This is done in three steps: 
-<ol> 
-<li>Create the IAM role to be assumed by CloudWatch.<br /> <code>aws --profile default --region us-west-2 iam create-role --role-name Test-Role --assume-role-policy-document file://event-role.json</code><p></p> <code class="lang-bash">{
-&nbsp; &nbsp; &quot;Role&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;AssumeRolePolicyDocument&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Version&quot;: &quot;2012-10-17&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Statement&quot;: [
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Action&quot;: &quot;sts:AssumeRole&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Effect&quot;: &quot;Allow&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Principal&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;Service&quot;: &quot;events.amazonaws.com&quot;
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]
-&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;RoleId&quot;: &quot;AROAIRYYLDCVZCUACT7FS&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;CreateDate&quot;: &quot;2017-07-14T22:44:52.627Z&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;RoleName&quot;: &quot;Test-Role&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;Path&quot;: &quot;/&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;Arn&quot;: &quot;arn:aws:iam::12345678901:role/Test-Role&quot;
-&nbsp; &nbsp; }
-}</code> <p>The following is an example of the event-role.json&nbsp;file used earlier:</p> <code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Service&quot;: &quot;events.amazonaws.com&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}
-]
-}</code> </li> 
-<li>Create the IAM policy defining the ECS cluster and task definition. You need to get these values from the CloudFormation outputs and resources.<br /> <code>aws --profile default --region us-west-2 iam create-policy --policy-name test-policy --policy-document file://event-policy.json</code><p></p> <code class="lang-bash">{
-&nbsp; &nbsp; &quot;Policy&quot;: {
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;PolicyName&quot;: &quot;test-policy&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;CreateDate&quot;: &quot;2017-07-14T22:51:20.293Z&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;AttachmentCount&quot;: 0,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;IsAttachable&quot;: true,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;PolicyId&quot;: &quot;ANPAI7XDIQOLTBUMDWGJW&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;DefaultVersionId&quot;: &quot;v1&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;Path&quot;: &quot;/&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;Arn&quot;: &quot;arn:aws:iam::123455678901:policy/test-policy&quot;,&nbsp;
-&nbsp; &nbsp; &nbsp; &nbsp; &quot;UpdateDate&quot;: &quot;2017-07-14T22:51:20.293Z&quot;
-&nbsp; &nbsp; }
-}</code> <p>The following is an example of the event-policy.json&nbsp;file used earlier:</p> <code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;ecs:RunTask&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:ecs:*::task-definition/&quot;
-],
-&quot;Condition&quot;: {
-&quot;ArnLike&quot;: {
-&quot;ecs:cluster&quot;: &quot;arn:aws:ecs:*::cluster/&quot;
-}
-}
-}
-]
-}</code> </li> 
-<li>Attach the IAM policy to the role.<br /> <code>aws --profile default --region us-west-2 iam attach-role-policy --role-name Test-Role --policy-arn arn:aws:iam::1234567890:policy/test-policy</code></li> 
-</ol> </li> 
-<li>Associate the CloudWatch rule created earlier to place the task on the ECS cluster. The following command shows an example. Replace the AWS account ID and region with your settings.<br /> <code>aws events put-targets --rule demo-ecs-task-rule --targets &quot;Id&quot;=&quot;1&quot;,&quot;Arn&quot;=&quot;arn:aws:ecs:us-west-2:12345678901:cluster/test-cwe-blog-ecsCluster-15HJFWCH4SP67&quot;,&quot;EcsParameters&quot;={&quot;TaskDefinitionArn&quot;=&quot;arn:aws:ecs:us-west-2:12345678901:task-definition/test-cwe-blog-taskdef:8&quot;},&quot;RoleArn&quot;=&quot;arn:aws:iam::12345678901:role/Test-Role&quot;</code><p></p> <code class="lang-bash">{
-&nbsp; &nbsp; &quot;FailedEntries&quot;: [],&nbsp;
-&nbsp; &nbsp; &quot;FailedEntryCount&quot;: 0
-}</code> </li> 
-</ol> 
-<p>That’s it. The logs now run based on the defined schedule.</p> 
-<p>To test this, open the Amazon ECS console, select the Amazon ECS cluster that you created, and then choose <b>Tasks, Run New Task</b>. Select the task definition created by the CloudFormation template, and the cluster should be selected automatically. As this runs, the S3 bucket should be populated with the RDS logs for the instance.</p> 
-<b>Conclusion</b> 
-<p>In this post, you’ve seen that the choices for workloads that need to run at a scheduled time include Lambda with CloudWatch events or EC2 with cron. However, sometimes the job could run outside of Lambda execution time limits or be not cost-effective for an EC2 instance.</p> 
-<p>In such cases, you can schedule the tasks on an ECS cluster using CloudWatch rules. In addition, you can use a Spot Fleet cluster with Amazon ECS for cost-conscious workloads that do not have hard requirements on execution time or instance availability in the Spot Fleet. For more information, see <a href="https://aws.amazon.com/blogs/compute/powering-your-amazon-ecs-cluster-with-amazon-ec2-spot-instances/">Powering your Amazon ECS Cluster with Amazon EC2 Spot Instances and Scheduled Events</a>.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<p>— Madhuri</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2947');
 });
 </script> 
 </article> 

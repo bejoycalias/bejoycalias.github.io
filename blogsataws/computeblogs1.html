@@ -190,6 +190,364 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Taking Advantage of Amazon EC2 Spot Instance Interruption Notices</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chad Schmutzer</span></span> | on 
+<time property="datePublished" datetime="2018-03-09T13:59:28+00:00">09 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/amazon-ec2-spot/" title="View all posts in Amazon EC2 Spot"><span property="articleSection">Amazon EC2 Spot</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/taking-advantage-of-amazon-ec2-spot-instance-interruption-notices/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3990" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3990&amp;disqus_title=Taking+Advantage+of+Amazon+EC2+Spot+Instance+Interruption+Notices&amp;disqus_url=https://aws.amazon.com/blogs/compute/taking-advantage-of-amazon-ec2-spot-instance-interruption-notices/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3990');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/ec2/spot/">Amazon EC2 Spot Instances</a> are spare compute capacity in the AWS Cloud available to you at steep discounts compared to On-Demand prices. The only difference between On-Demand Instances and Spot Instances is that Spot Instances can be interrupted by Amazon EC2 with two minutes of notification when EC2 needs the capacity back.</p> 
+<p>Customers have been taking advantage of Spot Instance interruption notices available via the <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html">instance metadata service</a> since <a href="https://aws.amazon.com/blogs/aws/new-ec2-spot-instance-termination-notices/">January 2015</a> to orchestrate their workloads seamlessly around any potential interruptions. Examples include saving the state of a job, detaching from a load balancer, or draining containers. Needless to say, the two-minute Spot Instance interruption notice is a powerful tool when using Spot Instances.</p> 
+<p>In <a href="https://aws.amazon.com/about-aws/whats-new/2018/01/amazon-ec2-spot-two-minute-warning-is-now-available-via-amazon-cloudwatch-events/">January 2018</a>, the Spot Instance interruption notice also became available as an event in <a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a>. This allows targets such as <a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-introduction-function.html">AWS Lambda functions</a> or <a href="https://docs.aws.amazon.com/sns/latest/dg/welcome.html">Amazon SNS topics</a> to process Spot Instance interruption notices by creating a CloudWatch Events rule to monitor for the notice.</p> 
+<p>In this post, I walk through an example use case for taking advantage of Spot Instance interruption notices in CloudWatch Events to automatically deregister Spot Instances from an <a href="https://aws.amazon.com/elasticloadbalancing">Elastic Load Balancing</a> Application Load Balancer.</p> 
+<b>Architecture</b> 
+<p>In this reference architecture, you use an <a href="https://aws.amazon.com/cloudformation/aws-cloudformation-templates/">AWS CloudFormation template</a> to deploy the following:</p> 
+<li>An <a href="https://aws.amazon.com/vpc/">Amazon Virtual Private Cloud</a> (Amazon VPC)&nbsp;with subnets in two Availability Zones</li> 
+<li>An <a href="https://aws.amazon.com/elasticloadbalancing/details/#details">Application Load Balancer</a> with a listener and target group</li> 
+<li>An Amazon CloudWatch Events rule</li> 
+<li>An AWS Lambda function</li> 
+<li>An Amazon Simple Notification Service (SNS) topic</li> 
+<li>Associated <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html">IAM policies and roles</a> for all of the above</li> 
+<p>After the AWS CloudFormation stack deployment is complete, you then create an Amazon EC2&nbsp;<a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet.html">Spot Fleet</a> request diversified across both Availability Zones and use a couple of recent Spot Fleet features: <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/spot-fleet-can-now-auto-attach-instances-to-your-load-balancers-and-scale-down-to-0-target-capacity/">Elastic Load Balancing integration</a> and&nbsp;<a href="https://aws.amazon.com/about-aws/whats-new/2017/07/tag-your-spot-fleet-ec2-instances/">Tagging Spot Fleet Instances</a>.</p> 
+<p>When any of the Spot Instances receives an interruption notice, Spot Fleet sends the event to CloudWatch Events. The CloudWatch Events rule then notifies both targets, the Lambda function and SNS topic. The Lambda function detaches the Spot Instance from the Application Load Balancer target group, taking advantage of nearly a full two minutes of connection draining before the instance is interrupted. The SNS topic also receives a message, and is provided as an example for the reader to use as an exercise.</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/24/interruption_notices_arch_diagram.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/24/interruption_notices_arch_diagram.jpg" /></a> 
+<p class="wp-caption-text">EC2 Spot Instance Interruption Notices Reference Architecture Diagram</p> 
+<b>Walkthrough</b> 
+<p>To complete this walkthrough, have the <a href="https://aws.amazon.com/cli/">AWS CLI</a> installed and configured, as well as the ability to launch CloudFormation stacks.</p> 
+<h3>Launch the stack</h3> 
+<p>Go ahead and launch the CloudFormation stack. You can check it out from GitHub, or grab the <a href="https://github.com/awslabs/ec2-spot-labs/blob/master/ec2-spot-interruption-notice-cloudwatch-events/ec2-spot-interruption-notice-cloudwatch-events.yaml">template directly</a>. In this post, I use the stack name “<em>spot-spin-cwe</em>“, but feel free to use any name you like. Just remember to change it in the instructions.</p> 
+<code class="lang-bash">$ git clone https://github.com/awslabs/ec2-spot-labs.git
+$ aws cloudformation create-stack --stack-name spot-spin-cwe \
+--template-body file://ec2-spot-labs/ec2-spot-interruption-notice-cloudwatch-events/ec2-spot-interruption-notice-cloudwatch-events.yaml \
+--capabilities CAPABILITY_IAM</code> 
+<p>You should receive a StackId value in return, confirming the stack is launching.</p> 
+<code class="lang-json">{
+&quot;StackId&quot;: &quot;arn:aws:cloudformation:us-east-1:123456789012:stack/spot-spin-cwe/083e7ad0-0ade-11e8-9e36-500c219ab02a&quot;
+}</code> 
+<h3>Review the details</h3> 
+<p>Here are the details of the architecture being launched by the stack.</p> 
+<h4>IAM permissions</h4> 
+<p>Give permissions to a few components in the architecture:</p> 
+<li>The Lambda function</li> 
+<li>The CloudWatch Events rule</li> 
+<li>The Spot Fleet</li> 
+<p>The Lambda function needs basic Lambda function execution permissions so that it can write logs to CloudWatch Logs. You can use the AWS managed policy for this. It also needs to describe EC2 tags as well as deregister targets within Elastic Load Balancing. You can create a custom policy for these.</p> 
+<code class="lang-yaml">lambdaFunctionRole:
+Properties:
+AssumeRolePolicyDocument:
+Statement:
+- Action:
+- sts:AssumeRole
+Effect: Allow
+Principal:
+Service:
+- lambda.amazonaws.com
+Version: 2012-10-17
+ManagedPolicyArns:
+- arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+Path: /
+Policies:
+- PolicyDocument:
+Statement:
+- Action: elasticloadbalancing:DeregisterTargets
+Effect: Allow
+Resource: '*'
+- Action: ec2:DescribeTags
+Effect: Allow
+Resource: '*'
+Version: '2012-10-17'
+PolicyName:
+Fn::Join:
+- '-'
+- - Ref: AWS::StackName
+- lambdaFunctionRole
+Type: AWS::IAM::Role</code> 
+<p>Allow CloudWatch Events to call the Lambda function and publish to the SNS topic.</p> 
+<code class="lang-yaml">lambdaFunctionPermission:
+Properties:
+Action: lambda:InvokeFunction
+FunctionName:
+Fn::GetAtt:
+- lambdaFunction
+- Arn
+Principal: events.amazonaws.com
+SourceArn:
+Fn::GetAtt:
+- eventRule
+- Arn
+Type: AWS::Lambda::Permission</code> 
+<code class="lang-yaml">snsTopicPolicy:
+DependsOn:
+- snsTopic
+Properties:
+PolicyDocument:
+Id:
+Fn::GetAtt:
+- snsTopic
+- TopicName
+Statement:
+- Action: sns:Publish
+Effect: Allow
+Principal:
+Service:
+- events.amazonaws.com
+Resource:
+Ref: snsTopic
+Version: '2012-10-17'
+Topics:
+- Ref: snsTopic
+Type: AWS::SNS::TopicPolicy</code> 
+<p>Finally, Spot Fleet needs permissions to request Spot Instances, tag, and register targets in Elastic Load Balancing. You can tap into an AWS managed policy for this.</p> 
+<code class="lang-yaml">spotFleetRole:
+Properties:
+AssumeRolePolicyDocument:
+Statement:
+- Action:
+- sts:AssumeRole
+Effect: Allow
+Principal:
+Service:
+- spotfleet.amazonaws.com
+Version: 2012-10-17
+ManagedPolicyArns:
+- arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole
+Path: /
+Type: AWS::IAM::Role</code> 
+<h4>Elastic Load Balancing timeout delay</h4> 
+<p>Because you are taking advantage of the two-minute Spot Instance notice, you can tune the Elastic Load Balancing target group deregistration timeout delay to match. When a target is deregistered from the target group, it is put into connection draining mode for the length of the timeout delay: &nbsp;120 seconds to equal the two-minute notice.</p> 
+<code class="lang-yaml">loadBalancerTargetGroup:
+DependsOn:
+- vpc
+Properties:
+HealthCheckIntervalSeconds: 5
+HealthCheckPath: /
+HealthCheckTimeoutSeconds: 2
+Port: 80
+Protocol: HTTP
+TargetGroupAttributes:
+- Key: deregistration_delay.timeout_seconds
+Value: 120
+UnhealthyThresholdCount: 2
+VpcId:
+Ref: vpc
+Type: AWS::ElasticLoadBalancingV2::TargetGroup</code> 
+<h4>CloudWatch Events rule</h4> 
+<p>To capture the Spot Instance interruption notice being published to CloudWatch Events, create a rule with two targets: the Lambda function and the SNS topic.</p> 
+<code class="lang-yaml">eventRule:
+DependsOn:
+- snsTopic
+Properties:
+Description: Events rule for Spot Instance Interruption Notices
+EventPattern:
+detail-type:
+- EC2 Spot Instance Interruption Warning
+source:
+- aws.ec2
+State: ENABLED
+Targets:
+- Arn:
+Ref: snsTopic
+Id:
+Fn::GetAtt:
+- snsTopic
+- TopicName
+- Arn:
+Fn::GetAtt:
+- lambdaFunction
+- Arn
+Id:
+Ref: lambdaFunction
+Type: AWS::Events::Rule</code> 
+<h4>Lambda function</h4> 
+<p>The Lambda function does the heavy lifting for you. The details of the CloudWatch event are published to the Lambda function, which then uses boto3 to make a couple of AWS API calls. The first call is to describe the EC2 tags for the Spot Instance, filtering on a key of “TargetGroupArn”. If this tag is found, the instance is then deregistered from the target group ARN stored as the value of the tag.</p> 
+<code class="lang-python">import boto3
+def handler(event, context):
+instanceId = event['detail']['instance-id']
+instanceAction = event['detail']['instance-action']
+try:
+ec2client = boto3.client('ec2')
+describeTags = ec2client.describe_tags(Filters=[{'Name': 'resource-id','Values':[instanceId],'Name':'key','Values':['loadBalancerTargetGroup']}])
+except:
+print(&quot;No action being taken. Unable to describe tags for instance id:&quot;, instanceId)
+return
+try:
+elbv2client = boto3.client('elbv2')
+deregisterTargets = elbv2client.deregister_targets(TargetGroupArn=describeTags['Tags'][0]['Value'],Targets=[{'Id':instanceId}])
+except:
+print(&quot;No action being taken. Unable to deregister targets for instance id:&quot;, instanceId)
+return
+print(&quot;Detaching instance from target:&quot;)
+print(instanceId, describeTags['Tags'][0]['Value'], deregisterTargets, sep=&quot;,&quot;)
+return</code> 
+<h4>SNS topic</h4> 
+<p>Finally, you’ve created an SNS topic as an example target. For example, you could subscribe an email address to the SNS topic in order to receive email notifications when a Spot Instance interruption notice is received.</p> 
+<code class="lang-yaml">snsTopic:
+Properties:
+DisplayName: SNS Topic for EC2 Spot Instance Interruption Notices
+Type: AWS::SNS::Topic</code> 
+<h3>Create a Spot Fleet request</h3> 
+<p>To proceed to creating your Spot Fleet request, use some of the resources that the CloudFormation stack created, to populate the Spot Fleet request launch configuration. You can find the values in the outputs values of the CloudFormation stack:</p> 
+<code class="lang-bash">$ aws cloudformation describe-stacks --stack-name spot-spin-cwe</code> 
+<p>Using the output values of the CloudFormation stack, update the following values in the Spot Fleet request configuration:</p> 
+<li><strong>%spotFleetRole%</strong></li> 
+<li><strong>%publicSubnet1%</strong></li> 
+<li><strong>%publicSubnet2%</strong></li> 
+<li><strong>%loadBalancerTargetGroup%</strong> (in two places)</li> 
+<p>Be sure to also replace <strong>%amiId%</strong> with the latest <a href="https://aws.amazon.com/amazon-linux-ami/#Amazon_Linux_AMI_IDs">Amazon Linux AMI</a> for your region and <strong>%keyName%</strong> with your environment.</p> 
+<code class="lang-json">{
+&quot;AllocationStrategy&quot;: &quot;diversified&quot;,
+&quot;IamFleetRole&quot;: &quot;%spotFleetRole%&quot;,
+&quot;LaunchSpecifications&quot;: [
+{
+&quot;ImageId&quot;: &quot;%amiId%&quot;,
+&quot;InstanceType&quot;: &quot;c4.large&quot;,
+&quot;Monitoring&quot;: {
+&quot;Enabled&quot;: true
+},
+&quot;KeyName&quot;: &quot;%keyName%&quot;,
+&quot;SubnetId&quot;: &quot;%publicSubnet1%,%publicSubnet2%&quot;,
+&quot;UserData&quot;: &quot;IyEvYmluL2Jhc2gKeXVtIC15IHVwZGF0ZQp5dW0gLXkgaW5zdGFsbCBodHRwZApjaGtjb25maWcgaHR0cGQgb24KaW5zdGFuY2VpZD0kKGN1cmwgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2luc3RhbmNlLWlkKQplY2hvICJoZWxsbyBmcm9tICRpbnN0YW5jZWlkIiA+IC92YXIvd3d3L2h0bWwvaW5kZXguaHRtbApzZXJ2aWNlIGh0dHBkIHN0YXJ0Cg==&quot;,
+&quot;TagSpecifications&quot;: [
+{
+&quot;ResourceType&quot;: &quot;instance&quot;,
+&quot;Tags&quot;: [
+{
+&quot;Key&quot;: &quot;loadBalancerTargetGroup&quot;,
+&quot;Value&quot;: &quot;%loadBalancerTargetGroup%&quot;
+}
+]
+}
+]
+}
+],
+&quot;TargetCapacity&quot;: 2,
+&quot;TerminateInstancesWithExpiration&quot;: true,
+&quot;Type&quot;: &quot;maintain&quot;,
+&quot;ReplaceUnhealthyInstances&quot;: true,
+&quot;InstanceInterruptionBehavior&quot;: &quot;terminate&quot;,
+&quot;LoadBalancersConfig&quot;: {
+&quot;TargetGroupsConfig&quot;: {
+&quot;TargetGroups&quot;: [
+{
+&quot;Arn&quot;: &quot;%loadBalancerTargetGroup%&quot;
+}
+]
+}
+}
+}</code> 
+<p>Save the configuration and place the Spot Fleet request:</p> 
+<code class="lang-bash">$ aws ec2 request-spot-fleet --spot-fleet-request-config file://sfr.json</code> 
+<p>You should receive a <strong>SpotFleetRequestId</strong> in return, confirming the request:</p> 
+<code class="lang-json">{
+&quot;SpotFleetRequestId&quot;: &quot;sfr-3cec4927-9d86-4cc5-a4f0-faa996c841b7&quot;
+}</code> 
+<p>You can confirm that the Spot Fleet request was fulfilled by checking that <strong>ActivityStatus</strong> is “fulfilled”, or by checking that <strong>FulfilledCapacity</strong> is greater than or equal to <strong>TargetCapacity</strong>, while describing the request:</p> 
+<code class="lang-bash">$ aws ec2 describe-spot-fleet-requests --spot-fleet-request-id sfr-3cec4927-9d86-4cc5-a4f0-faa996c841b7</code> 
+<code class="lang-json">{
+&quot;SpotFleetRequestConfigs&quot;: [
+{
+&quot;ActivityStatus&quot;: &quot;fulfilled&quot;,
+&quot;CreateTime&quot;: &quot;2018-02-08T01:23:16.029Z&quot;,
+&quot;SpotFleetRequestConfig&quot;: {
+&quot;AllocationStrategy&quot;: &quot;diversified&quot;,
+&quot;ExcessCapacityTerminationPolicy&quot;: &quot;Default&quot;,
+&quot;FulfilledCapacity&quot;: 2.0,
+…
+&quot;TargetCapacity&quot;: 2,
+…
+}
+]
+}</code> 
+<p>Next, you can confirm that the Spot Instances have been registered with the Elastic Load Balancing target group and are in a healthy state:</p> 
+<code class="lang-bash">$ aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/spot-loadB-1DZUVWL720VS6/26456d12cddbf23a</code> 
+<code class="lang-json">{
+&quot;TargetHealthDescriptions&quot;: [
+{
+&quot;Target&quot;: {
+&quot;Id&quot;: &quot;i-056c95d9dd6fde892&quot;,
+&quot;Port&quot;: 80
+},
+&quot;HealthCheckPort&quot;: &quot;80&quot;,
+&quot;TargetHealth&quot;: {
+&quot;State&quot;: &quot;healthy&quot;
+}
+},
+{
+&quot;Target&quot;: {
+&quot;Id&quot;: &quot;i-06c4c47228fd999b8&quot;,
+&quot;Port&quot;: 80
+},
+&quot;HealthCheckPort&quot;: &quot;80&quot;,
+&quot;TargetHealth&quot;: {
+&quot;State&quot;: &quot;healthy&quot;
+}
+}
+]
+}</code> 
+<h3>Test</h3> 
+<p>In order to test, you can take advantage of the fact that any interruption action that Spot Fleet takes on a Spot Instance results in a Spot Instance interruption notice being provided. Therefore, you can simply decrease the target size of your Spot Fleet from 2 to 1. The instance that is interrupted receives the interruption notice:</p> 
+<code class="lang-bash">$ aws ec2 modify-spot-fleet-request --spot-fleet-request-id sfr-3cec4927-9d86-4cc5-a4f0-faa996c841b7 --target-capacity 1</code> 
+<code class="lang-json">{
+&quot;Return&quot;: true
+}</code> 
+<p>As soon as the interruption notice is published to CloudWatch Events, the Lambda function triggers and detaches the instance from the target group, effectively putting the instance in a draining state.</p> 
+<code class="lang-bash">$ aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/spot-loadB-1DZUVWL720VS6/26456d12cddbf23a</code> 
+<code class="lang-json">{
+&quot;TargetHealthDescriptions&quot;: [
+{
+&quot;Target&quot;: {
+&quot;Id&quot;: &quot;i-0c3dcd78efb9b7e53&quot;,
+&quot;Port&quot;: 80
+},
+&quot;HealthCheckPort&quot;: &quot;80&quot;,
+&quot;TargetHealth&quot;: {
+&quot;State&quot;: &quot;draining&quot;,
+&quot;Reason&quot;: &quot;Target.DeregistrationInProgress&quot;,
+&quot;Description&quot;: &quot;Target deregistration is in progress&quot;
+}
+},
+{
+&quot;Target&quot;: {
+&quot;Id&quot;: &quot;i-088c91a66078b4299&quot;,
+&quot;Port&quot;: 80
+},
+&quot;HealthCheckPort&quot;: &quot;80&quot;,
+&quot;TargetHealth&quot;: {
+&quot;State&quot;: &quot;healthy&quot;
+}
+}
+]
+}</code> 
+<b>Conclusion</b> 
+<p>In conclusion, Amazon EC2 Spot Instance interruption notices are an extremely powerful tool when taking advantage of Amazon EC2 Spot Instances in your workloads, for tasks such as saving state, draining connections, and much more. I’d love to hear how you are using them in your own environment!</p> 
+<table style="margin-left: 30px"> 
+<tbody style="padding-left: 30px"> 
+<tr style="padding-left: 30px"> 
+<td style="padding-left: 30px"> <p></p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/03/07/internal-cdn.amazon-2.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/03/07/internal-cdn.amazon-2.jpg" /></a> 
+<p class="wp-caption-text"><span style="color: #000000">Chad Schmutzer</span><br /> Solutions Architect</p> 
+<td style="padding-left: 30px">Chad Schmutzer is a Solutions Architect at Amazon Web Services based in Pasadena, CA. As an extension of the Amazon EC2 Spot Instances team, Chad helps customers significantly reduce the cost of running their applications, growing their compute capacity and throughput without increasing budget, and enabling new types of cloud computing applications.</td> 
+</tr> 
+</tbody> 
+</table> 
+<p>&nbsp;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3990');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/27/xray_k8s-1.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Application Tracing on Kubernetes with AWS X-Ray</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1624,59 +1982,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3710');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3710');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/ECS_windows_container-two.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Migrating .NET Classic Applications to Amazon ECS Using Windows Containers</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Sundar Narasiman</span></span> | on 
-<time property="datePublished" datetime="2018-01-18T12:46:31+00:00">18 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3685" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3685&amp;disqus_title=Migrating+.NET+Classic+Applications+to+Amazon+ECS+Using+Windows+Containers&amp;disqus_url=https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3685');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post contributed by&nbsp;Sundar Narasiman, Arun Kannan, and Thomas Fuller.</em></p> 
-<p>AWS <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-ecs-support-for-windows-server-containers-ga/">recently announced</a> the general availability of Windows container management for Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Docker containers and Amazon ECS make it easy to run and scale applications on a virtual machine by abstracting the complex cluster management and setup needed.</p> 
-<p>Classic .NET applications are developed with .NET Framework 4.7.1 or older and can run only on a Windows platform. These include Windows Communication Foundation (WCF), ASP.NET Web Forms, and an ASP.NET MVC web app or web API.</p> 
-<b>Why classic ASP.NET?</b> 
-<p>ASP.NET MVC 4.6 and older versions of ASP.NET occupy a significant footprint in the enterprise web application space. As enterprises move towards microservices for new or existing applications, containers are one of the stepping stones for migrating from monolithic to <a href="https://aws.amazon.com/microservices">microservices</a> architectures. Additionally, the support for Windows containers in Windows 10, Windows Server 2016, and Visual Studio Tooling support for Docker simplifies the containerization of ASP.NET MVC apps.</p> 
-<b>Getting started</b> 
-<p>In this post, you pick an ASP.NET 4.6.2 MVC application and get step-by-step instructions for migrating to ECS using Windows containers. The detailed steps, AWS CloudFormation template, Microsoft Visual Studio solution, ECS service definition, and ECS task definition are available in the <a href="https://github.com/aws-samples/aws-ecs-windows-aspnet">aws-ecs-windows-aspnet</a> GitHub repository.</p> 
-<p>To help you getting started running Windows containers, here is the reference architecture for Windows containers on GitHub: <a href="https://github.com/aws-samples/ecs-refarch-cloudformation-windows">ecs-refarch-cloudformation-windows</a>. This reference architecture is the layered CloudFormation stack, in that it calls the other stacks to create the environment. The CloudFormation YAML template in this reference architecture is referenced to create a single JSON CloudFormation stack, which is used in the steps for the migration.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_1.png" /></p> 
-<b>Steps for Migration</b> 
-<p>The code and templates to implement this migration can be found on GitHub: <a href="https://github.com/aws-samples/aws-ecs-windows-aspnet">https://github.com/aws-samples/aws-ecs-windows-aspnet</a>.</p> 
-<ol> 
-<li>Your development environment needs to have the latest version and updates for Visual Studio 2017, Windows 10, and Docker for Windows Stable.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_2.png" /></li> 
-<li>Next, containerize the ASP.NET application and test it locally. The size of Windows container application images is generally larger compared to Linux containers. This is because the base image of the Windows container itself is large in size, typically greater than 9 GB.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_3.png" /></li> 
-<li>After the application is containerized, the container image needs to be pushed to Amazon Elastic Container Registry (<a href="https://aws.amazon.com/ecr">Amazon ECR</a>). Images stored in ECR are compressed to improve pull times and reduce storage costs. In this case, you can see that ECR compresses the image to around 1 GB, for an optimization factor of 90%.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_4.png" /></li> 
-<li>Create a CloudFormation stack using the template in the ‘CloudFormation template’ folder. This creates an ECS service, task definition (referring the containerized ASP.NET application), and other related components mentioned in the ECS reference architecture for Windows containers.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_5.png" /></li> 
-<li>After the stack is created, verify the successful creation of the ECS service, ECS instances, running tasks (with the threshold mentioned in the task definition), and the Application Load Balancer’s successful health check against running containers.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/17/aspdotNet_6.png" /></li> 
-<li>Navigate to the Application Load Balancer URL and see the successful rendering of the containerized ASP.NET MVC app in the browser.</li> 
-</ol> 
-<b>Key Notes</b> 
-<li>Generally, Windows container images occupy large amount of space (in the order of few GBs).</li> 
-<li>All the task definition parameters for Linux containers are not available for Windows containers. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_definitions.html">Windows Task Definitions</a>.</li> 
-<li>An Application Load Balancer can be configured to route requests to one or more ports on each container instance in a cluster. The dynamic port mapping allows you to have multiple tasks from a single service on the same container instance.</li> 
-<li>IAM roles for Windows tasks require extra configuration. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_IAM_roles.html">Windows IAM Roles for Tasks</a>. For this post, configuration was handled by the CloudFormation template.</li> 
-<li>The ECS container agent log file can be accessed for troubleshooting Windows containers: <code class="lang-bash">C:\ProgramData\Amazon\ECS\log\ecs-agent.log</code></li> 
-<b>Summary</b> 
-<p>In this post, you migrated an ASP.NET MVC application to ECS using Windows containers.</p> 
-<p>The logical next step is to automate the activities for migration to ECS and build a fully automated continuous integration/continuous deployment (CI/CD) pipeline for Windows containers. This can be orchestrated by leveraging services such as AWS CodeCommit, AWS CodePipeline, AWS CodeBuild, Amazon ECR, and Amazon ECS. You can learn more about how this is&nbsp;done in the <a href="https://aws.amazon.com/blogs/compute/set-up-a-continuous-delivery-pipeline-for-containers-using-aws-codepipeline-and-amazon-ecs/">Set Up a Continuous Delivery Pipeline for Containers Using AWS CodePipeline and Amazon ECS</a> post.</p> 
-<p>If you have questions or suggestions, please comment below.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3685');
 });
 </script> 
 </article> 

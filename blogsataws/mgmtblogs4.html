@@ -190,6 +190,207 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Query for the Latest Windows AMI Using Systems Manager Parameter Store</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
+<time property="datePublished" datetime="2017-11-17T13:03:38+00:00">17 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/query-for-the-latest-windows-ami-using-systems-manager-parameter-store/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>AWS has introduced a simpler way for you to query for the latest Windows Amazon Machine Image (AMI). You can now use Amazon EC2 Systems Manager Parameter Store. Prior to this release, finding the latest regional ImageID for an Amazon-provided AMI involved a three-step process. First, use an API call to search the list of available public AMIs. Second, filter the results by a given partial string name. Third, sort the matches by CreationDate property and select the newest ImageID.</p> 
+<p>Now, the latest version of a Windows regional ImageID can be returned from a simple Parameter Store query. Each Windows AMI now has its own Parameter Store namespace that is public and describable. Upon querying, an AMI namespace returns only its regional ImageID value.</p> 
+<p><strong>The&nbsp;namespace is made up of two parts:</strong></p> 
+<ol> 
+<li>Parameter Store Prefix (tree): /aws/service/ami-windows-latest/</li> 
+<li>AMI name alias: Windows_Server-2016-English-Full-Base</li> 
+</ol> 
+<p>You can determine a Windows AMI alias by taking the full AMI name property of a Windows public AMI and removing the date-based version identifier at the end.&nbsp; A list of these AMI name properties can be seen by running one for the following EC2 queries.</p> 
+<p><span id="more-1946"></span></p> 
+<p>Using PowerShell</p> 
+<code class="lang-powershell">- Get-EC2ImageByName -Name Windows_Server* | Sort-Object CreationDate | Select-Object Name
+</code> 
+<p>Using AWS CLI</p> 
+<code class="lang-bash">- aws ec2 describe-images --owners amazon --filters &quot;Name=name,Values=Windows_Server*&quot; --query 'sort_by(Images, &amp;CreationDate)[].Name'</code> 
+<p>For example, Windows_Server-2016-English-Full-Base-2017.10.13 without the date-based version becomes Windows_Server-2016-English-Full-Base. When you add the public Parameter Store prefix namespace to the AMI alias you have the Parameter Store name of “/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base”</p> 
+<p>Each unique AMI namespace always remains the same. You no longer need to pattern match on name filters, and you no longer need to sort through CreationDate AMI properties. As Windows AMIs are patched and new versions are released to the public, AWS will update the Parameter Store value with the latest ImageID for each AMI namespace in all supported Regions.</p> 
+<b><strong>Querying for the latest AMI using public Parameters</strong></b> 
+<p>Once you have your target namespace, your query can be created to retrieve the latest AWS Windows ImageID. Each region has an exact replica namespace containing its region specific ImageID value.</p> 
+<p>Using PowerShell</p> 
+<code class="lang-powershell">Get-SSMParameter -Name /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base -region us-east-1</code> 
+<p>Using AWS CLI</p> 
+<code class="lang-bash">aws ssm get-parameters --names /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base --region us-east-1</code> 
+<b><strong>Always launch new instances with the latest ImageID</strong></b> 
+<p>After you have created the query, you can embed the command as a command substitution into your new instance launches.</p> 
+<p>Using PowerShell</p> 
+<code class="lang-powershell">New-EC2Instance -ImageId ((Get-SSMParameterValue -Name /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base).Parameters[0].Value) -InstanceType m4.large -AssociatePublicIp $true -SubnetId subnet-abcd1234</code> 
+<p>Using AWS CLI</p> 
+<code class="lang-bash">aws ec2 run-instances --image-id $(aws ssm get-parameters --names /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base&nbsp; --query 'Parameters[0].[Value]' --output text) --count 1 --instance-type m4.large --subnet-id subnet-abcd1234</code> 
+<p>This new instance launch always results in the latest publicly available Windows AMI for Windows_Server-2016-English-Full-Base. Similar embedding can be used in a number of automation process, docs, and coding languages.</p> 
+<b>Display a complete list of all available public Parameter Windows AMIs</b> 
+<p>You can also query for the complete list of AWS Windows Parameter Store namespaces available.</p> 
+<p>Using PowerShell</p> 
+<code class="lang-powershell">Get-SSMParametersByPath -Path &quot;/aws/service/ami-windows-latest&quot; -region us-east-1</code> 
+<p>Using AWS CLI</p> 
+<code class="lang-bash">aws ssm get-parameters-by-path --path &quot;/aws/service/ami-windows-latest&quot; --region us-east-1</code> 
+<b>Partial list of public Parameter AWS Windows AMIs</b> 
+<code class="lang-bash">/aws/service/ami-windows-latest/Windows_Server-2016-Turkish-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Swedish-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Spanish-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Russian-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Portuguese_Portugal-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Portuguese_Brazil-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Polish-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Korean-Full-SQL_2016_SP1_Standard
+/aws/service/ami-windows-latest/Windows_Server-2016-Korean-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-SQL_2016_SP1_Web
+/aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-SQL_2016_SP1_Standard
+/aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-SQL_2016_SP1_Express
+/aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-SQL_2016_SP1_Enterprise
+/aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Italian-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-Hungarian-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-German-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-French-Full-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-English-Nano-Base
+/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-SQL_2017_Web
+/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-SQL_2017_Standard
+/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-SQL_2017_Express
+/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-SQL_2017_Enterprise 
+</code>… 
+<b>About the Author</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/16/download.jpg" /></p> 
+<p>Steven Armentrout is a Systems Engineer on the Amazon EC2 Windows team and has over a decade of enterprise experience in the public and private sectors as System Administrator, Systems Engineer and Network Engineer.&nbsp;The resident expert on Windows Amazon Machine Images.&nbsp;The seeker of simplicity and ease of use.&nbsp;Living the dream and making a mark on the future of the cloud.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">FINRA Gatekeeper: Amazon EC2 Access Management System Using Amazon EC2 Systems Manager</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2017-11-14T18:14:22+00:00">14 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/finra-gatekeeper-amazon-ec2-access-management-system-using-amazon-ec2-systems-manager/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/finra-logo.png" />By Daniel Koo, Senior Director at FINRA, and Stephen Mele, Software Developer at FINRA</em></p> 
+<h3>Introduction</h3> 
+<p>Moving from a traditional data center to the cloud can impose many questions around compliance and security. FINRA took these concerns very seriously with our cloud migration journey to AWS. As a regulatory organization, overseeing up to 75 billion market transactions every day, it is critical for us to establish proper governance to ensure that compliance is met and that the right level of security is in place. In order for us to achieve this, we looked at building solutions on top of existing AWS services for managing human access. We wanted to make sure we properly control who has access to which resources, allow transparency to look at who is trying to access what resources, and add the necessary approval process when access is requested. The goal was to develop a solution which follows a self-service model, making it very easy for the development and ops community to adopt. The <a href="https://aws.amazon.com/ec2/systems-manager/">Amazon EC2 Systems Manager</a> (SSM) and <a href="https://console.aws.amazon.com/ssm/run-command">Run Command</a> service provided us exactly what we needed to build the right solution.</p> 
+<p><span id="more-2011"></span></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/problem.png" /></p> 
+<h3>Solution Approach</h3> 
+<p>Our solution was to provide temporary access to people using their existing credentials and permissions already being leveraged. We also wanted to make sure that we give the temporary access in a timely and responsive manner. In a traditional data center, it takes a significant amount of time to request access to a particular server and finally be granted the access. This is typically done through a paper process. Given that the majority of the servers are transient in the cloud, this long process did not work so we needed to automate the process and have a fast turnaround time. Ultimately, we wanted to discourage people from accessing the servers so that we could promote cloud-centric approaches such as re-deployment and self-healing. However this solution was necessary to achieve our desired control when access was absolutely needed. Following this approach, while keeping the compliance and security goals in mind, we developed an application called Gatekeeper which leverages <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html">Run Command</a> as the main technology.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/13/approach.png" /></p> 
+<h3>Gatekeeper Application</h3> 
+<p>Gatekeeper is designed as a Web application that is built around a request lifecycle management system, where a user performs a search, selects one or more EC2 resources for a specified environment (such as DEV, QA, Production), and makes a request for temporary access. The users have the ability to specify a set of people desiring the temporary access as well as the number of hours needed. Upon submitting the request, depending on the environment they are requesting for, there are two outcomes:</p> 
+<ol> 
+<li>The temporary access is immediately granted to the user(s).</li> 
+<li>The access request requires a review and approval before being granted the temporary access. Upon approval, access is immediately granted to the user(s), otherwise the access is denied.</li> 
+</ol> 
+<p>Once the request is live, our lifecycle management system keeps track of the time that has elapsed since a request has been fulfilled. As soon as the time allotted to a specific request expires, the system will automatically revoke the user’s access from the resources specified in their request.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/15/schema_ssm.jpg" /></p> 
+<h3>Creating the Users</h3> 
+<p>Gatekeeper needs to be able to create an account for each user on all of the instances provided with the Access Request. To achieve this goal, Gatekeeper has documents staged in EC2 Systems Manager that perform the creation of users on running instances. The document itself is a simple shell script which will set up the user for the temporary access. Gatekeeper calls these documents by leveraging EC2 Systems Manager with the AWS SDK for Java. By taking this route, we do not have to worry about directly connecting to each instance and creating the users; we can simply make an AWS API call and let Systems Manager do all of the heavy lifting for us. Upon successful creation, the system will distribute the private keys to each user that is specified in the Access Request. Currently we have create/delete documents for Amazon Linux, Ubuntu, and Windows, but we could easily add more documents to support more operating systems should the need arise.</p> 
+<h4>Example Create Document</h4> 
+<code class="lang-json">{
+&quot;schemaVersion&quot;:&quot;1.2&quot;,
+&quot;description&quot;:&quot;Script for GateKeeper to create temp user.&quot;,
+&quot;parameters&quot;:{
+&quot;userName&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The username to create.&quot;,
+&quot;allowedPattern&quot;:&quot;gk-.*&quot;,
+&quot;maxChars&quot;:64
+},
+&quot;publicKey&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The public key string for the user.&quot;,
+&quot;maxChars&quot;:4096
+},
+&quot;executionTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;default&quot;:&quot;300&quot;,
+&quot;description&quot;:&quot;(Optional) The time in seconds for a command to be completed before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
+&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
+}
+},
+&quot;runtimeConfig&quot;:{
+&quot;aws:runShellScript&quot;:{
+&quot;properties&quot;:[
+{
+&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
+&quot;runCommand&quot;:[
+&quot;useradd -e `date -d '+2 days' '+%Y-%m-%d'` {{ userName }} -m&quot;,
+&quot;mkdir /home/{{ userName }}/.ssh&quot;,
+&quot;echo '{{ publicKey }}' &gt;&gt; /home/{{ userName }}/.ssh/authorized_keys&quot;,
+&quot;chown -R {{ userName }}:{{ userName }} /home/{{ userName }}&quot;,
+&quot;chmod -R go-rwx /home/{{ userName }}/.ssh&quot;,
+&quot;echo '{{ userName }}  ALL=(ALL) NOPASSWD: ALL' &gt; /etc/sudoers.d/{{ userName }}&quot;,
+&quot;usermod -p '*' {{ userName }}&quot;
+],
+&quot;workingDirectory&quot;:&quot;/root&quot;,
+&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
+}
+]
+}
+}
+}</code> 
+<p>At a high level the script takes in 3 parameters and uses these to execute a shell script. The arguments for this script are:</p> 
+<ol> 
+<li><strong>userName</strong> – the username that the script will set up</li> 
+<li><strong>publicKey</strong> – the public key that will be used for this user</li> 
+<li><strong>executionTimeout</strong> – how much time to wait for the script to successfully complete</li> 
+</ol> 
+<p>The Gatekeeper application is responsible for providing the Systems Manager document with the <strong>userName</strong> and the public SSH key associated with that user. Gatekeeper will generate a new public/private SSH key each time so that no key will be re-used.</p> 
+<p>The script itself will create the user via the&nbsp;<strong>useradd</strong> command, which will set up the user to expire after 2 days (if the system is unable to successfully remove the user). The user will be able to log into the instance only via their private key.</p> 
+<h3>Revoking the User(s) Access</h3> 
+<p>The Gatekeeper application keeps track of each Access Request that is active and determines whether it is time to revoke the user’s access. When the access period for a request expires, the system will invoke a different Systems Manager script that will execute a shell script which removes the user from the instance(s) to which they had requested access.</p> 
+<h4>Example Remove Document</h4> 
+<code class="lang-json">{
+&quot;schemaVersion&quot;:&quot;1.2&quot;,
+&quot;description&quot;:&quot;Script for GateKeeper to cleanup expired users.&quot;,
+&quot;parameters&quot;:{
+&quot;userName&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;description&quot;:&quot;(Required) The username to delete.&quot;,
+&quot;allowedPattern&quot;:&quot;gk-.*&quot;,
+&quot;maxChars&quot;:64
+},
+&quot;executionTimeout&quot;:{
+&quot;type&quot;:&quot;String&quot;,
+&quot;default&quot;:&quot;300&quot;,
+&quot;description&quot;:&quot;(Optional) The time in seconds for a command to be completed before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
+&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
+}
+},
+&quot;runtimeConfig&quot;:{
+&quot;aws:runShellScript&quot;:{
+&quot;properties&quot;:[
+{
+&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
+&quot;runCommand&quot;:[ &quot;cut -f1 -d':' /etc/passwd | grep {{ userName }} &gt; /dev/null &amp;&amp; (userdel -rf {{ userName }} ; echo 'user deleted' ) || echo 'no user to delete'&quot;,
+&quot;ls /etc/sudoers.d/ | grep {{ userName }} &gt; /dev/null &amp;&amp; (rm -f /etc/sudoers.d/{{ userName }} ; echo 'sudo file deleted' ) || echo 'no sudo file to delete'&quot;    ],
+&quot;workingDirectory&quot;:&quot;/root&quot;,
+&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
+}
+]
+}
+}
+}</code> 
+<p>The arguments for this script are:</p> 
+<ol> 
+<li><strong>userName</strong>&nbsp;– the username that the script will delete</li> 
+<li><strong>executionTimeout</strong>&nbsp;– how much time to wait for the script to successfully complete</li> 
+</ol> 
+<p>The script itself uses the <strong>userName</strong>&nbsp;parameter to delete the user from the instance(s). Should the script for some reason fail to run, it will re-try a set amount of times, and if there was no successful run, then the system will notify the Ops team to investigate and remove the user.</p> 
+<h3>Conclusion</h3> 
+<p>By leveraging Amazon EC2 Systems Manager and other services such as Amazon EC2 and AWS Identity and Access Management (IAM), FINRA was able to build a solution to manage temporary access to our resources running in AWS across multiple environments. Systems Manager is very easy to adopt, and it is extremely reliable and fast. It is a great tool for performing ad-hoc execution of scripts on running instances.</p> 
+<p><em>The content and opinions in this blog are those of the third-party author and AWS is not responsible for the content or accuracy of this post.</em></p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Export EC2 Instance Execution Logs to an S3 Bucket Using CloudWatch Logs, Lambda, and CloudFormation</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1041,331 +1242,6 @@ by
 <h3><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/BadgePhoto-blog.jpg" />About the Author</h3> 
 <p>Chuck Meyer&nbsp;is a Senior Developer Advocate for AWS CloudFormation based in New York.&nbsp; He&nbsp;spends his time&nbsp;working with&nbsp;both&nbsp;external and internal development teams to constantly improve the developer experience for CloudFormation users.&nbsp; He’s a live music true believer and spends as much time as possible playing bass and watching bands.</p> 
 <p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Systems Manager Parameter Store adds support for Parameter versions</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Venkat Krish</span></span> | on 
-<time property="datePublished" datetime="2017-10-26T12:45:28+00:00">26 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/amazon-ec2-systems-manager-parameter-store-adds-support-for-parameter-versions/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>By Lou de la Torre, AWS Partner Solutions Architect and </em><em>Venkat Krishnamachari, Principal Product Manager, Amazon EC2 Systems Manager</em></p> 
-<p>Today we are excited to announce versioning support for Amazon EC2 Systems Manager Parameter Store. With Parameter Store versioning support, each iteration of a parameter is assigned a unique version number at creation time. These individual version numbers can be easily referenced in API actions and Systems Manager Documents. By default, the latest value of the parameter will be returned when no version is specified.</p> 
-<h3>Parameter Store</h3> 
-<p><a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Parameter Store</a> is part of <a href="https://aws.amazon.com/ec2/systems-manager/parameter-store/">Amazon EC2 Systems Manager</a>.&nbsp;It provides a centralized, encrypted store to manage your configuration data, whether it is plain text data (database strings) or secure strings and secrets (such as passwords, and API keys). Because Parameter Store is available through the AWS CLI, APIs, and SDKs, you can easily reference parameters across AWS services such as AWS Lambda and Amazon EC2 Container Service (ECS).</p> 
-<p>For additional posts on Parameter Store, see:</p> 
-<p><a href="https://aws.amazon.com/blogs/mt/the-right-way-to-store-secrets-using-parameter-store/">The Right Way to Store Secrets using Parameter Store</a></p> 
-<p><a href="https://aws.amazon.com/blogs/compute/managing-secrets-for-amazon-ecs-applications-using-parameter-store-and-iam-roles-for-tasks/">Managing Secrets for Amazon ECS Applications Using Parameter Store and IAM Roles for Tasks</a></p> 
-<p><a href="https://aws.amazon.com/blogs/mt/organize-parameters-by-hierarchy-tags-or-amazon-cloudwatch-events-with-amazon-ec2-systems-manager-parameter-store/">Organize Parameters by Hierarchy, Tags, or Amazon CloudWatch Events with Amazon EC2 Systems Manager Parameter Store</a></p> 
-<p><span id="more-1531"></span></p> 
-<h3>Parameter Store Versioning</h3> 
-<p>Versioning provides an additional layer of protection for your Parameter Store values. For example, if code deployment fails you can easily roll back and reference older versions of config data saved as parameters in the Parameter Store. You can recover from unintended user errors that caused an overwrite in your parameter value. You can also use versioning to keep track of the number of times your stored values changed over the parameter’s lifetime for auditing purposes (see Figure 1).</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/Figure1-1-1024x546.png" /></p> 
-<p>By default, the initially created parameters’ version is 1. Versions are incremented automatically by increments of 1 whenever a value is updated in the Parameter Store. To demonstrate the value of Parameter Store versioning, consider the following scenario.</p> 
-<p>In an effort to minimize management overhead you decide to migrate your .NET application back-end SQL database from SQL on EC2 to RDS SQL. This will require that you deploy new code to your .NET application to update the database connection string. As with any migration, you want to ensure you can quickly rollback in case of failure.</p> 
-<p>With Parameter Store versioning you can quickly rollback by performing the following steps:</p> 
-<ol> 
-<li>Create a new Parameter pointing to the existing database string (SQL on EC2)</li> 
-<li>Create a new version of the Parameter pointing to the new database string (RDS SQL)</li> 
-<li>Update your code with a reference to the latest or Default version of the parameter</li> 
-<li>Migrate your database from SQL on EC2 to RDS SQL</li> 
-<li>Deploy your code updating the .NET application to point to the new SQL database running on RDS via the latest or Default version of the parameter</li> 
-<li>If any issues arise, simply update your code with the original version of the Parameter pointing your .NET application back to the original SQL on EC2 instance and re-deploy</li> 
-</ol> 
-<p>Let’s take a look at how easily you can make that happen by first creating a Parameter, then updating the parameter, viewing all existing versions of the Parameter, retrieving a Parameter by specific version number and finally rolling back to the original version of the Parameter. To do this you can use either the AWS CLI or the AWS Tools for Windows PowerShell. We will walk you through using both.</p> 
-<p><strong>Step 1. Create a Parameter</strong></p> 
-<p>Execute the following command to create a Parameter using the AWS CLI:</p> 
-<code class="lang-bash">aws ssm put-parameter --name &quot;/Prod/dotnet&quot; --type String --value &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;</code> 
-<p>or you can use&nbsp;the AWS Tools for Windows PowerShell:</p> 
-<code class="lang-powershell">Write-SSMParameter -Name &quot;/Prod/dotnet&quot; -Value &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot; -Type &quot;String&quot;</code> 
-<p><strong>Step 2. Update the Parameter</strong></p> 
-<p>Execute the following command to update the parameter using the AWS CLI (note the change in value and the overwrite option):</p> 
-<code class="lang-bash">aws ssm put-parameter --name &quot;/Prod/dotnet&quot; --type String --value &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot; --overwrite</code> 
-<p>Or you can use the AWS Tools for Windows PowerShell (note the change in value and the overwrite option):</p> 
-<code class="lang-powershell">Write-SSMParameter -Name &quot;/Prod/dotnet&quot; -Value &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot; -Type &quot;String&quot; -Overwrite $true</code> 
-<p><strong>Step 3. View all existing Versions of the Parameter</strong></p> 
-<p>Execute the following command to view all existing versions of the Parameter using the CLI:</p> 
-<code class="lang-bash">aws ssm get-parameter-history --name “/Prod/dotnet”</code> 
-<p>The System returns information similar to the following:</p> 
-<code class="lang-bash">PS C:\&gt; aws ssm get-parameter-history --name “/Prod/dotnet”
-{
-&quot;Parameters&quot;: [
-{
-&quot;LastModifiedUser&quot;: &quot;arn:aws:iam&quot;, 
-&quot;LastModifiedDate&quot;: 1507742527.826, 
-&quot;Type&quot;: &quot;String&quot;, 
-&quot;Name&quot;: &quot;/Prod/dotnet&quot;, 
-&quot;Value&quot;: &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;
-&quot;Version&quot;: 1
-}, 
-{
-&quot;LastModifiedUser&quot;: &quot;arn:aws:iam&quot;, 
-&quot;LastModifiedDate&quot;: 1507743165.366, 
-&quot;Type&quot;: &quot;String&quot;, 
-&quot;Name&quot;: &quot;/Prod/dotnet&quot;, 
-&quot;Value&quot;: &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot;
-&quot;Version&quot;: 2
-}
-]
-}</code> 
-<p>or you can execute the following command to view all existing versions of the Parameter using the AWS Tools for Windows PowerShell:</p> 
-<p><code class="lang-powershell"></code></p> 
-<code class="lang-powershell">Get-SSMParameterHistory -Name &quot;/Prod/dotnet&quot;</code> 
-<p>The System returns information similar to the following:</p> 
-<p>&nbsp;</p> 
-<code class="lang-bash">PS C:\&gt; Get-SSMParameterHistory -Name &quot;/Prod/dotnet&quot;
-Description&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
-KeyId&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
-LastModifiedDate : 10/11/2017 5:22:07 PM
-LastModifiedUser: arn:aws:iam
-Name&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : /Prod/dotnet
-Type&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : String
-Value&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433
-Version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  : 1
-Description&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : 
-KeyId&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; :
-LastModifiedDate : 10/11/2017 5:32:45 PM
-LastModifiedUser : arn:aws:iam
-Name&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : /Prod/dotnet
-Type&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : String
-Value&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; : dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433
-Version&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  : 2</code> 
-<p><strong>Step 4. Retrieve the Parameter</strong></p> 
-<p>Use the following AWS CLI to retrieve parameters:</p> 
-<p>Execute the following command to retrieve the latest version of the Parameter (default):</p> 
-<code class="lang-bash">aws ssm get-parameters --names “/Prod/dotnet”</code> 
-<p>The System returns information similar to the following:</p> 
-<code class="lang-bash">PS C:\&gt; aws ssm get-parameters --name “/Prod/dotnet”
-{
-&nbsp;&nbsp;&nbsp; &quot;InvalidParameters&quot;: [],
-&nbsp;&nbsp;&nbsp; &quot;Parameters&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Type&quot;: &quot;String&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Name&quot;: &quot;/Prod/dotnet&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Value&quot;: &quot;dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Version&quot;: 2
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; ]
-}</code> 
-<p><code class="lang-bash"></code></p> 
-Execute the following command to retrieve a specific version of the Parameter (by version number): 
-<code class="lang-bash">aws ssm get-parameters --names “/Prod/dotnet:1&quot;</code> 
-<p>The System returns information similar to the following:</p> 
-PS C:\&gt; aws ssm get-parameters --region us-west-1 --name “/Prod/dotnet” 
-<code class="lang-bash">
-{
-&nbsp;&nbsp;&nbsp; &quot;InvalidParameters&quot;: [],
-&nbsp;&nbsp;&nbsp; &quot;Parameters&quot;: [
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Type&quot;: &quot;String&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Name&quot;: &quot;/Prod/dotnet&quot;,
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Value&quot;: &quot;ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433&quot;
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;Version&quot;: 1
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; }
-&nbsp;&nbsp;&nbsp; ]
-}</code> 
-<p><code class="lang-bash"></code></p> 
-Note the difference in values. 
-<p>or using the&nbsp;the AWS Tools for Windows PowerShell, you can execute the following command to retrieve the latest version of the Parameter (default):</p> 
-<p><code class="lang-powershell">(Get-SSMParameterValue -Names &quot;/Prod/dotnet&quot;).Parameters | fl</code></p> 
-<p>The System returns information&nbsp;similar to the following:</p> 
-<code class="lang-bash">PS C:\&gt; (Get-SSMParameterValue -Name &quot;/Prod/dotnet&quot;).Parameters | fl
-Name&nbsp; &nbsp;&nbsp;&nbsp;: /Prod/dotnet
-Type&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: String
-Value &nbsp;&nbsp;&nbsp;&nbsp;: dotnet.ctvzltftaz4x.us-west-1.rds.amazonaws.com:1433
-Version&nbsp; : 2
-</code> 
-<p>Execute the following command to retrieve a specific version of the Parameter (by version number):</p> 
-<code class="lang-powershell">(Get-SSMParameterValue -Names &quot;/Prod/dotnet:1&quot;).Parameters | fl</code> 
-<p>The system returns information similar to the following:</p> 
-<code class="lang-bash">PS C:\&gt; (Get-SSMParameterValue -Name &quot;/Prod/dotnet:1&quot;).Parameters | fl
-Name&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;: /Prod/dotnet
-Type&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: String
-Value &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: ec2-13-57-12-38.us-west-1.compute.amazonaws.com:1433
-Version&nbsp;&nbsp; : 1
-</code> 
-<p>Note the difference in values.</p> 
-<p>To roll back your .NET application to point to the original SQL on EC2 instance, simply update your code to reference the previous version of the Parameter and re-deploy.</p> 
-<p>You can reference Parameter Store versioning in Systems Manager Documents as well, as show in the following example:</p> 
-<p><strong>Systems Manager AWS-RunShellScript example</strong></p> 
-<p>The default value for commands is referenced with version 2 of SSM parameter ‘runcommand’.</p> 
-<code class="lang-bash">{
-&quot;schemaVersion&quot;:&quot;1.2&quot;,
-&quot;description&quot;:&quot;Run a shell script or specify the commands to run.&quot;,
-&quot;parameters&quot;:{
-&quot;commands&quot;:{
-&quot;type&quot;:&quot;StringList&quot;,
-&quot;description&quot;:&quot;(Required) Specify a shell script or a command to run.&quot;,
-&quot;minItems&quot;:1,
-&quot;displayType&quot;:&quot;textarea&quot;
-&quot;default&quot;:&quot;{{ssm:runcommand:2}}&quot;
-},
-&quot;executionTimeout&quot;:{
-&quot;type&quot;:&quot;String&quot;,
-&quot;default&quot;:&quot;3600&quot;,
-&quot;description&quot;:&quot;(Optional) The time in seconds for a command to complete before it is considered to have failed. Default is 3600 (1 hour). Maximum is 28800 (8 hours).&quot;,
-&quot;allowedPattern&quot;:&quot;([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)&quot;
-}
-},
-&quot;runtimeConfig&quot;:{
-&quot;aws:runShellScript&quot;:{
-&quot;properties&quot;:[
-{
-&quot;id&quot;:&quot;0.aws:runShellScript&quot;,
-&quot;runCommand&quot;:&quot;{{ commands }}&quot;,
-&quot;timeoutSeconds&quot;:&quot;{{ executionTimeout }}&quot;
-}
-]
-}
-}
-}</code> 
-<p><strong>Summary</strong><br /> Parameter Store provides a centralized, encrypted store to manage your configuration data, whether it is plain text data (database strings) or secure strings and secrets (such as passwords, and API keys). Use versioning to add an extra layer of protection for your Parameter Store values.&nbsp;This new feature is available now and you can start using it today!</p> 
-<p><strong>About the author</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/23/LouDelat-150x150.jpg" />Lou De La Torre is a Partner Solutions Architect with Amazon Web Services. Lou is responsible for assisting Partners and Customers alike with their AWS for Windows architectures and migration strategies. With a career in information technology that spans more than two decades, Lou brings a significant amount of expertise in cloud and systems architecture, systems management, disaster recovery, process improvement and compliance management. Lou consistently strives to ensure that he is delivering solutions that align with the needs and requirements of his customer’s business objectives, while alleviating any pain points they may be experiencing in their IT operations.</p> 
-<p>&nbsp;</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">OpsWorks for Chef Automate – Automatically Bootstrapping Nodes in Different Accounts</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Darko Meszaros</span></span> | on 
-<time property="datePublished" datetime="2017-10-24T23:23:40+00:00">24 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/opsworks-for-chef-automate-automatically-bootstrapping-nodes-in-different-accounts/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Lots of us today are managing multiple AWS accounts. Although having multiple accounts can bring you &nbsp;benefits, such as more granular control of resources and access, decentralized control, and simpler billing. Multiple accounts can also introduce some challenges. A challenge we face in this blog post is having a centralized configuration management server with its nodes spread throughout other AWS accounts.</p> 
-<h3>Goal</h3> 
-<p>Let’s picture working for a company where various teams own Amazon EC2 instances in their own respective AWS accounts. We have a team dedicated to managing the configuration of all EC2 instances (nodes) across all of the company’s AWS accounts. The configuration management is performed by an <a href="https://aws.amazon.com/opsworks/chefautomate/">OpsWorks for Chef Automate</a> server. How do we go about bootstrapping these nodes to the Chef Automate server?</p> 
-<p>I’ll show you how you can bootstrap nodes in other AWS accounts to a single/centralized OpsWorks for Chef Automate server. To be precise, I’ll bootstrap an <a href="https://aws.amazon.com/amazon-linux-ami/">Amazon Linux</a> node in AWS account B to an OpsWorks for Chef Automate server in Account A. To bootstrap the instance I’ll use the user data provided in the Chef Automate starter kit we have downloaded during the creation of the server. This user data script uses the built-in AWS API calls to bootstrap your node.</p> 
-<p><span id="more-1630"></span></p> 
-<h3>A few notes before we start</h3> 
-<p>In this tutorial I assume that you don’t have <a href="https://aws.amazon.com/documentation/iam/">IAM</a> roles created for your Chef nodes, so we are creating everything from scratch. If, in fact, you do have roles configured, then just focus on the policy part of this tutorial. Also, we assume that you have the AWS CLI set up on your workstation with adequate privileges. Additionally, make sure all the ARNs mentioned here have the correct account IDs.</p> 
-<h3>Step 1: Set up IAM permissions on account A, our Chef Automate account</h3> 
-<p>First, we’ll create a role in account A that can be assumed by a node in account B. This role gives the node the necessary permissions to bootstrap itself with the Chef Automate server.</p> 
-<p>A) Create a policy that allows us to associate the nodes with our Chef Automate server. Create the policy using the following document:<code> owca_allow_associate.json</code></p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Action&quot;: [
-&quot;opsworks-cm:AssociateNode&quot;,
-&quot;opsworks-cm:DescribeNodeAssociationStatus&quot;
-],
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Resource&quot;: [
-&quot;*&quot;
-]
-}
-]
-}</code> 
-<p>B)&nbsp;Create the policy with that document, using the AWS CLI:</p> 
-<code class="lang-bash">aws iam create-policy 
---policy-name OWCA-AllowAssociate 
---policy-document file://owca_allow_associate.json</code> 
-<p>C)&nbsp;Create a role that can be assumed by the other account (Account B – where the nodes are). Create that role using the following document: <code>owca_trust_policy.json</code></p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;AWS&quot;: &quot;arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:root&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}]
-}</code> 
-<p>D) Now, let’s use the AWS CLI to create the role:</p> 
-<code class="lang-bash">aws iam create-role 
---role-name CrossAccount-OWCA 
---assume-role-policy-document file://./owca_trust_policy.json </code> 
-<p>E) And finally, attach the policy we created in step B to the role we created in step D:</p> 
-<code class="lang-bash">aws iam attach-role-policy 
---role-name CrossAccountPowerUser 
---policy-arn  arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:policy/OWCA-AllowAssociate </code> 
-<h3>Step 2: Set up IAM permissions on account B, our nodes account</h3> 
-<p>In this step we create an instance role that will be attached to your node on launch. This role allows the instance to assume a role from account A (the Chef Automate account) so it can associate itself to the Chef Automate server.</p> 
-<p>A) To create a role, we first need to create a document: <code>role_owca_associate.json</code></p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {
-&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;
-},
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;
-}
-]
-}</code> 
-<p>B) Create the role with the document, by running AWS CLI:</p> 
-<code class="lang-bash">aws iam create-role
---role-name AssociateCrossAccount-owca 
---assume-role-policy-document file://role_owca_associate.json</code> 
-<p>C) Create a policy document that allows our instance to assume a role: <code>node_assume_role.json</code></p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: {
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: &quot;sts:AssumeRole&quot;,
-&quot;Resource&quot;: &quot;arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA &quot;
-}
-}</code> 
-<p>D) Create the policy:</p> 
-<code class="lang-bash">aws iam create-policy 
---policy-name ChefAssociateAccess 
---policy-document file://./node_assume_role.json</code> 
-<p>E) Finally, attach the policy to the role we created earlier:</p> 
-<code class="lang-bash">aws iam attach-role-policy 
---role-name CrossAccountPowerUser 
---policy-arn  arn:aws:iam::&lt;NODE-ACCOUNT-ID&gt;:policy/AssociateCrossAccount-owca</code> 
-<h3>Step 3: Modifying the user data</h3> 
-<p>In this step, we take the generated user data (<code>userdata.sh</code>) from the downloaded OpsWorks for Chef Automate starter_kit.zip and modify it with a few more functions that allow us to bootstrap your nodes across accounts.</p> 
-<p>The modifications we are adding here are quite simple. We are just using <code>aws sts assume-role</code> to assume the role that we have created in account A (the Chef server account), and use the temporary credentials it generates to run the <code>associate-node</code> commands, which are required for bootstrapping the node to the Chef Automate server.</p> 
-<p>Additionally, we are installing the <a href="https://github.com/stedolan/jq">jq utility for JSON parsing</a> – but this is removed during the cleanup.</p> 
-<p>A) Open up the <code>userdata.sh</code> file in a text editor and add the following lines on line 21 (just after the <code>set -e -o pipefail</code> line):</p> 
-<code class="lang-bash">set_cli_role() {
-yum install -y jq
-ASSUMED_ROLE=$(aws sts assume-role --role-arn arn:aws:iam::&lt;CHEF-ACCOUNT-ID&gt;:role/CrossAccount-OWCA --role-session-name owca)
-export AWS_ACCESS_KEY_ID=$(echo $ASSUMED_ROLE | jq .Credentials.AccessKeyId | xargs)
-export AWS_SECRET_ACCESS_KEY=$(echo $ASSUMED_ROLE | jq .Credentials.SecretAccessKey | xargs)
-export AWS_SESSION_TOKEN=$(echo $ASSUMED_ROLE | jq .Credentials.SessionToken | xargs)
-}
-cleanup_cli_role(){
-yum remove -y jq
-unset AWS_SESSION_TOKEN
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-}</code> 
-<p>The first function we create here (<code>set_cli_role</code>) is used for assuming the role from account A, and exporting the temporary credentials to environment variables that will be used by our API calls. The second function is just for cleanup – removing of the <code>jq</code> JSON parser and un-setting the environment variables we set in the function before.</p> 
-<p>B) Now on the line 87 insert the <code>set_cli_role</code> function, and on line 93 add the <code>cleanup_cli_role</code>. Your function execution section should go from this:</p> 
-<code class="lang-bash">install_aws_cli
-node_association_status_token=&quot;$(associate_node)&quot;
-install_chef_client
-write_chef_config
-install_trusted_certs
-wait_node_associated &quot;${node_association_status_token}&quot;</code> 
-<p>C) To this:</p> 
-<code class="lang-bash">install_aws_cli
-set_cli_role
-node_association_status_token=&quot;$(associate_node)&quot;
-install_chef_client
-write_chef_config
-install_trusted_certs
-wait_node_associated &quot;${node_association_status_token}&quot;
-cleanup_cli_role</code> 
-<p>Here we simply change the execution part of the user data shell script to include our two new functions.</p> 
-<p>D) Save the <code>userdata.sh</code> somewhere safe.</p> 
-<h3>Step 4: Launch the nodes with the user data script</h3> 
-<p>The only thing left now is to run your nodes with the newly edited user data script. We can achieve this either by adding the user data during a manual launch of the EC2 instance, or by setting this on an<a href="https://aws.amazon.com/autoscaling/"> Auto Scaling</a> group launch configuration.</p> 
-<h3>Conclusion</h3> 
-<p>In this blog post we’ve enabled your nodes from different AWS accounts to bootstrap themselves to a centralized OpsWorks for Chef Automate server that is present in a separate account. We’ve achieved this by creating the required IAM roles and policies, and also by changing the user data that ships with the OpsWorks for Chef Automate starter kit. We’ve done this only for two accounts, but you can modify this to work on any number of accounts.</p> 
-<p><strong>About the Author</strong></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/10/24/darko-cropped.jpeg" /><br /> Darko Meszaros is a Cloud Support Engineer who supports customers that use various AWS automation tools, such as AWS OpsWorks, AWS CodeDeploy, and AWS CloudFormation. He is a subject matter expert for OpsWorks and CodeDeploy. Outside of work, he loves collecting video games and old computers.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
