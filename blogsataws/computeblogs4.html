@@ -190,6 +190,463 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/1_HRCaptureProcess.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Capturing Custom, High-Resolution Metrics from Containers Using AWS Step Functions and AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
+<time property="datePublished" datetime="2017-11-16T07:25:18+00:00">16 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/management-tools/amazon-cloudwatch/" title="View all posts in Amazon CloudWatch*"><span property="articleSection">Amazon CloudWatch*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/capturing-custom-high-resolution-metrics-from-containers-using-aws-step-functions-and-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3251" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3251&amp;disqus_title=Capturing+Custom%2C+High-Resolution+Metrics+from+Containers+Using+AWS+Step+Functions+and+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/capturing-custom-high-resolution-metrics-from-containers-using-aws-step-functions-and-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3251');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>Contributed by Trevor Sullivan, AWS Solutions Architect</em></p> 
+<p>When&nbsp;you&nbsp;deploy containers&nbsp;with <a href="https://aws.amazon.com/ecs">Amazon ECS</a>, are you gathering all of the key metrics so that you can correctly monitor the overall health of your ECS cluster?</p> 
+<p>By default, ECS writes metrics to <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch</a> in 5-minute increments. For complex or large services, this may not be sufficient to make scaling decisions quickly. You may want to respond immediately to changes in workload or to identify application performance problems. Last July, CloudWatch announced <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-cloudwatch-introduces-high-resolution-custom-metrics-and-alarms/">support for high-resolution metrics</a>, up to a per-second basis.</p> 
+<p>These high-resolution metrics can be used to give you a clearer picture of the load and performance for your applications, containers, clusters, and hosts. In this post, I discuss how you can use <a href="https://aws.amazon.com/step-functions">AWS Step Functions</a>, along with <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, to cost effectively record high-resolution metrics into CloudWatch. You implement this solution using a serverless architecture, which keeps your costs low and makes it easier to troubleshoot the solution.</p> 
+<p>To show how this works, you retrieve some useful metric data from an ECS cluster running in the same AWS account and region (Oregon, us-west-2) as the Step Functions state machine and Lambda function. However, you can use this architecture to retrieve any custom application metrics from any resource in any AWS account and region.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/1_HRCaptureProcess.png" /></p> 
+<b>Why Step Functions?</b> 
+<p>Step Functions enables you to orchestrate multi-step tasks in the AWS Cloud that run for any period of time, up to a year. Effectively, you’re building a blueprint for an end-to-end process. After it’s built, you can execute the process as many times as you want.</p> 
+<p>For this architecture, you gather metrics from an ECS cluster, every five seconds, and then write the metric data to CloudWatch. After your ECS cluster metrics are stored in CloudWatch, you can create CloudWatch alarms to notify you. An alarm can also trigger an automated remediation activity such as scaling ECS services, when a metric exceeds a threshold defined by you.</p> 
+<p>When you build a Step Functions state machine, you define the different states inside it as JSON objects. The bulk of the work in Step Functions is handled by the common task state, which invokes Lambda functions or Step Functions activities. There is also a built-in library of other useful states that allow you to control the execution flow of your program.</p> 
+<p>One of the most useful state types in Step Functions is the parallel state. Each parallel state in your state machine can have one or more branches, each of which is executed in parallel. Another useful state type is the wait state, which waits for a period of time before moving to the next state.</p> 
+<p>In this walkthrough, you combine these three states (parallel, wait, and task) to create a state machine that triggers a Lambda function, which then gathers metrics from your ECS cluster.</p> 
+<h3>Step Functions pricing</h3> 
+<p>This state machine is executed every minute, resulting in 60 executions per hour, and 1,440 executions per day. Step Functions is billed per state transition,&nbsp;including&nbsp;the Start and End state transitions, and giving you approximately&nbsp;37,440 state transitions per day. To reach this number, I’m using this estimated math:</p> 
+<blockquote> 
+<p>26 state transitions per-execution x 60 minutes x 24 hours</p> 
+</blockquote> 
+<p>Based on current pricing, at $0.000025 per state transition, the daily cost of this metric gathering state machine would be <strong>$0.936</strong>.</p> 
+<p>Step Functions offers an&nbsp;indefinite&nbsp;4,000 free state transitions every month. This benefit is available to all customers, not just customers who are still under the 12-month AWS Free Tier. For more information and cost example scenarios, see&nbsp;<a href="https://aws.amazon.com/step-functions/pricing/">Step Functions pricing</a>.</p> 
+<b>Why Lambda?</b> 
+<p>The goal is to capture metrics from an ECS cluster, and write the metric data to CloudWatch. This is a straightforward, short-running process that makes Lambda the perfect place to run your code. Lambda is one of the key services that makes up “Serverless” application architectures. It enables you to consume compute capacity only when your code is actually executing.</p> 
+<p>The process of gathering metric data from ECS and writing it to CloudWatch takes a short period of time. In fact, my average Lambda function execution time, while developing this post, is only about 250 milliseconds on average. For every five-second interval that occurs, I’m only using 1/20th of the compute time that I’d otherwise be paying for.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/2_captureMetrics.png" /></p> 
+<h3>Lambda pricing</h3> 
+<p>For billing purposes, Lambda execution time is rounded up to the nearest 100-ms interval. In general, based on the metrics that I observed during development, a 250-ms runtime would be billed at 300 ms. Here, I calculate the cost of this Lambda function executing on a daily basis.</p> 
+<p>Assuming 31 days in each month, there would be 535,680 five-second intervals (31 days x 24 hours x 60 minutes x 12 five-second intervals = 535,680). The Lambda function is invoked every five-second interval, by the Step Functions state machine, and runs for a 300-ms period. At current Lambda pricing, for a 128-MB function, you would be paying approximately the following:</p> 
+<blockquote> 
+<p><strong>Total compute</strong></p> 
+<p>Total executions = 535,680<br /> Total compute = total executions x (3 x $0.000000208 per 100 ms) = <strong>$0.334 per day</strong></p> 
+<p><strong>Total requests</strong></p> 
+<p>Total requests = (535,680 / 1000000) * $0.20 per million requests = <strong>$0.11 per day</strong></p> 
+<p><strong>Total Lambda Cost</strong></p> 
+<p>$0.11 requests + $0.334 compute time = <strong>$0.444 per day</strong></p> 
+</blockquote> 
+<p>Similar to Step Functions, Lambda offers an indefinite free tier. For more information, see&nbsp;<a href="https://aws.amazon.com/lambda/pricing/">Lambda Pricing</a>.</p> 
+<b>Walkthrough</b> 
+<p>In the following sections, I step through the process of configuring the solution just discussed. If you follow along, at a high level, you will:</p> 
+<li>Configure an IAM role and policy</li> 
+<li>Create a Step Functions state machine to control metric gathering execution</li> 
+<li>Create a metric-gathering Lambda function</li> 
+<li>Configure a CloudWatch Events rule to trigger the state machine</li> 
+<li>Validate the solution</li> 
+<h3>Prerequisites</h3> 
+<p>You should already have an AWS account with a running ECS cluster. If you don’t have one running, you can easily <a href="https://aws.amazon.com/getting-started/tutorials/deploy-docker-containers/">deploy a Docker container on an ECS cluster</a>&nbsp;using the AWS Management Console. In the example produced for this post, I use an ECS cluster running Windows Server (currently in beta), but either a Linux or Windows Server cluster works.</p> 
+<h3>Create an IAM role and policy</h3> 
+<p>First, create an IAM role and policy that enables Step Functions, Lambda, and CloudWatch to communicate with each other.</p> 
+<li>The CloudWatch Events rule needs permissions to trigger the Step Functions state machine.</li> 
+<li>The Step Functions state machine needs permissions to trigger the Lambda function.</li> 
+<li>The Lambda function needs permissions to query ECS and then write to CloudWatch Logs and metrics.</li> 
+<p>When you create the state machine, Lambda function, and CloudWatch Events rule, you assign this role to each of those resources. Upon execution, each of these resources assumes the specified role and executes using the role’s permissions.</p> 
+<ol> 
+<li>Open the IAM console.</li> 
+<li>Choose <strong>Roles</strong>, create <strong>New Role</strong>.</li> 
+<li>For Role Name, enter <code class="lang-bash">WriteMetricFromStepFunction</code>.</li> 
+<li>Choose <strong>Save</strong>.</li> 
+</ol> 
+<p>Create the IAM role trust relationship<br /> The trust relationship (also known as the assume role policy document) for your IAM role looks like the following JSON document. As you can see from the document, your IAM role needs to trust the Lambda, CloudWatch Events, and Step Functions services. By configuring your role to trust these services, they can assume this role and inherit the role permissions.</p> 
+<ol> 
+<li>Open the IAM console.</li> 
+<li>Choose <strong>Roles</strong> and select the IAM role previously created.</li> 
+<li>Choose&nbsp;<strong>Trust Relationships</strong>,&nbsp;<strong>Edit Trust Relationships</strong>.</li> 
+<li>Enter the following trust policy text and choose <strong>Save</strong>.</li> 
+</ol> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;lambda.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;events.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;states.us-west-2.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+<h3>Create an IAM policy</h3> 
+<p>After you’ve finished configuring your role’s trust relationship, grant the role access to the other AWS resources that make up the solution.</p> 
+<p>The IAM policy is what gives your IAM role permissions to access various resources. You must whitelist explicitly the specific resources to which your role has access, because the default IAM behavior is to deny access to any AWS resources.</p> 
+<p>I’ve tried to keep this policy document as generic as possible, without allowing permissions to be too open. If the name of your ECS cluster is different than the one in the example policy below, make sure that you update the policy document before attaching it to your IAM role. You can attach this policy as an inline policy, instead of creating the policy separately first. However, either approach is valid.</p> 
+<ol> 
+<li>Open the IAM console.</li> 
+<li>Select the IAM role, and choose <strong>Permissions</strong>.</li> 
+<li>Choose&nbsp;<strong>Add in-line policy</strong>.</li> 
+<li>Choose&nbsp;<strong>Custom Policy</strong>&nbsp;and then enter the following policy. The inline policy name does not matter.</li> 
+</ol> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [ &quot;logs:*&quot; ],
+&quot;Resource&quot;: &quot;*&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [ &quot;cloudwatch:PutMetricData&quot; ],
+&quot;Resource&quot;: &quot;*&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [ &quot;states:StartExecution&quot; ],
+&quot;Resource&quot;: [
+&quot;arn:aws:states:*:*:stateMachine:WriteMetricFromStepFunction&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [ &quot;lambda:InvokeFunction&quot; ],
+&quot;Resource&quot;: &quot;arn:aws:lambda:*:*:function:WriteMetricFromStepFunction&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [ &quot;ecs:Describe*&quot; ],
+&quot;Resource&quot;: &quot;arn:aws:ecs:*:*:cluster/ECSEsgaroth&quot;
+}
+]
+}</code> 
+<h3>Create a Step Functions state machine</h3> 
+<p>In this section, you create a Step Functions state machine that invokes the metric-gathering Lambda function every five (5) seconds, for a one-minute period. If you divide a minute (60) seconds into equal parts of five-second intervals, you get 12. Based on this math, you create 12 branches, in a single parallel state, in the state machine. Each branch triggers the metric-gathering Lambda function at a different five-second marker, throughout the one-minute period. After all of the parallel branches finish executing, the Step Functions execution completes and another begins.</p> 
+<p>Follow these steps to create your Step Functions state machine:</p> 
+<ol> 
+<li>Open the Step Functions console.</li> 
+<li>Choose&nbsp;<strong>Dashboard</strong>,&nbsp;<strong>Create State Machine</strong>.</li> 
+<li>For&nbsp;State Machine Name,&nbsp;enter <code class="lang-bash">WriteMetricFromStepFunction</code>.</li> 
+<li>Enter the state machine code below into the editor. Make sure that you insert your own AWS account ID for every instance of “676655494xxx”</li> 
+<li>Choose&nbsp;<strong>Create State Machine</strong>.</li> 
+<li>Select the&nbsp;<strong>WriteMetricFromStepFunction</strong>&nbsp;IAM role that you previously created.</li> 
+</ol> 
+<code class="lang-json">{
+&quot;Comment&quot;: &quot;Writes ECS metrics to CloudWatch every five seconds, for a one-minute period.&quot;,
+&quot;StartAt&quot;: &quot;ParallelMetric&quot;,
+&quot;States&quot;: {
+&quot;ParallelMetric&quot;: {
+&quot;Type&quot;: &quot;Parallel&quot;,
+&quot;Branches&quot;: [
+{
+&quot;StartAt&quot;: &quot;WriteMetricLambda&quot;,
+&quot;States&quot;: {
+&quot;WriteMetricLambda&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;WaitFive&quot;,
+&quot;States&quot;: {
+&quot;WaitFive&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 5,
+&quot;Next&quot;: &quot;WriteMetricLambdaFive&quot;
+},
+&quot;WriteMetricLambdaFive&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;WaitTen&quot;,
+&quot;States&quot;: {
+&quot;WaitTen&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 10,
+&quot;Next&quot;: &quot;WriteMetricLambda10&quot;
+},
+&quot;WriteMetricLambda10&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;WaitFifteen&quot;,
+&quot;States&quot;: {
+&quot;WaitFifteen&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 15,
+&quot;Next&quot;: &quot;WriteMetricLambda15&quot;
+},
+&quot;WriteMetricLambda15&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait20&quot;,
+&quot;States&quot;: {
+&quot;Wait20&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 20,
+&quot;Next&quot;: &quot;WriteMetricLambda20&quot;
+},
+&quot;WriteMetricLambda20&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait25&quot;,
+&quot;States&quot;: {
+&quot;Wait25&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 25,
+&quot;Next&quot;: &quot;WriteMetricLambda25&quot;
+},
+&quot;WriteMetricLambda25&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait30&quot;,
+&quot;States&quot;: {
+&quot;Wait30&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 30,
+&quot;Next&quot;: &quot;WriteMetricLambda30&quot;
+},
+&quot;WriteMetricLambda30&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait35&quot;,
+&quot;States&quot;: {
+&quot;Wait35&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 35,
+&quot;Next&quot;: &quot;WriteMetricLambda35&quot;
+},
+&quot;WriteMetricLambda35&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait40&quot;,
+&quot;States&quot;: {
+&quot;Wait40&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 40,
+&quot;Next&quot;: &quot;WriteMetricLambda40&quot;
+},
+&quot;WriteMetricLambda40&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait45&quot;,
+&quot;States&quot;: {
+&quot;Wait45&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 45,
+&quot;Next&quot;: &quot;WriteMetricLambda45&quot;
+},
+&quot;WriteMetricLambda45&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait50&quot;,
+&quot;States&quot;: {
+&quot;Wait50&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 50,
+&quot;Next&quot;: &quot;WriteMetricLambda50&quot;
+},
+&quot;WriteMetricLambda50&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+},
+{
+&quot;StartAt&quot;: &quot;Wait55&quot;,
+&quot;States&quot;: {
+&quot;Wait55&quot;: {
+&quot;Type&quot;: &quot;Wait&quot;,
+&quot;Seconds&quot;: 55,
+&quot;Next&quot;: &quot;WriteMetricLambda55&quot;
+},
+&quot;WriteMetricLambda55&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:676655494xxx:function:WriteMetricFromStepFunction&quot;,
+&quot;End&quot;: true
+} 
+}
+}
+],
+&quot;End&quot;: true
+}
+}
+}</code> 
+<p>Now you’ve got a shiny new Step Functions state machine! However, you might ask yourself, “After the state machine has been created, how does it get executed?” Before I answer that question, create the Lambda function that writes the custom metric, and then you get the end-to-end process moving.</p> 
+<h3>Create a Lambda function</h3> 
+<p>The meaty part of the solution is a Lambda function, written to consume the Python 3.6 runtime, that retrieves metric values from ECS, and then writes them to CloudWatch. This Lambda function is what the Step Functions state machine is triggering every five seconds, via the Task states. Key points to remember:</p> 
+<p>The Lambda function needs permission to:</p> 
+<li>Write CloudWatch metrics (PutMetricData API).</li> 
+<li>Retrieve metrics from ECS clusters (DescribeCluster API).</li> 
+<li>Write StdOut to CloudWatch Logs.</li> 
+<p>Boto3, the AWS SDK for Python, is&nbsp;included in the Lambda execution environment&nbsp;for Python 2.x and 3.x.</p> 
+<p>Because&nbsp;<a href="http://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html">Lambda includes the AWS SDK</a>, you don’t have to worry about packaging it up and uploading it to Lambda. You can focus on writing code and automatically take a dependency on boto3.</p> 
+<p>As for permissions, you’ve already created the IAM role and attached a policy to it that enables your Lambda function to access the necessary API actions. When you create your Lambda function, make sure that you select the correct IAM role, to ensure it is invoked with the correct permissions.</p> 
+<p>The following Lambda function code is generic. So how does the Lambda function know which ECS cluster to gather metrics for? Your Step Functions state machine automatically passes in its state to the Lambda function. When you create your CloudWatch Events rule, you specify a simple JSON object that passes the desired ECS cluster name into your Step Functions state machine, which then passes it to the Lambda function.</p> 
+<p>Use the following property values as you create your Lambda function:</p> 
+<blockquote> 
+<p><strong>Function Name</strong>: <code class="lang-bash">WriteMetricFromStepFunction</code><br /> <strong>Description</strong>: This Lambda function retrieves metric values from an ECS cluster and writes them to Amazon CloudWatch.<br /> <strong>Runtime</strong>: Python3.6<br /> <strong>Memory</strong>: 128 MB<br /> <strong>IAM Role</strong>: WriteMetricFromStepFunction</p> 
+</blockquote> 
+<code class="lang-python">import boto3
+def handler(event, context):
+cw = boto3.client('cloudwatch')
+ecs = boto3.client('ecs')
+print('Got boto3 client objects')
+Dimension = {
+'Name': 'ClusterName',
+'Value': event['ECSClusterName']
+}
+cluster = get_ecs_cluster(ecs, Dimension['Value'])
+cw_args = {
+'Namespace': 'ECS',
+'MetricData': [
+{
+'MetricName': 'RunningTask',
+'Dimensions': [ Dimension ],
+'Value': cluster['runningTasksCount'],
+'Unit': 'Count',
+'StorageResolution': 1
+},
+{
+'MetricName': 'PendingTask',
+'Dimensions': [ Dimension ],
+'Value': cluster['pendingTasksCount'],
+'Unit': 'Count',
+'StorageResolution': 1
+},
+{
+'MetricName': 'ActiveServices',
+'Dimensions': [ Dimension ],
+'Value': cluster['activeServicesCount'],
+'Unit': 'Count',
+'StorageResolution': 1
+},
+{
+'MetricName': 'RegisteredContainerInstances',
+'Dimensions': [ Dimension ],
+'Value': cluster['registeredContainerInstancesCount'],
+'Unit': 'Count',
+'StorageResolution': 1
+}
+]
+}
+cw.put_metric_data(**cw_args)
+print('Finished writing metric data')
+def get_ecs_cluster(client, cluster_name):
+cluster = client.describe_clusters(clusters = [ cluster_name ])
+print('Retrieved cluster details from ECS')
+return cluster['clusters'][0]</code> 
+<h3>Create the CloudWatch Events rule</h3> 
+<p>Now you’ve created an IAM role and policy, Step Functions state machine, and Lambda function. How do these components actually start communicating with each other? The final step in this process is to set up a CloudWatch Events rule that triggers your metric-gathering Step Functions state machine every minute. You have two choices for your&nbsp;CloudWatch Events rule expression: rate or cron. In this example, use the cron expression.</p> 
+<p>A couple key learning points from creating the CloudWatch Events rule:</p> 
+<li>You can specify one or more targets, of different types (for example, Lambda function, Step Functions state machine, SNS topic, and so on).</li> 
+<li>You’re required to specify an IAM role with permissions to trigger your target.<br /> <strong>NOTE</strong>: This applies only to certain types of targets, including Step Functions state machines.</li> 
+<li>Each target that supports IAM roles can be triggered using a different IAM role, in the same CloudWatch Events rule.</li> 
+<li><em>Optional:</em>&nbsp;You can provide custom JSON that is passed to your target Step Functions state machine as input.</li> 
+<p>Follow these steps to create the CloudWatch Events rule:</p> 
+<ol> 
+<li>Open the CloudWatch console.</li> 
+<li>Choose&nbsp;<strong>Events</strong>, <strong>Rules</strong>,&nbsp;<strong>Create Rule</strong>.</li> 
+<li>Select Schedule, Cron Expression,&nbsp;and then enter the following rule:<br /> <code class="lang-bash">0/1 * * * ?&nbsp;*</code></li> 
+<li>Choose&nbsp;<strong>Add Target</strong>, <strong>Step Functions State Machine</strong>,&nbsp;<strong>WriteMetricFromStepFunction</strong>.</li> 
+<li>For&nbsp;<strong>Configure Input</strong>,&nbsp;select <strong>Constant (JSON Text)</strong>.</li> 
+<li>Enter the following JSON input, which is passed to Step Functions, while changing the cluster name accordingly:<br /> <code class="lang-json">{ &quot;ECSClusterName&quot;: &quot;ECSEsgaroth&quot; }</code></li> 
+<li>Choose&nbsp;Use Existing Role, WriteMetricFromStepFunction&nbsp;(the IAM role that you previously created).</li> 
+</ol> 
+<p>After you’ve completed with these steps, your screen should look similar to this:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/3_metricTargets-822x1024.png" /></p> 
+<h3>Validate the solution</h3> 
+<p>Now that you have finished implementing the solution to gather high-resolution metrics from ECS, validate that it’s working properly.</p> 
+<ol> 
+<li>Open the CloudWatch console.</li> 
+<li>Choose&nbsp;<strong>Metrics</strong>.</li> 
+<li>Choose <strong>custom</strong>&nbsp;and select the <strong>ECS</strong> namespace.</li> 
+<li>Choose the&nbsp;<strong>ClusterName</strong>&nbsp;metric dimension.</li> 
+</ol> 
+<p>You should see your metrics listed below.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/16/4_metricList.png" /></p> 
+<h3>Troubleshoot configuration issues</h3> 
+<p>If you aren’t receiving the expected ECS cluster metrics in CloudWatch, check for the following common configuration issues. Review the earlier procedures to make sure that the resources were properly configured.</p> 
+<li><strong>The IAM role’s trust relationship is incorrectly configured</strong>.<br /> Make sure that the IAM role trusts Lambda, CloudWatch Events, and Step Functions in the correct region.</li> 
+<li><strong>The IAM role does not have the correct policies attached to it</strong>.<br /> Make sure that you have copied the IAM policy correctly as an inline policy on the IAM role.</li> 
+<li><strong>The CloudWatch Events rule is not triggering new Step Functions executions.</strong><br /> Make sure that the target configuration on the rule has the correct Step Functions state machine and IAM role selected.</li> 
+<li><strong>The Step Functions state machine is being executed, but failing part way through.</strong><br /> Examine the detailed error message on the failed state within the failed Step Functions execution. It’s possible that the</li> 
+<li><strong>IAM role does not have permissions to trigger the target Lambda function, that the target Lambda function may not exist, or that the Lambda function failed to complete successfully due to invalid permissions.</strong><br /> Although the above list covers several different potential configuration issues, it is not comprehensive. Make sure that you understand how each service is connected to each other, how permissions are granted through IAM policies, and how IAM trust relationships work.</li> 
+<b>Conclusion</b> 
+<p>In this post, you implemented a Serverless solution to gather and record high-resolution application metrics from containers running on Amazon ECS into CloudWatch. The solution consists of a Step Functions state machine, Lambda function, CloudWatch Events rule, and an IAM role and policy. The data that you gather from this solution helps you rapidly identify issues with an ECS cluster.</p> 
+<p>To gather high-resolution metrics from&nbsp;any&nbsp;service, modify your Lambda function to gather the correct metrics from your target. If you prefer not to use Python, you can implement a Lambda function using one of the other supported runtimes, including Node.js, Java, or .NET Core. However, this post should give you the fundamental basics about capturing high-resolution metrics in CloudWatch.</p> 
+<p>If you found this post useful,&nbsp;or have questions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3251');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/ecs_tasknetworking.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Introducing Cloud Native Networking for Amazon ECS Containers</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1374,53 +1831,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3025');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3025');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3-629x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Improved Testing on the AWS Lambda Console</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Orr Weinstein</span></span> | on 
-<time property="datePublished" datetime="2017-10-02T11:10:46+00:00">02 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/improved-testing-on-the-aws-lambda-console/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2928" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2928&amp;disqus_title=Improved+Testing+on+the+AWS+Lambda+Console&amp;disqus_url=https://aws.amazon.com/blogs/compute/improved-testing-on-the-aws-lambda-console/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2928');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>(This post has been written by Chris Tate, SDE on the Lambda Console team)</p> 
-<p>Today, <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> released three console enhancements:</p> 
-<li>A quicker creation flow that lets you quickly create a function with the minimum working configuration, so that you can start iterating faster.</li> 
-<li>A streamlined configuration page with Lambda function settings logically grouped into cards, which makes locating and making changes much easier.</li> 
-<li>Persisting multiple events to help test your function.</li> 
-<p>This post focuses on persisting test events, and I discuss how I’ve been using this new feature. Now when you are testing on the Lambda console, you can save up to 10 test events per function, and each event can be up to 6 megabytes in size, the maximum payload size for synchronous invocations. The events are saved for the logged-in user, so that two different users in the same account have their own set of events.</p> 
-<b>Testing Lambda functions</b> 
-<p>As a Lambda console developer, when I work on side projects at home, I sometimes use our development server. I’ve been using this new feature to test a Lambda function in one of my projects. The function is probably more complicated than it should be, because it can be triggered by an Alexa skill, Amazon CloudWatch schedule, or an Amazon API Gateway API. If you have had a similarly complicated function, you may have run into the same problem I did: &nbsp;How do you test?</p> 
-<p>For quick testing, I used the console but the console used to save only one test event at a time. To work around this, my solution was a text file with three different JSON events, one for each trigger. I would copy whatever event I needed into the Lambda console, tweak it, and choose Test. This would become particularly annoying when I wanted to quickly test all three.</p> 
-<p>I also switch between my laptop and desktop depending on my mood. For that reason, I needed to make sure this text file with the events were shared in some way, as the console only locally saved one test event to the current browser. But now you don’t have to worry about any of that.</p> 
-<b>Walkthrough</b> 
-<p>In the Lambda console, go to the detail page of any function, and select <strong>Configure test events</strong> from the test events dropdown (the dropdown beside the orange test button). In the dialog box, you can manage 10 test events for your function. First, paste your Alexa trigger event in the dialog box and type an event name, such as AlexaTrigger.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture2-2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture2-2.png" /></a></p> 
-<p>Choose <strong>Create</strong>. After it saves, you see AlexaTrigger in the Test list.</p> 
-<p>When you open the dialog box again by choosing <strong>Configure test events</strong>, you are in edit mode.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/27/Picture1-3.png" /></a></p> 
-<p>To add another event, choose <strong>Create new test event</strong>. Now you can choose from a list of templates or any of your previously saved test events. This is very useful for a couple of reasons:</p> 
-<li>First, when you want to slightly tweak one of your existing events and still keep the earlier version intact.</li> 
-<li>Second, when you are not sure how to structure a particular event from an event source. You can use one of the sample event templates and tweak them to your needs. Skip it when you know what your event should be.</li> 
-<p>Paste in your CloudWatch schedule event, give it a name, and choose <strong>Create</strong>. Repeat for API Gateway.</p> 
-<p>Now that you have three events saved, you can quickly switch between them and repeatedly test. Furthermore, if you’re on your desktop but you created the test events on your laptop, there’s no problem. You can still see all your events and you can switch back and forth seamlessly between different computers.</p> 
-<b>Conclusion</b> 
-<p>This feature should allow you to more easily test your Lambda functions through the console. If you have more suggestions, add a comment to this post or submit feedback through the console. We actually read the feedback, believe it!</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2928');
 });
 </script> 
 </article> 
