@@ -190,13 +190,122 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6-1169x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Task Networking in AWS Fargate</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Nathan Peck</span></span> | on 
+<time property="datePublished" datetime="2018-01-26T10:31:06+00:00">26 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/task-networking-in-aws-fargate/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3748" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3748&amp;disqus_title=Task+Networking+in+AWS+Fargate&amp;disqus_url=https://aws.amazon.com/blogs/compute/task-networking-in-aws-fargate/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3748');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/fargate/">AWS Fargate</a> is a technology that allows you to focus on running your application without needing to provision, monitor, or manage the underlying compute infrastructure. You package your application into a <a href="https://aws.amazon.com/what-are-containers/">Docker container</a> that you can then launch using your container orchestration tool of choice.</p> 
+<p>Fargate allows you to use containers without being responsible for <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> instances, similar to how EC2 allows you to run VMs without managing physical infrastructure. Currently, Fargate provides support for Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Support for Amazon Elastic Container Service for Kubernetes (<a href="https://aws.amazon.com/eks">Amazon EKS</a>) will be made available in the near future.</p> 
+<p>Despite offloading the responsibility for the underlying instances, Fargate still gives you deep control over configuration of network placement and policies. This includes the ability to use many networking fundamentals such as Amazon VPC and security groups.</p> 
+<p>This post covers how to take advantage of the different ways of networking your containers in Fargate when using ECS as your orchestration platform, with a focus on how to do networking securely.</p> 
+<p>The first step to running any application in Fargate is defining an ECS task for Fargate to launch. A task is a logical group of one or more Docker containers that are deployed with specified settings. When running a task in Fargate, there are two different forms of networking to consider:</p> 
+<li>Container (local) networking</li> 
+<li>External networking</li> 
+<b>Container Networking</b> 
+<p>Container networking is often used for tightly coupled application components. Perhaps your application has a web tier that is responsible for serving static content as well as generating some dynamic HTML pages. To generate these dynamic pages, it has to fetch information from another application component that has an HTTP API.</p> 
+<p>One potential architecture for such an application is to deploy the web tier and the API tier together as a pair and use local networking so the web tier can fetch information from the API tier.</p> 
+<p>If you are running these two components as two processes on a single EC2 instance, the web tier application process could communicate with the API process on the same machine by using the local loopback interface. The local loopback interface has a special IP address of 127.0.0.1 and hostname of localhost.</p> 
+<p>By making a networking request to this local interface, it bypasses the network interface hardware and instead the operating system just routes network calls from one process to the other directly. This gives the web tier a fast and efficient way to fetch information from the API tier with almost no networking latency.</p> 
+<p>In Fargate, when you launch multiple containers as part of a single task, they can also communicate with each other over the local loopback interface. Fargate uses a special container networking mode called <a href="https://aws.amazon.com/blogs/compute/introducing-cloud-native-networking-for-ecs-containers/">awsvpc</a>, which gives all the containers in a task a shared elastic network interface to use for communication.</p> 
+<p>If you specify a port mapping for each container in the task, then the containers can communicate with each other on that port. For example the following task definition could be used to deploy the web tier and the API tier:</p> 
+<code class="lang-json">{
+&quot;family&quot;: &quot;myapp&quot;
+&quot;containerDefinitions&quot;: [
+{
+&quot;name&quot;: &quot;web&quot;,
+&quot;image&quot;: &quot;my web image url&quot;,
+&quot;portMappings&quot;: [
+{
+&quot;containerPort&quot;: 80
+}
+],
+&quot;memory&quot;: 500,
+&quot;cpu&quot;: 10,
+&quot;esssential&quot;: true
+},
+{
+&quot;name&quot;: &quot;api&quot;,
+&quot;image&quot;: &quot;my api image url&quot;,
+&quot;portMappings&quot;: [
+{
+&quot;containerPort&quot;: 8080
+}
+],
+&quot;cpu&quot;: 10,
+&quot;memory&quot;: 500,
+&quot;essential&quot;: true
+}
+]
+}</code> 
+<p>ECS, with Fargate, is able to take this definition and launch two containers, each of which is bound to a specific static port on the elastic network interface for the task.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide1-1024x592.png" /></a>Because each Fargate task has its own isolated networking stack, there is no need for dynamic ports to avoid port conflicts between different tasks as in other networking modes. The static ports make it easy for containers to communicate with each other. For example, the web container makes a request to the API container using its well-known static port:</p> 
+<code class="lang-bash">curl 127.0.0.1:8080/my-endpoint</code> 
+<p>This sends a local network request, which goes directly from one container to the other over the local loopback interface without traversing the network. This deployment strategy allows for fast and efficient communication between two tightly coupled containers. But most application architectures require more than just internal local networking.</p> 
+<b>External Networking</b> 
+<p>External networking is used for network communications that go outside the task to other servers that are not part of the task, or network communications that originate from other hosts on the internet and are directed to the task.</p> 
+<p>Configuring external networking for a task is done by modifying the settings of the VPC in which you launch your tasks. A VPC is a fundamental tool in AWS for controlling the networking capabilities of resources that you launch on your account.</p> 
+<p>When setting up a VPC, you create one or more subnets, which are logical groups that your resources can be placed into. Each subnet has an Availability Zone and its own route table, which defines rules about how network traffic operates for that subnet. There are two main types of subnets: public and private.</p> 
+<h3>Public subnets</h3> 
+<p>A public subnet is a subnet that has an associated internet gateway. Fargate tasks in that subnet are assigned both private and public IP addresses:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide2-1024x866.png" /></a><br /> A browser or other client on the internet can send network traffic to the task via the internet gateway using its public IP address. The tasks can also send network traffic to other servers on the internet because the route table can route traffic out via the internet gateway.</p> 
+<p>If tasks want to communicate directly with each other, they can use each other’s private IP address to send traffic directly from one to the other so that it stays inside the subnet without going out to the internet gateway and back in.</p> 
+<h3>Private subnets</h3> 
+<p>A private subnet does not have direct internet access. The Fargate tasks inside the subnet don’t have public IP addresses, only private IP addresses. Instead of an internet gateway, a network address translation (NAT) gateway is attached to the subnet:</p> 
+<p>&nbsp;</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide4-1024x493.png" /></a></p> 
+<p>There is no way for another server or client on the internet to reach your tasks directly, because they don’t even have an address or a direct route to reach them. This is a great way to add another layer of protection for internal tasks that handle sensitive data. Those tasks are protected and can’t receive any inbound traffic at all.</p> 
+<p>In this configuration, the tasks can still communicate to other servers on the internet via the NAT gateway. They would appear to have the IP address of the NAT gateway to the recipient of the communication. If you run a Fargate task in a private subnet, you must add this NAT gateway. Otherwise, Fargate can’t make a network request to Amazon ECR to download the container image, or communicate with Amazon CloudWatch to store container metrics.</p> 
+<b>Load balancers</b> 
+<p>If you are running a container that is hosting internet content in a private subnet, you need a way for traffic from the public to reach the container. This is generally accomplished by using a load balancer such as an Application Load Balancer or a Network Load Balancer.</p> 
+<p>ECS integrates tightly with AWS load balancers by automatically configuring a service-linked load balancer to send network traffic to containers that are part of the service. When each task starts, the IP address of its elastic network interface is added to the load balancer’s configuration. When the task is being shut down, network traffic is safely drained from the task before removal from the load balancer.</p> 
+<p>To get internet traffic to containers using a load balancer, the load balancer is placed into a public subnet. ECS configures the load balancer to forward traffic to the container tasks in the private subnet:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide5.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide5-1024x647.png" /></a></p> 
+<p>This configuration allows your tasks in Fargate to be safely isolated from the rest of the internet. They can still initiate network communication with external resources via the NAT gateway, and still receive traffic from the public via the Application Load Balancer that is in the public subnet.</p> 
+<p>Another potential use case for a load balancer is for internal communication from one service to another service within the private subnet. This is typically used for a microservice deployment, in which one service such as an internet user account service needs to communicate with an internal service such as a password service. Obviously, it is undesirable for the password service to be directly accessible on the internet, so using an internet load balancer would be a major security vulnerability. Instead, this can be accomplished by hosting an internal load balancer within the private subnet:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6-1024x552.png" /></a></p> 
+<p>With this approach, one container can distribute requests across an Auto Scaling group of other private containers via the internal load balancer, ensuring that the network traffic stays safely protected within the private subnet.</p> 
+<b>Best Practices for Fargate Networking</b> 
+<h4><strong>Determine whether you should use local task networking</strong></h4> 
+<p>Local task networking is ideal for communicating between containers that are tightly coupled and require maximum networking performance between them. However, when you deploy one or more containers as part of the same task they are always deployed together so it removes the ability to independently scale different types of workload up and down.</p> 
+<p>In the example of the application with a web tier and an API tier, it may be the case that powering the application requires only two web tier containers but 10 API tier containers. If local container networking is used between these two container types, then an extra eight unnecessary web tier containers would end up being run instead of allowing the two different services to scale independently.</p> 
+<p>A better approach would be to deploy the two containers as two different services, each with its own load balancer. This allows clients to communicate with the two web containers via the web service’s load balancer. The web service could distribute requests across the eight backend API containers via the API service’s load balancer.</p> 
+<h4><strong>Run internet tasks that require internet access in a public subnet</strong></h4> 
+<p>If you have tasks that require internet access and a lot of bandwidth for communication with other services, it is best to run them in a public subnet. Give them public IP addresses so that each task can communicate with other services directly.</p> 
+<p>If you run these tasks in a private subnet, then all their outbound traffic has to go through an NAT gateway. AWS NAT gateways support up to 10 Gbps of burst bandwidth. If your bandwidth requirements go over this, then all task networking starts to get throttled. To avoid this, you could distribute the tasks across multiple private subnets, each with their own NAT gateway. It can be easier to just place the tasks into a public subnet, if possible.</p> 
+<h4><strong>Avoid using a public subnet or public IP addresses for private, internal tasks</strong></h4> 
+<p>If you are running a service that handles private, internal information, you should not put it into a public subnet or use a public IP address. For example, imagine that you have one task, which is an API gateway for authentication and access control. You have another background worker task that handles sensitive information.</p> 
+<p>The intended access pattern is that requests from the public go to the API gateway, which then proxies request to the background task only if the request is from an authenticated user. If the background task is in a public subnet and has a public IP address, then it could be possible for an attacker to bypass the API gateway entirely. They could communicate directly to the background task using its public IP address, without being authenticated.</p> 
+<b>Conclusion</b> 
+<p>Fargate gives you a way to run containerized tasks directly without managing any EC2 instances, but you still have full control over how you want networking to work. You can set up containers to talk to each other over the local network interface for maximum speed and efficiency. For running workloads that require privacy and security, use a private subnet with public internet access locked down. Or, for simplicity with an internet workload, you can just use a public subnet and give your containers a public IP address.</p> 
+<p>To deploy one of these Fargate task networking approaches, check out some <a href="https://github.com/awslabs/aws-cloudformation-templates/tree/master/aws/services/ECS">sample CloudFormation templates</a>&nbsp;showing how to configure the VPC, subnets, and load balancers.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3748');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/24/ECS_social_loading.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Building Blocks of Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
-<span property="author" typeof="Person"><span property="name">tiffany jernigan</span></span> | on 
+<span property="author" typeof="Person"><span property="name">tiffany jernigan (@tiffanyfayj)</span></span> | on 
 <time property="datePublished" datetime="2018-01-24T13:57:33+00:00">24 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/building-blocks-of-amazon-ecs/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-3710" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3710&amp;disqus_title=Building+Blocks+of+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/building-blocks-of-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -279,7 +388,7 @@ AWS.Blog.commenting('#aws-comment-trigger-3710');
 by 
 <span property="author" typeof="Person"><span property="name">Sundar Narasiman</span></span> | on 
 <time property="datePublished" datetime="2018-01-18T12:46:31+00:00">18 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-3685" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3685&amp;disqus_title=Migrating+.NET+Classic+Applications+to+Amazon+ECS+Using+Windows+Containers&amp;disqus_url=https://aws.amazon.com/blogs/compute/migrating-net-classic-applications-to-amazon-ecs-using-windows-containers/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -776,7 +885,7 @@ by
 <span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> and 
 <span property="author" typeof="Person"><span property="name">Abby Fuller</span></span> | on 
 <time property="datePublished" datetime="2017-12-22T12:20:19+00:00">22 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codepipeline/" title="View all posts in AWS CodePipeline*"><span property="articleSection">AWS CodePipeline*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codepipeline/" title="View all posts in AWS CodePipeline*"><span property="articleSection">AWS CodePipeline*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/compute/set-up-a-continuous-delivery-pipeline-for-containers-using-aws-codepipeline-and-amazon-ecs/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-3534" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3534&amp;disqus_title=Set+Up+a+Continuous+Delivery+Pipeline+for+Containers+Using+AWS+CodePipeline+and+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/set-up-a-continuous-delivery-pipeline-for-containers-using-aws-codepipeline-and-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -1219,120 +1328,6 @@ Status code distribution:
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3483');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/ECS_windows_container-two.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Running Windows Containers on Amazon ECS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Nathan Taber</span></span> | on 
-<time property="datePublished" datetime="2017-12-06T10:33:55+00:00">06 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-registry/" title="View all posts in Amazon EC2 Container Registry*"><span property="articleSection">Amazon EC2 Container Registry*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/amazon-ecs/" title="View all posts in Amazon ECS"><span property="articleSection">Amazon ECS</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/running-windows-containers-on-amazon-ecs/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3464" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3464&amp;disqus_title=Running+Windows+Containers+on+Amazon+ECS&amp;disqus_url=https://aws.amazon.com/blogs/compute/running-windows-containers-on-amazon-ecs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3464');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This post was developed and written by Jeremy Cowan, Thomas Fuller, Samuel Karp, and Akram Chetibi.<br /> </em></p> 
-<p>—</p> 
-<p>Containers have revolutionized the way that developers build, package, deploy, and run applications. Initially, containers only supported code and tooling for Linux applications. With the release of Docker Engine for Windows Server 2016, Windows developers have started to realize the gains that their Linux counterparts have experienced for the last several years.</p> 
-<p>This week, <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-ecs-support-for-windows-server-containers-ga/">we’re adding support</a> for running production workloads in Windows containers using Amazon Elastic Container Service (<a href="https://aws.amazon.com/ecs">Amazon ECS</a>). Now, Amazon ECS provides an ECS-Optimized&nbsp;Windows Server Amazon Machine Image (AMI). This AMI is based on the EC2 Windows Server 2016&nbsp;AMI, and includes Docker 17.06 Enterprise Edition and the ECS Agent 1.16. This AMI provides improved&nbsp;instance and container launch time performance.&nbsp;It’s based on Windows Server&nbsp;2016 Datacenter and includes Docker 17.06.2-ee-5, along with a new version of the ECS agent that now runs as a native Windows service.<span id="more-3464"></span></p> 
-<p>In this post, I discuss the benefits of this new support, and walk you through getting started running Windows containers with Amazon ECS.</p> 
-<p>When AWS released the Windows Server 2016 Base with Containers AMI, the ECS agent ran as a process that made it difficult to monitor and manage. As a service, the agent can be health-checked, managed, and restarted no differently than other Windows services. The AMI also includes pre-cached images for Windows Server&nbsp;Core 2016 and Windows Server&nbsp;Nano&nbsp;Server 2016. By caching the images in the AMI, launching new Windows containers is significantly faster. When Docker images include a layer that’s already cached on the instance, Docker re-uses that layer instead of pulling it from the Docker registry.</p> 
-<p>The ECS agent and an accompanying ECS PowerShell module used to install, configure, and run the agent come pre-installed on the AMI. This guarantees there is a specific platform version available on the container instance at launch. Because the software is included, you don’t have to download it from the internet. This saves startup time.</p> 
-<p>The Windows-compatible ECS-optimized AMI also reports CPU and memory utilization and reservation metrics to <a href="https://aws.amazon.com/cloudwatch">Amazon CloudWatch</a>. Using the CloudWatch integration with ECS, you can create alarms that trigger dynamic scaling events to automatically add or remove capacity to your EC2 instances and ECS tasks.</p> 
-<b>Getting started</b> 
-<p>To help you get started running Windows containers on ECS, I’ve forked the <a href="https://github.com/awslabs/ecs-refarch-cloudformation">ECS reference architecture</a>, to build an ECS cluster comprised of Windows instances instead of Linux instances. You can pull the latest version of the <a href="https://github.com/aws-samples/ecs-refarch-cloudformation-windows">reference architecture for Windows</a>.</p> 
-<p>The reference architecture is a layered CloudFormation stack, in that it calls other stacks to create the environment. Within the stack, the ecs-windows-cluster.yaml file contains the instructions for bootstrapping the Windows instances and configuring the ECS cluster. To configure the instances outside of AWS CloudFormation (for example, through the CLI or the console), you can add the following commands to your instance’s user data:</p> 
-<code class="lang-yaml">Import-Module ECSTools
-Initialize-ECSAgent</code> 
-<p>Or</p> 
-<code class="lang-yaml">Import-Module ECSTools
-Initialize-ECSAgent –Cluster MyCluster -EnableIAMTaskRole</code> 
-<p>If you don’t specify a cluster name when you initialize the agent, the instance is joined to the default cluster.</p> 
-<p>Adding <code class="lang-bash">-EnableIAMTaskRole</code> when initializing the agent adds support for IAM roles for tasks. Previously, enabling this setting meant running a complex script and setting an environment variable before you could assign roles to your ECS tasks.</p> 
-<p>When you enable IAM roles for tasks on Windows, it consumes port 80 on the host. If you have tasks that listen on&nbsp;port 80 on the host, I recommend configuring a service for them that uses load balancing. You can use port 80 on the load balancer, and the traffic can be routed to another host port on your container instances. For more information, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html">Service Load Balancing</a>.</p> 
-<h3>Create a cluster</h3> 
-<p>To create a new ECS cluster, choose Launch stack, or pull the GitHub project to your local machine and run the following command:</p> 
-<p><code class="lang-bash">aws cloudformation create-stack –template-body file://&lt;path to master-windows.yaml&gt; --stack-name &lt;name&gt;</code></p> 
-<h3>Upload your container image</h3> 
-<p>Now that you have a cluster running, step through how to build and push an image into a container repository. You use a repository hosted in Amazon Elastic Container Registry (<a href="https://aws.amazon.com/ecr">Amazon ECR</a>) for this, but you could also use Docker Hub. To build and push an image to a repository, install Docker on your Windows* workstation. You also create a repository and assign the necessary permissions to the account that pushes your image to Amazon ECR. For detailed instructions, see <a href="http://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html">Pushing an Image</a>.</p> 
-<p><em>* If you are building an image that is based on Windows layers, then you must use a Windows environment to build and push your image to the registry.</em></p> 
-<h3>Write your task definition</h3> 
-<p>Now that your image is built and ready, the next step is to run your Windows containers using a task.</p> 
-<p>Start by creating a new task definition based on the <a href="https://hub.docker.com/r/microsoft/iis">windows-simple-iis</a> image from Docker Hub.</p> 
-<ol> 
-<li>Open the <a href="https://console.aws.amazon.com/ecs/home">ECS console</a>.</li> 
-<li>Choose <strong>Task Definitions</strong>, <strong>Create new task definition</strong>.</li> 
-<li>Scroll to the bottom of the page and choose <strong>Configure via JSON</strong>.</li> 
-<li>Copy and paste the following JSON into that field.</li> 
-<li>Choose <strong>Save, Create</strong>.</li> 
-</ol> 
-<code class="lang-json">{
-&quot;family&quot;: &quot;windows-simple-iis&quot;,
-&quot;containerDefinitions&quot;: [
-{
-&quot;name&quot;: &quot;windows_sample_app&quot;,
-&quot;image&quot;: &quot;microsoft/iis&quot;,
-&quot;cpu&quot;: 100,
-&quot;entryPoint&quot;:[&quot;powershell&quot;, &quot;-Command&quot;],
-&quot;command&quot;:[&quot;New-Item -Path C:\\inetpub\\wwwroot\\index.html -Type file -Value '&lt;html&gt;&lt;head&gt;&lt;title&gt;Amazon ECS Sample App&lt;/title&gt; &lt;style&gt;body {margin-top: 40px; background-color: #333;} &lt;/style&gt; &lt;/head&gt;&lt;body&gt; &lt;div style=color:white;text-align:center&gt;&lt;b&gt;Amazon ECS Sample App&lt;/b&gt; &lt;b&gt;Congratulations!&lt;/b&gt; &lt;p&gt;Your application is now running on a container in Amazon ECS.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;'; C:\\ServiceMonitor.exe w3svc&quot;],
-&quot;portMappings&quot;: [
-{
-&quot;protocol&quot;: &quot;tcp&quot;,
-&quot;containerPort&quot;: 80,
-&quot;hostPort&quot;: 8080
-}
-],
-&quot;memory&quot;: 500,
-&quot;essential&quot;: true
-}
-]
-}</code> 
-<p>You can now go back into the Task Definition page and see <code class="lang-bash">windows-simple-iis</code> as an available task definition.</p> 
-<p>There are a&nbsp;few important aspects of the task definition file to note when working with Windows containers. First, the hostPort is configured as 8080, which is necessary because the ECS agent currently uses port 80 to enable IAM roles for tasks required for least-privilege security configurations.</p> 
-<p>There are also some fairly standard task parameters that are intentionally not included. For example, network mode is not available with Windows at the time of this release, so keep that setting blank to allow Docker to configure WinNAT, the only option available today.</p> 
-<p>Also, some parameters work differently with Windows than they do with Linux. The CPU limits that you define in the task definition are absolute, whereas on Linux they are weights. For information about other task parameters that are supported or possibly different with Windows, see the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/windows_task_definitions.html#windows_sample_task_defs">documentation</a>.</p> 
-<h3>Run your containers</h3> 
-<p>At this point, you are ready to run containers. There are two options to run containers with ECS:</p> 
-<ol> 
-<li>Task</li> 
-<li>Service</li> 
-</ol> 
-<p>A task is typically a short-lived process that ECS creates. It can’t be configured to actively monitor or scale. A service is meant for longer-running containers and can be configured to use a load balancer, minimum/maximum capacity settings, and a number of other knobs and switches to help ensure that your code keeps running. In both cases, you are able to pick a placement strategy and a specific IAM role for your container.</p> 
-<ol> 
-<li>Select the task definition that you created above and choose Action, Run Task.</li> 
-<li>Leave the settings on the next page to the default values.</li> 
-<li>Select the ECS cluster created when you ran the CloudFormation template.</li> 
-<li>Choose Run Task to start the process of scheduling a Docker container on your ECS cluster.</li> 
-</ol> 
-<p>You can now go to the cluster and watch the status of your task. It may take 5–10 minutes for the task to go from <strong>PENDING</strong> to <strong>RUNNING</strong>, mostly because it takes time to download all of the layers necessary to run the&nbsp;<em>microsoft/iis</em> image. After the status is <strong>RUNNING</strong>, you should see the following results:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-1.png" /></p> 
-<p>You may have noticed that the example task definition is&nbsp;named <em>windows-simple-iis:2</em>. This is because I created a second version of the task definition, which is one of the powerful capabilities of using ECS. You can make the task definitions part of your source code and then version them. You can also roll out new versions and practice blue/green deployment, switching to reduce downtime and improve the velocity of your deployments!</p> 
-<p>After the task has moved to <strong>RUNNING</strong>, you can see your website hosted in ECS. Find the public IP or DNS for your ECS host. Remember that you are hosting on port 8080. Make sure that the security group allows ingress from your client IP address to that port and that your VPC has an internet gateway associated with it. You should see a page that looks like the following:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-2.png" /></p> 
-<p>This is a nice start to deploying a simple single instance task, but what if you had a Web API to be scaled out and in based on usage? This is where you could look at defining a service and collecting CloudWatch data to add and remove both instances of the task. You could also use CloudWatch alarms to add more ECS container instances and keep up with the demand. The former is built into the configuration of your service.</p> 
-<ol> 
-<li>Select the task definition and choose&nbsp;<strong>Create Service</strong>.</li> 
-<li>Associate a load balancer.</li> 
-<li>Set up Auto Scaling.</li> 
-</ol> 
-<p>The following screenshot shows an example where you would add an additional task instance when the <strong>CPU Utilization</strong> CloudWatch metric is over 60% on average over three consecutive measurements. This may not be aggressive enough for your requirements; it’s meant to show you the option to scale tasks the same way you scale ECS instances with an Auto Scaling group. The difference is that these tasks start much faster because all of the base layers are already on the ECS host.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/06/17-12-Windows-GA-3.png" /></p> 
-<p>Do not confuse task dynamic scaling with ECS instance dynamic scaling. To add additional hosts, see <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/cloudwatch_alarm_autoscaling.html">Tutorial: Scaling Container Instances with CloudWatch Alarms</a>.</p> 
-<b>Conclusion</b> 
-<p>This is just scratching the surface of the flexibility that you get from using containers and Amazon ECS. For more information, see the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html">Amazon ECS Developer Guide</a> and <a href="https://aws.amazon.com/ecs/resources">ECS Resources</a>.</p> 
-<p>– Jeremy, Thomas, Samuel, Akram</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3464');
 });
 </script> 
 </article> 

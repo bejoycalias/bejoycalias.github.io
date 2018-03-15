@@ -190,6 +190,125 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS OpsWorks for Puppet Enterprise and an alternate implementation for policy based auto signing</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Andrew Park</span></span> | on 
+<time property="datePublished" datetime="2017-12-28T16:21:29+00:00">28 DEC 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-ops-works/" title="View all posts in AWS OpsWorks*"><span property="articleSection">AWS OpsWorks*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/aws-opsworks-puppet-enterprise-and-an-alternate-implementation-for-policy-based-auto-signing/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>AWS OpsWorks for Puppet Enterprise was <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/announcing-aws-opsworks-for-puppet-enterprise/">released in November of 2017</a>. It has a secure API (<em>associate node</em>) that provides a secure, convenient, and AWS-integrated method to sign certificates for clients of OpsWorks for Puppet Enterprise. This secure API is ideal for use within a user data script when being used for AWS CloudFormation (which can be found <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html">here</a>) or Auto Scaling Groups.</p> 
+<p>However, this blog post is about creating an alternate mechanism that allows end users to implement a different condition-checking mechanism before signing client certifications. This method is effective in environments such as proof of concept (PoC), development, or testing where clients aren’t executing the full AWS provisioning process. For example, this method could be used where customers build bare metal virtual machines (VMs) or containers. It could also be used where the VMs exist in a hybrid cloud environment or in an environment where OpsWorks for Puppet Enterprise is used to govern a customer’s private cloud VMs. It’s important to note that this method is not integrated with AWS CloudTrail, where every <em>associate node</em> API call would be tracked. When you use this alternative method, this tracking is not in effect.<span id="more-2311"></span></p> 
+<b>Introduction</b> 
+<p>When a VM makes a request to sign in to the Puppet master, the master bases its approval of the client’s request on certain criteria. This is called policy-based auto signing.&nbsp; Due to the nature of Puppet and the possibility of exposing sensitive information, the signing of a client’s certificate must be approved carefully. The conceptual implementation is <a href="https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning">documented on the Puppet website</a>.</p> 
+<p>This blog post provides one example of policy-based auto signing using the following assumptions:</p> 
+<ol> 
+<li>The Puppet clients are Amazon EC2 instances.</li> 
+<li>These instances reside in the same VPC.</li> 
+<li>The Puppet master is equipped with required tools such as the AWS CLI and <a href="https://stedolan.github.io/jq/">jq</a>.</li> 
+<li>The Puppet master’s AWS client tool has been configured with sufficient authority to be able to access all the information on the EC2 instances, such as their private DNS names and their tags.</li> 
+</ol> 
+<b>Set up the necessary components on the Puppet Enterprise master<strong>&nbsp;</strong></b> 
+<p>(NOTE: a puppet module that can help with automating steps 5-8 is available.&nbsp; It can be found <a href="https://forge.puppet.com/awsandrewpark/aws_owpe_policysign">here</a> and for reporting an issue about the module, you can visit this <a href="https://github.com/awslabs/aws_owpe_policysign/issues">link</a>.&nbsp; Please note that you have to edit common.yaml to enter your ID and secret access key.&nbsp; For usage help, please visit <a href="https://forge.puppet.com/awsandrewpark/aws_owpe_policysign#usage">here</a>.)</p> 
+<ol> 
+<li>Log in to the PE console and add the following value under puppet_enterprise::profile::master class</li> 
+</ol> 
+<code class="lang-css">allow_unauthenticated_ca = true</code> 
+<ol start="2"> 
+<li>Choose Add parameter.</li> 
+<li>Choose Commit.</li> 
+<li>Log in to the PE master using SSH and execute the following command to apply the configuration change:</li> 
+</ol> 
+<code class="lang-bash">puppet agent -tov</code> 
+<ol start="5"> 
+<li>In the same SSH session on the PE master, ensure that the AWS CLI is configured with the proper Access Key ID and the Secret Access Key for the pe-puppet</li> 
+</ol> 
+<code class="lang-bash">sudo su - pe-puppet --shell /bin/bash
+$ aws configure
+AWS Access Key ID [None]: ************
+AWS Secret Access Key [None]: **********************
+Default region name [None]: us-east-1
+Default output format [None]: json              
+$ exit</code> 
+<p style="padding-left: 60px">NOTE: &nbsp;This is an important step for the Puppet Enterprise Puppet user (pe-puppet) because the policy-based signing script must be executable by the pe-puppet user.</p> 
+<ol start="6"> 
+<li>Edit&nbsp;/etc/puppetlabs/puppet/puppet.conf file and ensure that following line appears under <em><strong>[main]</strong></em> section of the configuration file:</li> 
+</ol> 
+<code class="lang-bash">autosign = /opt/puppetlabs/autosign/autosign.sh</code> 
+<ol start="6"> 
+<li>Create an auto sign structure and copy over the script. (You can find this script in Appendix A.) And restart Puppet Master Service:</li> 
+</ol> 
+<code class="lang-bash">mkdir -p /opt/puppetlabs/autosign
+cp autosign.sh /opt/puppetlabs/autosign/autosign.sh
+chown -R pe-puppet.pe-puppet /opt/puppetlabs/autosign
+chmod 750 /opt/puppetlabs/autosign /opt/puppetlabs/autosign/autosign.sh   
+/etc/init.d/pe-puppetserver restart</code> 
+<ol start="7"> 
+<li>Now the Puppet master is ready to sign based on the policy. (For the explanation of the policy contained in the example script, see Appendix B.) On the Puppet client that has not been signed into a PE master, run the following command to request to be signed in.</li> 
+</ol> 
+<code class="lang-bash">puppet agent -tov --waitforcert=200</code> 
+<ol start="8"> 
+<li>To confirm, you should see the following entries in the /var/log/puppetlabs/puppetserver/puppetserver.log file on the PE master:</li> 
+</ol> 
+<code class="lang-bash">2017-12-18 20:23:21,739 INFO  [qtp2115462635-102] [p.p.certificate-authority] Signed certificate request for ip-my-ip-address.ec2.internal
+2017-12-18 20:23:22,636 INFO  [qtp2115462635-364] [puppetserver] mount[pe_packages] allowing * access
+2017-12-18 20:23:22,637 INFO  [qtp2115462635-364] [puppetserver] mount[pe_modules] allowing * access</code> 
+<p style="padding-left: 30px">On the Puppet client’s command line, you should see something like the following:</p> 
+<code class="lang-bash">[root@ip-my-ip-address ~]# puppet agent -tov --waitforcert=200
+Info: Creating a new SSL key for ip-my-ip-address.ec2.internal
+Info: Caching certificate for ca
+Info: csr_attributes file loading from /etc/puppetlabs/puppet/csr_attributes.yaml
+Info: Creating a new SSL certificate request for ip-my-ip-address.ec2.internal
+Info: Certificate Request fingerprint (SHA256): 
+FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF [snip]
+Info: Caching certificate for ip-my-ip-address.ec2.internal
+Info: Caching certificate_revocation_list for ca
+Info: Caching certificate for ca
+Info: Using configured environment 'production'
+Info: Retrieving pluginfacts
+Info: Retrieving plugin
+Notice: /File[/opt/puppetlabs/puppet/cache/lib/facter]/ensure: created</code> 
+<b>Conclusion</b> 
+<p>That’s it. The Puppet Enterprise (PE) Master will sign the client certificates based on the policy you have defined in the autosign.sh. To recap, this blog post shows you how to create an alternate mechanism that allows end users to implement different condition-checking before signing client certificates. We walk you through an example of policy-based auto signing configuration and provide an example script.</p> 
+<p>To learn more about AWS OpsWorks for Puppet Enterprise, visit <a href="https://aws.amazon.com/opsworks/puppetenterprise/">here</a>.</p> 
+<b>Appendix A: autosign.sh</b> 
+<code class="lang-bash">#!/bin/sh
+# If we do not have aws cli or jq, exit with error immediately
+which aws &gt; /dev/null 2&gt;&amp;1 || exit 2
+which jq &gt; /dev/null 2&gt;&amp;1 || exit 3
+usage()
+{
+echo &quot;$0 [private dns name of ec2 instance]&quot;
+exit 1
+}
+[ $# -eq 1 ] || usage
+clientname=$1
+# Criteria 1: the puppet client must be visible in my VPC
+[ `aws ec2 describe-instances --filters &quot;Name=private-dns-name,Values=$clientname&quot; --output=text | wc -l | sed 's/ //g'` -eq 0 ] &amp;&amp; exit 1
+# Criteria 2: the puppet client must have proper tags
+UNIQUETAG=&quot;puppetclient&quot;
+INSTANCEID=`aws ec2 describe-instances --filters &quot;Name=private-dns-name,Values=$clientname&quot; --output=json | jq .Reservations[].Instances[].InstanceId`
+[ &quot;`aws ec2 describe-tags --filters &quot;Name=resource-id,Values=$INSTANCEID&quot; --output json  | jq '.Tags[] | select(.Key==&quot;myuniquetag&quot;).Value' | sed 's/&quot;//g'`&quot; != &quot;$UNIQUETAG&quot; ] &amp;&amp; exit 1
+# We passed everything, give it a thumbs up
+exit 0</code> 
+<b>Appendix B: Policy description</b> 
+<p>The provided autosign.sh script uses two criteria to validate legitimacy of the puppet client’s certificate signing request.</p> 
+<ol> 
+<li>The Amazon EC2 VM must exist in the same VPC. (This is verified using the aws ec2 describe-instances)</li> 
+<li>The unique tag created during the instantiation phase of the Amazon EC2 VM must exist and match what the Puppet master expects (configurable/adjustable in the sh script).</li> 
+</ol> 
+<b>Related links</b> 
+<p>Add Nodes Automatically: <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html">http://docs.aws.amazon.com/opsworks/latest/userguide/opspup-unattend-assoc.html</a></p> 
+<p>Puppet’s policy-based auto signing: <a href="https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning">https://puppet.com/docs/puppet/5.3/ssl_autosign.html#policy-based-autosigning</a></p> 
+<b>About the author</b> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/12/28/andrew_park.jpg" /></p> 
+<p>Andrew Park is a Cloud Infrastructure Architect at Amazon Web Services. Prior to AWS, Andrew has served 20+ years as a Linux Solution Engineer, a Linux infrastructure Architect/Administrator and a Cloud Engineer. He has been a key participating member of cloud adoption programs in many different Canadian banks, and he also has participated in many different open source projects like Samba, restricted shell (rssh), not red hat update (Yes, this was an actual project), Red Hat’s Anaconda and Agenda VR3. He works tirelessly on behalf of the clients in order that customers can enjoy economically friendly open source solutions. He is a foodie, loves to converse with people and machines alike, and a firm believer of Open Source philosophy.</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">10 reasons why you should try AWS OpsWorks for Puppet Enterprise</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -798,88 +917,6 @@ by
 <hr /> 
 <p><strong>About the Author</strong></p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/07/headshot-Erin-220x300.png" />Erin McGill is a Solutions Architect in the AWS Partner Program with a focus on DevOps and automation tooling.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Service Catalog Hub and Spoke Model: How to Automate the Deployment and Management of Service Catalog to Many Accounts</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Jason Norton</span></span> | on 
-<time property="datePublished" datetime="2017-12-14T13:05:36+00:00">14 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-service-catalog/" title="View all posts in AWS Service Catalog*"><span property="articleSection">AWS Service Catalog*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/aws-service-catalog-hub-and-spoke-model-how-to-automate-the-deployment-and-management-of-service-catalog-to-many-accounts/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Many organizations may have tens to hundreds of accounts and thousands of users that require services in AWS. Enforcing organizational governance controls for deploying services requires time and resources to build the necessary guardrails, security controls, and auditing. Using the AWS Service Catalog hub and spoke model and launch constraints, I’ll show you how to centrally manage Service Catalog deployments in a master/child account relationship. I’ll also show you how to enforce service constraints that allow users to self-provision AWS products, often reducing deployment costs, time, and management.</p> 
-<p>Before diving into the details, first I’ll discuss the Service Catalog components.<span id="more-1889"></span></p> 
-<b>Service Catalog components</b> 
-<h3>Product</h3> 
-<p>An AWS Service Catalog product is an IT service (VPC, web server, n-tier environment, database, etc.) that you want to make available for deployment on AWS.</p> 
-<h3>Portfolio</h3> 
-<p>An AWS Service Catalog portfolio is a collection of products and their configuration information, plus launch and access controls.</p> 
-<h3>Constraint</h3> 
-<p>An AWS Service Catalog constraint is a restriction on the ways that specific AWS resources can be deployed for a product, e.g., template constraints to allow only certain EC2 instance sizes.</p> 
-<h3>Provisioned Product</h3> 
-<p>An AWS Service Catalog product is launched using an AWS CloudFormation process. The collection of launched services is called a provisioned product. You might also see this collection of launched services referred to as a landscape.</p> 
-<b>Implementation overview</b> 
-<p>If you need to centrally manage AWS Service Catalog portfolios and products and then deploy across multiple accounts you can use a master Service Catalog account. Use this account to deploy the minimum portfolio, products, and constraints. Then you can share the master portfolios to child accounts where they are imported. Products that form the imported master portfolios are added to local portfolios in the child account. Constraints, tags, and users for these products can be added so that users in the child account can deploy any AWS CloudFormation stack implemented as a product.</p> 
-<p>This is called the AWS Service Catalog hub and spoke model.</p> 
-<p><strong>Hub and spoke model</strong></p> 
-<li>One master account – Creates baseline products and shares the portfolio</li> 
-<li>Multiple child accounts – Import portfolios and leverage the products</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Master_Child-1024x552.png" /></p> 
-<p><strong>AWS Service Catalog administration</strong></p> 
-<p>The hub-spoke model allows you to deploy Service Catalog portfolios and products centrally and locally in an account.</p> 
-<p><strong>Two methods of leveraging shared portfolios</strong></p> 
-<p>Imported portfolio – leverage the imported portfolio</p> 
-<li>Launch and template constraints are inherited</li> 
-<li>Constraints cannot be modified</li> 
-<p>Local Portfolios – Create a local portfolio and import products from the shared portfolio.</p> 
-<li>Only template constraints are inherited</li> 
-<li>You can create and assign additional template constraints</li> 
-<li>You have to assign launch constraints</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Process-1024x497.png" /></p> 
-<p><strong>Walkthrough</strong><br /> Prerequisites:</p> 
-<li>Two AWS Accounts</li> 
-<li>Administrator IAM permissions to each account</li> 
-<li>Access keys or AWS STS Credentials for CLI access to each account</li> 
-<li>Download the python scripts from <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ServiceCatalogAgileGovernance.zip">here</a>.</li> 
-<p><strong>Note:</strong> Before running the following Python scripts, make sure that your AWS_DEFAULT_PROFILE is set to the correct account for deployment and that you have the proper administrative permissions.</p> 
-<p>Files included in the repo:</p> 
-<p>Master_SC_Single_Portfolio_Deploy_v1.py</p> 
-<li>Python script that creates a Service Catalog portfolio, two products for the portfolio from the CloudFormation scripts that follow, template constraints, and tagging to enforce organization governance controls. The script shares the portfolio with selected child accounts.</li> 
-<p>Child_SC_Single_Portfolio_Deploy_v1.py</p> 
-<li>Python script that creates a local Service Catalog portfolio in a child account and imports the two products created in the master account, discussed previously. Creates launch constraints for each product to limit launching resources to a single IAM role and appropriate tagging.</li> 
-<li>LAMP_Single_Instance_v1.template</li> 
-<li>LAMP_Launch_Constraint.json</li> 
-<li>Linux_Single_Instance_v1.template</li> 
-<li>Linux_Instance_Launch_Constraint.json</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/01/SC_Implementation-1024x678.png" /></p> 
-<p>A link to the python code can be found <a href="https://s3-us-west-2.amazonaws.com/management-tools-blog-cf-template-storage/ServiceCatalogAgileGovernance.zip">here</a>.</p> 
-<p><strong>Master Service Catalog deployment</strong></p> 
-<p>$ export AWS_DEFAULT_PROFILE=Master_Service_Catalog_Profile</p> 
-<p>1. Upload CFTs and constraint files to the Amazon S3 bucket that the Service Catalog master account has access to:</p> 
-<li>LAMP_Single_Instance_v1.template</li> 
-<li>Linux_Single_Instance_v1.template</li> 
-<li>LAMP_Launch_Constraint.json</li> 
-<li>Linux_Instance_Launch_Constraint.json</li> 
-<p>2. Run the master deployment script with the bucket name from step 1 as a command line argument. Additional command line arguments can be any AWS accounts that you want to share the Master Portfolio and Products with:</p> 
-<p>$ python Master_SC_Single_Portfolio_Deploy_v1.py bucketname share_account_1 share_account_2</p> 
-<p>3. Copy the portfolio ID provided by this script for deploying Service Catalog in the child account.</p> 
-<p>Your Linux Portfolio ID is: port-xxxxxxxxxxxxx</p> 
-<p><strong>Child Service Catalog deployment</strong></p> 
-<p>4. For each child account that you shared with in the previous master Service catalog section, do the following steps:</p> 
-<p>$ export AWS_DEFAULT_PROFILE=Child_Service_Catalog_Profile</p> 
-<p>5. Run the child deployment script with the portfolio ID of the master Service Catalog portfolio that you created in step 1:</p> 
-<p>$ python Child_SC_Single_Portfolio_Deploy_v1.py port-xxxxxxxxxxxxx</p> 
-<p><strong>After deployment</strong></p> 
-<p>6. To ensure that everything deployed properly, check your master and child accounts for portfolios, products, and constraints.</p> 
-<p>7. Add users in the child account to use the portfolio that you created.</p> 
-<p>8. Test launching products in the child account. Users must have an Amazon EC2 key pair to deploy products.</p> 
-<p>a. Notice when deploying the LAMP Instance that users are constrained to specific parameter values. When deploying the Linux single instance users are restricted to specific Security Groups (“WebServerSecurityGroup”) that were created by the LAMP instance product.</p> 
-<p><strong>Summary</strong><br /> In this blog post I demonstrate the value of deploying the AWS Service Catalog in a hub and spoke model. In addition, I explain the process and have provided code samples. These samples show you how to automate a deployment across many AWS accounts and constrain users to specific AWS resource values to meet organization governance controls.</p> 
-<p><strong>About the Author</strong><br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/21/Norton-Bio-Shot-150x150.jpg" /></p> 
-<p>Jason Norton is a Sr. Consultant with Professional Services&nbsp;who loves showing his customers the possibilities.</p> 
 </article> 
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
