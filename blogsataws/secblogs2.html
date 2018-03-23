@@ -190,6 +190,208 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/06/RB_CustomAuth_diagram_020618aaa-956x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Use Your Own Identity and Access Management Systems to Control Access to AWS IoT Resources</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ramkishore Bhattacharyya</span></span> | on 
+<time property="datePublished" datetime="2018-02-14T08:19:48+00:00">14 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/internet-of-things/aws-iot-platform/" title="View all posts in AWS IoT Platform*"><span property="articleSection">AWS IoT Platform*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/internet-of-things/" title="View all posts in Internet of Things*"><span property="articleSection">Internet of Things*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-use-your-own-identity-and-access-management-systems-to-control-access-to-aws-iot-resources/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7208" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7208&amp;disqus_title=How+to+Use+Your+Own+Identity+and+Access+Management+Systems+to+Control+Access+to+AWS+IoT+Resources&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-use-your-own-identity-and-access-management-systems-to-control-access-to-aws-iot-resources/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7208');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="http://docs.aws.amazon.com/iot/latest/developerguide/what-is-aws-iot.html" target="_blank" rel="noopener noreferrer">AWS IoT</a> is a managed cloud platform that lets connected devices easily and securely interact with cloud applications and other devices by using the <a href="https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#mqtt" target="_blank" rel="noopener noreferrer">Message Queuing Telemetry Transport</a> (MQTT) protocol, <a href="https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#http" target="_blank" rel="noopener noreferrer">HTTP</a>, and the <a href="https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#mqtt-ws" target="_blank" rel="noopener noreferrer">MQTT over the WebSocket protocol</a>. Every connected device must authenticate to AWS IoT, and AWS IoT must authorize all requests to determine if access to the requested operations or resources is allowed. Until now, AWS IoT has supported two kinds of authentication techniques: the Transport Layer Security (TLS) mutual authentication protocol and the AWS Signature Version 4 algorithm. Callers must possess either an X.509 certificate or AWS security credentials to be able to authenticate their calls. The requests are authorized based on the policies attached to the certificate or the AWS security credentials.</p> 
+<p>However, many of our customers have their own systems that issue custom authorization tokens to their devices. These systems use different access control mechanisms such as <a href="https://oauth.net/2/" target="_blank" rel="noopener noreferrer">OAuth</a> over <a href="https://tools.ietf.org/html/rfc7519" target="_blank" rel="noopener noreferrer">JWT</a> or <a href="https://aws.amazon.com/identity/saml/" target="_blank" rel="noopener noreferrer">SAML</a> tokens. AWS IoT now supports a <em>custom authorizer</em> to enable you to use custom authorization tokens for access control. You can now use custom tokens to authenticate and authorize HTTPS over the TLS server authentication protocol and <a href="https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#mqtt-ws" target="_blank" rel="noopener noreferrer">MQTT over WebSocket</a> connections to AWS IoT.</p> 
+<p>In this blog post, I explain the AWS IoT custom authorizer design and then demonstrate the end-to-end process of setting up a custom authorizer to authorize an HTTPS over TLS server authentication connection to AWS IoT using a custom authorization token. In this process, you configure an <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> function, which will validate the token and provide the policies necessary to control the access privileges on the connection.</p> 
+<p><strong>Note: </strong>This post assumes you are familiar with <a href="http://docs.aws.amazon.com/iot/latest/developerguide/what-is-aws-iot.html" target="_blank" rel="noopener noreferrer">AWS IoT</a> and <a href="https://aws.amazon.com/documentation/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> enough to perform steps using the <a href="http://docs.aws.amazon.com/cli/latest/userguide/installing.html" target="_blank" rel="noopener noreferrer">AWS CLI</a> and <a href="https://www.openssl.org/" target="_blank" rel="noopener noreferrer">OpenSSL</a>. Make sure you are running the latest version of the AWS CLI.</p> 
+<h3>Overview of the custom authorizer workflow</h3> 
+<p>The following numbered diagram illustrates the custom authorizer workflow. The diagram is followed by explanations of the steps.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/07/RB_CustomAuth_diagram_020618aaa1a.png" /></p> 
+<p>To explain the steps of the workflow as illustrated in the preceding diagram:</p> 
+<ol> 
+<li>The connected device uses the AWS SDK or custom client to make an HTTPS or MQTT over WebSocket request to the <a href="https://docs.aws.amazon.com/iot/latest/developerguide/what-is-aws-iot.html" target="_blank" rel="noopener noreferrer">AWS IoT gateway</a>. The request includes a custom authorization token and the name of a preconfigured authorizer Lambda function that is to be invoked to validate the authorization token.</li> 
+<li>The AWS IoT gateway identifies the authorization token in the request and determines that it is a custom authorization request. The gateway checks if a Lambda authorization function is configured for the AWS account that owns the device. If yes, the gateway invokes the Lambda function by passing the authorization token.</li> 
+<li>The Lambda function verifies the authorization token and returns to the AWS IoT gateway a principal that identifies the connection and a set of <a href="https://docs.aws.amazon.com/iot/latest/developerguide/iot-policies.html" target="_blank" rel="noopener noreferrer">AWS IoT policies</a> that determine permissions for the requested operation. The Lambda function also returns two time-to-live values that determine the validity (in seconds) of the connection and policy documents.</li> 
+<li>The AWS IoT gateway invokes the AWS policy evaluation engine to authorize the requested operation against the set of policies that are received from the authorizer Lambda function.</li> 
+<li>The AWS policy evaluation engine evaluates the policy documents and returns the result to the AWS IoT gateway. The gateway then caches the policy documents.</li> 
+<li>If the policy evaluation allows the requested operation, the AWS IoT gateway serves the request. If the requested operation is denied, the AWS IoT gateway returns an <code>AccessDenied</code> exception with the status code of 403 to the device (the red line in the preceding diagram).</li> 
+</ol> 
+<h3>Outline of the steps to configure and use the custom authorizer</h3> 
+<p>The following are the steps you will perform as part of the solution:</p> 
+<ol> 
+<li><strong>Create a Lambda function</strong>: Start by creating a Lambda function. The function takes the authorization token in the input, verifies it, and returns authorization policies to determine the caller’s permissions for the requested operation.</li> 
+<li><strong>Create an authorizer</strong>: Create an authorizer in AWS IoT. An authorizer is an alternate data model pointing to a pre-created Lambda function. You can specify in the custom authorization request an authorizer name. AWS IoT invokes a corresponding Lambda function to verify the authorization token. You may update the authorizer to point to a different Lambda function and thus easily control which Lambda function to invoke to verify an authorization token.</li> 
+<li><strong>Designate the default authorizer</strong>: You may designate one of your authorizers as the default authorizer. AWS IoT invokes the default authorizer implicitly when a custom authorization request does not include a specific authorizer name.</li> 
+<li><strong>Add Lambda invocation permissions</strong>: AWS IoT needs to be able to call your Lambda function on your behalf to verify the token in the custom authorization request. You need to associate a resource policy with the Lambda function to allow this.</li> 
+<li><strong>Test the Lambda function</strong>: When the Lambda function and the custom authorizer are configured, use the test function to verify that they are functioning correctly.</li> 
+<li><strong>Invoke the custom authorizer</strong>: Finally, make an HTTPS request to the gateway that includes a custom authorization token. The request invokes the custom authorizer.</li> 
+</ol> 
+<b>Deploy the solution</b> 
+<h3>1.&nbsp; Create a Lambda function</h3> 
+<p>In this step, I show you how to create a Lambda function that runs your custom authorizer code and returns a set of essential attributes to authorize the request.</p> 
+<p>Sign in to your AWS account and <a href="https://docs.aws.amazon.com/lambda/latest/dg/getting-started-create-function.html" target="_blank" rel="noopener noreferrer">create from the Lambda console a Lambda function</a> that takes as input an authorization token and performs whichever actions are necessary to validate the token, as shown in the following code example. The output, in JSON format, must contain the following attributes:</p> 
+<ol type="a"> 
+<li><code>IsAuthenticated</code>: This is a Boolean (true/false) attribute that indicates whether the request is authenticated.</li> 
+<li><code>PrincipalId</code>: This is an alphanumeric string; the minimum length is 1 character, and the maximum length is 128 characters. This string acts as an identifier associated with the token that is received in the custom authorization request.</li> 
+<li><code>PolicyDocuments</code>: This is a list of JSON formatted policy documents following the same conventions as an <a href="http://docs.aws.amazon.com/iot/latest/developerguide/iot-policies.html" target="_blank" rel="noopener noreferrer">AWS IoT policy</a>. The list contains at most 10 policy documents, each of which can be a maximum of 2,048 characters.</li> 
+<li><code>DisconnectAfterInSeconds</code>: This indicates the maximum duration (in seconds) of the connection to the AWS IoT gateway, after which it will be disconnected. The minimum value is 300 seconds, and the maximum value is 86,400 seconds.</li> 
+<li><code>RefreshAfterInSeconds</code>: This is the period between policy refreshes. When it lapses, the Lambda function is invoked again to allow for policy refreshes. The minimum value is 300 seconds, and the maximum value is 86,400 seconds.</li> 
+</ol> 
+<p>The following code example is a Lambda function in Node.js 6.10 that authenticates a token.</p> 
+<code class="lang-text">// A simple authorizer Lambda function demonstrating
+// how to parse auth token and generate response 
+exports.handler = function(event, context, callback) { 
+var token = event.token; 
+switch (token.toLowerCase()) { 
+case 'allow': 
+callback(null, generateAuthResponse(token, 'Allow')); 
+case 'deny': 
+callback(null, generateAuthResponse(token, 'Deny')); 
+default: 
+callback(&quot;Error: Invalid token&quot;); 
+}
+};
+// Helper function to generate authorization response 
+var generateAuthResponse = function(token, effect) { 
+// Invoke your preferred identity provider 
+// to get the authN and authZ response. 
+// Following is just for simplicity sake 
+var authResponse = {}; 
+authResponse.isAuthenticated = true; 
+authResponse.principalId = 'principalId'; 
+var policyDocument = {}; 
+policyDocument.Version = '2012-10-17'; 
+policyDocument.Statement = []; 
+var statement = {}; 
+statement.Action = 'iot:Publish'; 
+statement.Effect = effect; 
+statement.Resource = &quot;arn:aws:iot:us-east-1:&lt;your_aws_account_id&gt;:topic/customauthtesting&quot;; 
+policyDocument.Statement[0] = statement; 
+authResponse.policyDocuments = [policyDocument]; 
+authResponse.disconnectAfterInSeconds = 3600; 
+authResponse.refreshAfterInSeconds = 600; 
+return authResponse; 
+}</code> 
+<p>The preceding function takes an authorization token and returns an object containing the five attributes (a-e) described earlier in this step.</p> 
+<h3>2.&nbsp; Create an authorizer</h3> 
+<p>Now that you have created the Lambda function, you will create an authorizer with AWS IoT pointing to the Lambda function. You do this so that you can easily control which Lambda function to invoke to verify an authorization token. The following attributes are required to create an authorizer:</p> 
+<ol type="a"> 
+<li><code>AuthorizerName</code>: This is the name of the authorizer. It is a string; the minimum length is 1 character, and the maximum length is 128 characters.</li> 
+<li><code>AuthorizerFunctionArn</code>: This is the <a href="https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Name</a> (ARN) of the Lambda function that you created in the previous step.</li> 
+<li><code>TokenKeyName</code>: This specifies the key name that your device chooses, which indicates the token in the custom authorization HTTP request header. It is a string; the minimum length is 1 character, and the maximum length is 128 characters.</li> 
+<li><code>TokenSigningPublicKeys</code>: This is a map of one (minimum) and two (maximum) public keys. It is a 2,048-bit key at minimum. You need to generate a key pair, sign the custom authorization token and include the digital signature in the request in order to be able to use custom authorization successfully. AWS IoT needs the corresponding public key to verify the digital signature. Therefore, you must provide the public key while creating an authorizer.</li> 
+<li><code>Status</code>: This specifies the status (<code>ACTIVE</code> or <code>INACTIVE</code>) of the authorizer. It is optional. The default value is <code>INACTIVE</code>.</li> 
+</ol> 
+<p>Run the following command in OpenSSL to create an RSA key pair that will be used to generate a token signature.</p> 
+<code class="lang-text">openssl genrsa -out private.pem 2048</code> 
+<p>Run the following command to create the public key out of the key pair generated in the previous step.</p> 
+<code class="lang-text">openssl rsa -in private.pem -outform PEM -pubout -out public.pem</code> 
+<p>You need to store the key pair securely and pass the public key in the <code>TokenSigningPublicKeys</code> parameter when creating the authorizer in AWS IoT. You will use the private key in the key pair to sign the authorization token and include the signature in the custom authorization request.</p> 
+<p>Run the following command in the AWS CLI to create an authorizer.</p> 
+<code class="lang-text">aws iot create-authorizer --authorizer-name &lt;authorizer_name&gt; --authorizer-function-arn &lt;Lambda_function_arn&gt; --token-key-name &lt;token_key_name&gt; --token-signing-public-keys FIRST_KEY=&quot;&lt;public_key_pem&gt;&quot; --status ACTIVE</code> 
+<p>The following is sample output of the <code>create-authorizer</code> command. It contains the <code>authorizerName</code> and <code>authorizerArn</code>.</p> 
+<code class="lang-text">{
+&quot;authorizerName&quot;: &quot;MyAuthorizer&quot;, 
+&quot;authorizerArn&quot;: &quot;arn:aws:iot:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:authorizer/MyAuthorizer&quot;
+}</code> 
+<p>You must set the authorizer in the <code>ACTIVE</code> status to be invoked. The <code>describe-authorizer</code> API returns the attributes of an existing authorizer. You can use the following command to verify if all the attributes in the authorizer are set correctly.</p> 
+<code class="lang-text">aws iot describe-authorizer --authorizer-name &lt;authorizer_name&gt;</code> 
+<p>The following is sample output of the <code>describe-authorizer</code> command.</p> 
+<code class="lang-text">{
+&quot;authorizerDescription&quot;: {
+&quot;status&quot;: &quot;ACTIVE&quot;,
+&quot;lastModifiedDate&quot;: 1515351241.568,
+&quot;authorizerName&quot;: &quot;&lt;authorizer_name&gt;&quot;,
+&quot;tokenKeyName&quot;: &quot;&lt;token_key_name&gt;&quot;,
+&quot;authorizerArn&quot;: &quot;arn:aws:iot:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:authorizer/MyAuthorizer&quot;,
+&quot;tokenSigningPublicKeys&quot;: {
+FIRST_KEY&quot;: &quot;&lt;public_key_pem&gt;&quot;
+},
+&quot;creationDate&quot;: 1515351241.568,
+&quot;authorizerFunctionArn&quot;: &quot;arn:aws:lambda:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:function:MyCustomAuthFunction&quot;
+}
+}</code> 
+<h3>3.&nbsp; Designate the default authorizer (optional)</h3> 
+<p>You can have multiple authorizers in your account. You can designate one of them as the default so that AWS IoT invokes it if the custom authorization request does not specify an authorizer name. Run the following command in the AWS CLI to designate a default authorizer.</p> 
+<code class="lang-text">aws iot set-default-authorizer --authorizer-name &lt;authorizer_name&gt;</code> 
+<p>The following is sample output of the <code>set-default-authorizer</code> command. It contains the <code>authorizerName</code> and <code>authorizerArn</code>.</p> 
+<code class="lang-text">{
+&quot;authorizerName&quot;: &quot;MyAuthorizer&quot;, 
+&quot;authorizerArn&quot;: &quot;arn:aws:iot:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:authorizer/MyAuthorizer&quot;
+}</code> 
+<h3>4. Add Lambda invocation permissions</h3> 
+<p>AWS IoT needs to invoke your authorizer Lambda function to evaluate the custom authorizer token. You need to provide AWS IoT appropriate permissions to invoke your Lambda function when a custom authorization request is made. Use the AWS CLI with the <a href="http://docs.aws.amazon.com/lambda/latest/dg/API_AddPermission.html" target="_blank" rel="noopener noreferrer">AddPermission</a>&nbsp;command to grant the AWS IoT service principal permission to call <code>lambda:InvokeFunction</code>, as shown in the following command.</p> 
+<code class="lang-text">aws lambda add-permission --function-name &lt;lambda_function_name&gt; --principal iot.amazonaws.com --source-arn &lt;authorizer_arn&gt; --statement-id Id-123 --action &quot;lambda:InvokeFunction&quot;</code> 
+<p>The following is sample output of the <code>add-permission</code> command.</p> 
+<code class="lang-text">{
+&quot;Statement&quot;: &quot;{\&quot;Sid\&quot;:\&quot;Id-123\&quot;,\&quot;Effect\&quot;:\&quot;Allow\&quot;,\&quot;Principal\&quot;:{\&quot;Service\&quot;:\&quot;iot.amazonaws.com\&quot;},\&quot;Action\&quot;:\&quot;lambda:InvokeFunction\&quot;,\&quot;Resource\&quot;:\&quot;arn:aws:lambda:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:function:MyCustomAuthFunction\&quot;,\&quot;Condition\&quot;:{\&quot;ArnLike\&quot;:{\&quot;AWS:SourceArn\&quot;:\&quot;arn:aws:iot:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:authorizer/MyAuthorizer\&quot;}}}&quot;
+}</code> 
+<p>Note that you are using the precreated <code>AuthorizerArn</code> as the <code>SourceArn</code> while granting the permission. The Lambda function gets triggered only if the source ARN provided by AWS IoT during the invocation matches with the <code>SourceArn</code> that you have given permission. Even if your Lambda function ARN is put in an authorizer owned by someone else, they cannot trigger the function causing illegitimate charge to you.</p> 
+<h3>5. Test the Lambda function</h3> 
+<p>To verify the configuration, test to see if AWS IoT can invoke the Lambda function and get the correct output. You can do this by using the <a href="https://docs.aws.amazon.com/cli/latest/reference/iot/test-invoke-authorizer.html" target="_blank" rel="noopener noreferrer">TestInvokeAuthorizer</a> API. The API takes the following input:</p> 
+<ol type="a"> 
+<li><code>AuthorizerName</code>: This is the name of the authorizer. It is a string; the minimum length is 1 character, and the maximum length is 128 characters.</li> 
+<li><code>Token</code>: This specifies the custom authorization token&nbsp;to authorize the request to the AWS IoT gateway. It is a string; the minimum length is 1 character, and the maximum length is 1,024 characters.</li> 
+<li><code>TokenSignature</code>: This is the token signature generated by using the private key with the SHA256withRSA algorithm. This is a string with a maximum length 2,560 characters<strong>. </strong>You must Base64-encode the signature while passing it as an input (the command follows).</li> 
+</ol> 
+<p>Run the following command in OpenSSL to generate a signature for string, <code>allow</code>.</p> 
+<code class="lang-text">echo -n allow &gt; token.txt
+openssl dgst -sha256 -sign private.pem -out token.sign token.txt</code> 
+<p>Run the following command to Base64-encode the string.</p> 
+<code class="lang-text">base64 token.sign &gt; token.sign.b64</code> 
+<p>Now, run the following command in the AWS CLI to test your authorizer.</p> 
+<code class="lang-text">aws iot test-invoke-authorizer --authorizer-name &lt;authorizer_name&gt; --token allow --token-signature &lt;token_signature&gt;</code> 
+<p>If AWS IoT is able to invoke the Lambda function successfully, the output of the <code>TestInvokeAuthorizer</code> API will be exactly the same as the output of the Lambda function. The following is sample output of the <code>test-invoke-authorizer</code> command for the Lambda function you created in Step 1 earlier in this post.</p> 
+<code class="lang-text">{
+&quot;isAuthenticated&quot;: true,
+&quot;refreshAfterInSeconds&quot;: 600,
+&quot;policyDocuments&quot;: [
+{\&quot;Version\&quot;:\&quot;2012-10-17\&quot;,\&quot;Statement\&quot;:[{\&quot;Action\&quot;:\&quot;iot:Publish\&quot;,\&quot;Effect\&quot;:\&quot;Allow\&quot;,\&quot;Resource\&quot;:\&quot;arn:aws:iot:us-east-1:&lt;<span style="color: #ff0000"><strong>your_aws_account_id</strong></span>&gt;:topic/customauthtesting\&quot;}]}&quot;
+],
+&quot;disconnectAfterInSeconds&quot;: 3600,
+&quot;principalId&quot;: &quot;principalId&quot;
+}</code> 
+<h3>6. Invoke the custom authorizer</h3> 
+<p>You can now make a custom authorization request to the AWS IoT gateway. Custom authorization is supported for HTTPS over TLS server authentication and MQTT over WebSocket connections. Regardless of the protocol, requests must include the following attributes in the header. Note that supplying these attributes through query parameters is not allowed for security reasons.</p> 
+<ol type="a"> 
+<li><code>Token</code>: This specifies the authorization token. The header name must be the same as the <code>TokenKeyName</code> of the authorizer.</li> 
+<li><code>TokenSignature</code>: This specifies the Base64-encoded digital signature of the token string. The header name must be <code>x-amz-customauthorizer-signature</code>.</li> 
+<li><code>AuthorizerName</code>: This specifies the name of one of the <code>ACTIVE</code> authorizers preconfigured in your account. The header name must be <code>x-amz-customauthorizer-name</code>. If this field is not present and you have preconfigured a default custom authorizer for your account, the AWS IoT gateway invokes the default authorizer to authenticate and authorize the request.</li> 
+</ol> 
+<p>Run the following command in the AWS CLI to obtain your AWS account-specific AWS IoT endpoint. See the <a href="https://docs.aws.amazon.com/iot/latest/apireference/API_DescribeEndpoint.html" target="_blank" rel="noopener noreferrer">DescribeEndpoint API documentation</a> for further details. You need to specify the endpoint when making requests to the AWS IoT gateway.</p> 
+<code class="lang-text">aws iot describe-endpoint</code> 
+<p>The following is sample output of the <code>describe-endpoint</code> command. It contains the <code>endpointAddress</code>.</p> 
+<code class="lang-text">{
+&quot;endpointAddress&quot;: &quot;&lt;<span style="color: #ff0000"><strong>your_aws_account_specific_prefix</strong></span>&gt;.iot.us-east-1.amazonaws.com&quot;
+}</code> 
+<p>Now, make an HTTPS request to the AWS IoT gateway to post a message. You may use your preferred HTTP client for the request. I use <a href="https://curl.haxx.se/docs/manpage.html" target="_blank" rel="noopener noreferrer">curl</a> in the following example, which posts the message, “Hello from custom auth,” to an MQTT topic, <code>customauthtesting</code>, by using the token, <code>allow</code>.</p> 
+<code class="lang-text">curl -X POST -k -i -N -H &quot;Host: &lt;your_aws_iot_endpoint&gt;&quot; -H &quot;X-Amz-CustomAuthorizer-Name: &lt;authorizer_name&gt;&quot; -H &quot;X-Amz-CustomAuthorizer-Signature: &lt;token_signature&gt;&quot; -H &quot;&lt;token_key_name&gt;: allow&quot; -H &quot;User-Agent: aws-cli/1.10.65 Python/2.7.11 Darwin/16.1.0 botocore/1.4.55&quot; --data 'Hello from custom auth' https://&lt;your_aws_iot_endpoint&gt;/topics/customauthtesting</code> 
+<p>If the command succeeds, you will see the following output.</p> 
+<code class="lang-text">HTTP/1.1 200 OK
+content-type: application/json
+content-length: 65
+date: Sun, 07 Jan 2018 19:56:12 GMT
+x-amzn-RequestId: e7c13873-6c61-a12c-1216-9a935901c130
+connection: keep-alive
+{&quot;message&quot;:&quot;OK&quot;,&quot;traceId&quot;:&quot;e7c13873-6c61-a12c-1216-9a935901c130&quot;}</code> 
+<h3>Conclusion</h3> 
+<p>In this blog post, I have shown how to configure a custom authorizer in your AWS account and use it to authorize an HTTPS over TLS server authentication connection and publish a message to a specific MQTT topic by using a custom authorization token. Similarly, you can use custom authorizers to authorize MQTT over WebSocket requests to the AWS IoT gateway to publish messages to a specific topic or subscribe to a topic filter.</p> 
+<p>If you have comments about this blog post, submit them in the “Comments” section below. If you have questions about or issues implementing this solution, start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=210" target="_blank" rel="noopener noreferrer">AWS IoT forum</a>.</p> 
+<p>– Ramkishore</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7208');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/13/Marketo_1200x350_SF_1200x250111.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Join Us for AWS Security Week February 20–23 in San Francisco!</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -382,7 +584,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7172');
 by 
 <span property="author" typeof="Person"><span property="name">Min Hyun</span></span> | on 
 <time property="datePublished" datetime="2018-02-02T07:59:57+00:00">02 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/top-posts/" title="View all posts in Top Posts*"><span property="articleSection">Top Posts*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/security/addressing-data-residency-with-aws/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-7161" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7161&amp;disqus_title=Addressing+Data+Residency+with+AWS&amp;disqus_url=https://aws.amazon.com/blogs/security/addressing-data-residency-with-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -583,7 +785,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7128');
 by 
 <span property="author" typeof="Person"><span property="name">Joe Wright</span></span> | on 
 <time property="datePublished" datetime="2018-01-22T11:23:31+00:00">22 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-vpc-networking-content-delivery/" title="View all posts in Amazon VPC*"><span property="articleSection">Amazon VPC*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-key-management-service/" title="View all posts in AWS Key Management Service*"><span property="articleSection">AWS Key Management Service*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/aws-privatelink/" title="View all posts in AWS PrivateLink"><span property="articleSection">AWS PrivateLink</span></a>, <a href="https://aws.amazon.com/blogs/security/category/top-posts/" title="View all posts in Top Posts*"><span property="articleSection">Top Posts*</span></a></span> | 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-vpc-networking-content-delivery/" title="View all posts in Amazon VPC*"><span property="articleSection">Amazon VPC*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-key-management-service/" title="View all posts in AWS Key Management Service*"><span property="articleSection">AWS Key Management Service*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/aws-privatelink/" title="View all posts in AWS PrivateLink"><span property="articleSection">AWS PrivateLink</span></a></span> | 
 <a href="https://aws.amazon.com/blogs/security/how-to-connect-directly-to-aws-key-management-service-from-amazon-vpc-by-using-an-aws-privatelink-endpoint/" property="url">Permalink</a> | 
 <a id="aws-comment-trigger-7104" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7104&amp;disqus_title=How+to+Connect+Directly+to+AWS+Key+Management+Service+from+Amazon+VPC+by+Using+an+AWS+PrivateLink+Endpoint&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-connect-directly-to-aws-key-management-service-from-amazon-vpc-by-using-an-aws-privatelink-endpoint/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
@@ -776,36 +978,6 @@ AWS.Blog.commenting('#aws-comment-trigger-7076');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-7076');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/12/05/DataCenterbanner_1217-1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Take a Digital Tour of an AWS Data Center to See How AWS Secures Data Centers Around The World</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chad Woolf</span></span> | on 
-<time property="datePublished" datetime="2018-01-16T06:55:17+00:00">16 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/security/" title="View all posts in Security"><span property="articleSection">Security</span></a>, <a href="https://aws.amazon.com/blogs/security/category/top-posts/" title="View all posts in Top Posts*"><span property="articleSection">Top Posts*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/take-a-digital-tour-of-an-aws-data-center-to-see-how-aws-secures-data-centers-around-the-world/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-6674" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=6674&amp;disqus_title=Take+a+Digital+Tour+of+an+AWS+Data+Center+to+See+How+AWS+Secures+Data+Centers+Around+The+World&amp;disqus_url=https://aws.amazon.com/blogs/security/take-a-digital-tour-of-an-aws-data-center-to-see-how-aws-secures-data-centers-around-the-world/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-6674');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><a href="https://aws.amazon.com/compliance/data-center/" target="_blank" rel="noopener noreferrer"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/12/05/DataCenterbanner_1217.png" /></a></p> 
-<p>AWS has launched a <a href="https://aws.amazon.com/compliance/data-center/" target="_blank" rel="noopener noreferrer">digital tour of an AWS data center</a>, providing you with a first-ever look at how AWS secures data centers around the world. The videos, pictures, and information in this tour show you how security is intrinsic to the design of our data centers, our global controls, and the AWS culture.</p> 
-<p>As you will learn when you take this digital tour, the AWS data center security strategy is&nbsp;assembled with scalable security controls and multiple layers of defense that help to protect your information. For example, AWS carefully manages potential flood and seismic activity risks. We use physical barriers, security guards, threat detection technology, and an in-depth screening process to limit access to data centers. We back up our systems, regularly test equipment and processes, and continuously train AWS employees to be ready for the unexpected.</p> 
-<p>To validate the security of our data centers, external auditors perform testing on more than 2,600 standards and requirements throughout the year. Such independent examination helps ensure that security standards are consistently being met or exceeded. As a result, the most highly regulated organizations in the world trust AWS to protect their data.</p> 
-<p>Take the <a href="https://aws.amazon.com/compliance/data-center/" target="_blank" rel="noopener noreferrer">tour</a> today to learn more about how we secure our data centers.</p> 
-<p>– Chad</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-6674');
 });
 </script> 
 </article> 
