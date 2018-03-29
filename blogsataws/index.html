@@ -190,6 +190,152 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="blogsataws1.html">Page 1</a>|<a href="blogsataws2.html">Page 2</a>|<a href="blogsataws3.html">Page 3</a>|<a href="blogsataws4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/28/ECS-Service-Discovery-746x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Amazon ECS Service Discovery</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<a href="https://aws.amazon.com/blogs/aws/author/randhunt/" title="Posts by Randall Hunt">Randall Hunt</a> | on 
+<time property="datePublished" datetime="2018-03-28T11:10:00+00:00">28 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/networking-content-delivery/amazon-route-53/" title="View all posts in Amazon Route 53*"><span property="articleSection">Amazon Route 53*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/amazon-ecs-service-discovery/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23236" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23236&amp;disqus_title=Amazon+ECS+Service+Discovery&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-ecs-service-discovery/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23236');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/ecs/" title="">Amazon ECS</a> now includes integrated service discovery. This makes it possible for an ECS service to automatically register itself with a predictable and friendly DNS name in <a href="https://aws.amazon.com/route53/" title="">Amazon Route 53</a>. As your services scale up or down in response to load or container health, the Route 53 hosted zone is kept up to date, allowing other services to lookup where they need to make connections based on the state of each service. You can see a demo of service discovery in an imaginary social networking app over at: <a href="https://servicediscovery.ranman.com/">https://servicediscovery.ranman.com/</a>.</p> 
+<h3>Service Discovery</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/28/ECS-Service-Discovery-1024x865.png" /><br /> Part of the transition to microservices and modern architectures involves having dynamic, autoscaling, and robust services that can respond quickly to failures and changing loads. Your services probably have complex dependency graphs of services they rely on and services they provide. A modern architectural best practice is to loosely couple these services by allowing them to specify their own dependencies, but this can be complicated in dynamic environments as your individual services are forced to find their own connection points.</p> 
+<p>Traditional approaches to service discovery like consul, etcd, or zookeeper all solve this problem well, but they require provisioning and maintaining additional infrastructure or installation of agents in your containers or on your instances. Previously, to ensure that services were able to discover and connect with each other, you had to configure and run your own service discovery system or connect every service to a load balancer. Now, you can enable service discovery for your containerized services in the ECS console, AWS CLI, or using the ECS API.</p> 
+<h3>Introducing Amazon Route 53 Service Registry and Auto Naming APIs</h3> 
+<p>Amazon ECS Service Discovery works by communicating with the Amazon Route 53 Service Registry and Auto Naming APIs. Since we haven’t talked about it before on this blog, I want to briefly outline how these Route 53 APIs work. First, some vocabulary:</p> 
+<li><b>Namespaces</b> – A namespace specifies a domain name you want to route traffic to (e.g. internal, local, corp). You can think of it as a logical boundary between which services should be able to discover each other. You can create a namespace with a call to the <code>aws servicediscovery create-private-dns-namespace</code> command or in the ECS console. Namespaces are roughly equivalent to hosted zones in Route 53. A namespace contains services, our next vocabulary word.</li> 
+<li><b>Service</b> – A service is a specific application or set of applications in your namespace like “auth”, “timeline”, or “worker”. A service contains service instances.</li> 
+<li><b>Service Instance</b> – A service instance contains information about how Route 53 should respond to DNS queries for a resource.</li> 
+<p>Route 53 provides APIs to create: namespaces, <code>A</code> records per task IP, and <code>SRV</code> records per task IP + port.</p> 
+<p>When we ask Route 53 for something like: <code>worker.corp</code> we should get back a set of possible IPs that could fulfill that request. If the application we’re connecting to exposes dynamic ports then the calling application can easily query the <code>SRV</code> record to get more information.</p> 
+<p>ECS service discovery is built on top of the Route 53 APIs and manages all of the underlying API calls for you. Now that we understand how the service registry, works lets take a look at the ECS side to see service discovery in action.</p> 
+<h3>Amazon ECS Service Discovery</h3> 
+<p>Let’s launch an application with service discovery! First, I’ll create two task definitions: “flask-backend” and “flask-worker”. Both are simple <a href="https://aws.amazon.com/fargate/" title="AWS Fargate">AWS Fargate</a> tasks with a single container serving HTTP requests. I’ll have flask-backend ask <code>worker.corp</code> to do some work and I’ll return the response as well as the address Route 53 returned for <code>worker</code>. Something like the code below:</p> 
+<code>@app.route(&quot;/&quot;)
+namespace = os.getenv(&quot;namespace&quot;)
+worker_host = &quot;worker&quot; + namespace
+def backend():
+r = requests.get(&quot;http://&quot;+worker_host)
+worker = socket.gethostbyname(worker_host)
+return &quot;Worker Message: {]\nFrom: {}&quot;.format(r.content, worker)
+</code> 
+<p>&nbsp;</p> 
+<p>Now, with my containers and task definitions in place, I’ll create a service in the console.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-28-34-1-1024x727.png" /></p> 
+<p>As I move to step two in the service wizard I’ll&nbsp;fill out the service discovery section and have ECS create a new namespace for me.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-30-58.png" /></p> 
+<p>I’ll also tell ECS to monitor the health of the tasks in my service and add or remove them from Route 53 as needed. Then I’ll set a TTL of 10 seconds on the A records we’ll use.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-31-16.png" /></p> 
+<p>I’ll repeat those same steps for my “worker” service and after a minute or so most of my tasks should be up and running.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-35-08-1024x471.png" /></p> 
+<p>Over in the Route 53 console I can see all the records for my tasks!<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_07-00-09-1024x460.png" /></p> 
+<p>We can use the Route 53 service discovery APIs to list all of our available services and tasks and programmatically reach out to each one. We could easily extend to any number of services past just backend and worker. I’ve created a simple demo of an imaginary social network with services like “auth”, “feed”, “timeline”, “worker”, “user” and more here: <a href="https://servicediscovery.ranman.com/">https://servicediscovery.ranman.com/</a>. You can see the code used to run that page on <a href="https://github.com/ranman/ecs-service-discovery-demo">github</a>.</p> 
+<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> Amazon ECS service discovery is available now in <span title="">US East (N. Virginia)</span>, <span title="">US East (Ohio)</span>, <span title="">US West (Oregon)</span>, and <span title="">EU (Ireland)</span>. AWS Fargate is currently only available in <span title="">US East (N. Virginia)</span>. When you use ECS service discovery, you pay for the Route 53 resources that you consume, including each namespace that you create, and for the lookup queries your services make. Container level health checks are provided at no cost. For more information on pricing check out the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html#service-discovery-pricing">documentation</a>.</p> 
+<p>Please let us know what you’ll be building or refactoring with service discovery either in the comments or on Twitter!</p> 
+<p>– <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<p>&nbsp;</p> 
+<p>P.S. Every blog post I write is made with a tremendous amount of help from numerous AWS colleagues. To everyone that helped build service discovery across all of our teams – thank you :)!</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23236');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_4-792x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">New – Amazon DynamoDB Continuous Backups and Point-In-Time Recovery (PITR)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2018-03-26T17:13:44+00:00">26 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/new-amazon-dynamodb-continuous-backups-and-point-in-time-recovery-pitr/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23322" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23322&amp;disqus_title=New+%26%238211%3B+Amazon+DynamoDB+Continuous+Backups+and+Point-In-Time+Recovery+%28PITR%29&amp;disqus_url=https://aws.amazon.com/blogs/aws/new-amazon-dynamodb-continuous-backups-and-point-in-time-recovery-pitr/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23322');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>The <a href="https://aws.amazon.com/dynamodb/" title="">Amazon DynamoDB</a> team is back with another useful feature hot on the heels of <a href="https://aws.amazon.com/blogs/aws/new-encryption-at-rest-for-dynamodb/">encryption at rest</a>. At <a href="https://reinvent.awsevents.com/" title="">AWS re:Invent</a> 2017 we launched <a href="https://aws.amazon.com/blogs/aws/new-for-amazon-dynamodb-global-tables-and-on-demand-backup/">global tables and on-demand backup and restore</a> of your DynamoDB tables and today we’re launching continuous backups with point-in-time recovery (PITR).</p> 
+<p>You can enable continuous backups with a single click in the <a href="https://console.aws.amazon.com" title="">AWS Management Console</a>, a simple API call, or with the <a href="https://aws.amazon.com/cli/" title="">AWS Command Line Interface (CLI)</a>. DynamoDB can back up your data with per-second granularity and restore to any single second from the time PITR was enabled up to the prior 35 days. We built this feature to protect against accidental writes or deletes.&nbsp;If a developer runs a script against production instead of staging or if someone fat-fingers a DeleteItem call, PITR has you covered. We also built it for the scenarios you can’t normally predict. You can still keep your on-demand backups for as long as needed for archival purposes but PITR works as additional insurance against accidental loss of data. Let’s see how this works.</p> 
+<h3>Continuous Backup</h3> 
+<p>To enable this feature in the console we navigate to our table and select the <b>Backups</b> tab. From there simply click <b>Enable</b> to turn on the feature. I could also&nbsp;turn on continuous backups&nbsp;via the UpdateContinuousBackups API call.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_3.png" /></p> 
+<p>Let’s imagine a scenario where I have a lot of old user profiles that I want to delete.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_2-1-1024x575.png" /></p> 
+<p>I really only want to send service updates to our active users based on their <code>last_update</code> date. I decided to write a quick Python script to delete all the users that haven’t used my service in a while.</p> 
+<code class="lang-python">import boto3
+table = boto3.resource(&quot;dynamodb&quot;).Table(&quot;VerySuperImportantTable&quot;)
+items = table.scan(
+FilterExpression=&quot;last_update &gt;= :date&quot;,
+ExpressionAttributeValues={&quot;:date&quot;: &quot;2014-01-01T00:00:00&quot;},
+ProjectionExpression=&quot;ImportantId&quot;
+)['Items']
+print(&quot;Deleting {} Items! Dangerous.&quot;.format(len(items)))
+with table.batch_writer() as batch:
+for item in items:
+batch.delete_item(Key=item)</code> 
+<p>Great! This should delete all those pesky non-users of my service that haven’t logged in since 2013. So,— CTRL+C CTRL+C CTRL+C CTRL+C (interrupt the currently executing command).</p> 
+<p>Yikes! Do you see where I went wrong? I’ve just deleted my most important users! Oh, no! Where I had a greater-than sign, I meant to put a less-than! Quick, before Jeff Barr can see, I’m going to restore the table. (I probably could have prevented that typo with Boto 3’s handy <a href="http://boto3.readthedocs.io/en/latest/reference/customizations/dynamodb.html#dynamodb-conditions">DynamoDB conditions</a>: <code class="lang-python">Attr(&quot;last_update&quot;).lt(&quot;2014-01-01T00:00:00&quot;)</code>)</p> 
+<h3>Restoring</h3> 
+<p>Luckily for me, restoring a table is easy. In the console I’ll navigate to the <b>Backups</b> tab for my table and click <b>Restore to point-in-time</b>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/23/ddb-1024x387.png" /></p> 
+<p>I’ll specify the time (a few seconds before I started my deleting spree) and a name for the table I’m restoring to.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_4.png" /></p> 
+<p>For a relatively small and evenly distributed table like mine, the restore is quite fast.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_5.png" /></p> 
+<p>The time it takes to restore a table varies based on multiple factors and restore times are not neccesarily coordinated with the size of the table. If your dataset is evenly distributed across your primary keys you’ll be able to take advanatage of parallelization which will speed up your restores.</p> 
+<p><span style="text-decoration: underline"><strong>Learn More &amp; Try It Yourself</strong></span><br /> There’s plenty more to learn about this new feature in the <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery.html">documentation here</a>.</p> 
+<p>Pricing for continuous backups is detailed on the <a href="https://aws.amazon.com/dynamodb/pricing/#Continuous_backup_and_point-in-time_recovery">DynamoDB Pricing Pages</a>. Pricing varies by region and is based on the current size of the table and indexes. For example, in <span title="">US East (N. Virginia)</span> you pay $0.20 per GB based on the size of the data and all local secondary indexes.</p> 
+<p>A few things to note:</p> 
+<li>PITR works with encrypted tables.</li> 
+<li>If you disable PITR and later reenable it, you reset the start time from which you can recover.</li> 
+<li>Just like on-demand backups, there are no performance or availability impacts to enabling this feature.</li> 
+<li>Stream settings, Time To Live settings, PITR settings, tags, <a href="https://aws.amazon.com/cloudwatch/" title="">Amazon CloudWatch</a> alarms, and auto scaling policies are not copied to the restored table.</li> 
+<li>Jeff, it turns out, knew I restored the table all along because every PITR API call is recorded in <a href="https://aws.amazon.com/cloudtrail/" title="">AWS CloudTrail</a>.</li> 
+<p>PITR is available in the US East (N. Virginia), US East (Ohio), US West (N. California), US West (Oregon), Asia Pacific (Tokyo), Asia Pacific (Seoul), Asia Pacific (Mumbai), Asia Pacific (Singapore), Asia Pacific (Sydney), Canada (Central), EU (Frankfurt), EU (Ireland), EU (London), and South America (Sao Paulo) Regions starting today.</p> 
+<p>Let us know how you’re going to use continuous backups and PITR on Twitter and in the comments.<br /> – <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23322');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/march_madness.png" /> 
+<b class="lb-b blog-post-title" property="name headline">March Machine Learning Madness!</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2018-03-26T10:01:10+00:00">26 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/sagemaker/" title="View all posts in SageMaker"><span property="articleSection">SageMaker</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/march-machine-learning-madness/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23608" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23608&amp;disqus_title=March+Machine+Learning+Madness%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/march-machine-learning-madness/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23608');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Mid-march in the USA means millions of people watching, and betting on, college basketball (I live here but I didn’t make the rules). As the NCAA college championship continues I wanted to briefly highlight the work of <a href="https://twitter.com/wesleypasfield">Wesley Pasfield</a> one of our <a href="https://aws.amazon.com/professional-services/">Professional Services</a> Machine Learning Specialists. Wesley was able to take data from <a href="https://kenpom.com">kenpom.com</a> and <a href="https://www.sports-reference.com/cbb/">College Basketball Reference</a> to build a model predicting the outcome of March Madness using the <a href="https://aws.amazon.com/sagemaker/" title="">Amazon SageMaker</a> built-in <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/xgboost.html">XGBoost</a> algorithm.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/march_madness-1024x463.png" /></p> 
+<p>Wesley walks us through grabbing the data, performing an exploratory data analysis (EDA in the data science lingo), reshaping the data for the xgboost algorithm, using the SageMaker SDK to create a training job for two different models, and finally creating a SageMaker inference endpoint for serving predictions at <a href="https://cbbpredictions.com/">https://cbbpredictions.com/</a>. Check out <a href="https://aws.amazon.com/blogs/machine-learning/predict-march-madness-using-amazon-sagemaker/">part one</a> of the post and <a href="https://aws.amazon.com/blogs/machine-learning/building-a-march-madness-predictor-application-supported-by-amazon-sagemaker/">part two.</a></p> 
+<p>Pretty cool right? Why not open the notebook and give the xgboost algorithm a try? Just know that there are a few caveats to the predictions so don’t go making your champion prediction just yet!</p> 
+<p>– <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23608');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/21/efs_sync_splash_1.png" /> 
 <b class="lb-b blog-post-title" property="name headline">EFS File Sync – Faster File Transfer To Amazon EFS File Systems</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -558,98 +704,6 @@ AWS.Blog.commenting('#aws-comment-trigger-23146');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-23146');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/08/chime_splash.png" /> 
-<b class="lb-b blog-post-title" property="name headline">New – Usage-Based Pricing for Amazon Chime</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-12T13:35:57+00:00">12 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/business-productivity/amazon-chime/" title="View all posts in Amazon Chime*"><span property="articleSection">Amazon Chime*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/price-reduction/" title="View all posts in Price Reduction*"><span property="articleSection">Price Reduction*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/new-usage-based-pricing-for-amazon-chime/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23198" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23198&amp;disqus_title=New+%26%238211%3B+Usage-Based+Pricing+for+Amazon+Chime&amp;disqus_url=https://aws.amazon.com/blogs/aws/new-usage-based-pricing-for-amazon-chime/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23198');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>I am a regular and frequent user of <a href="https://chime.aws" title="">Amazon Chime</a>, as are most of my colleagues. In addition to dozens of ongoing point-to-point sessions with individual colleagues, I participate in one chat room for the AWS Blog team and another for the AWS Evangelists. I attend several meetings per day, and use Amazon Chime’s conferencing feature to set up my own meetings once or twice a month. While I don’t actually see the monthly bill, I am on Amazon Chime’s Pro plan, at a per-user rate of $15 per month. This is, based on feedback from our customers, a good value for users who regularly host meetings, but a bit too high for those who use the other features and/or spend more time attending meetings than hosting them.</p> 
-<p><span style="text-decoration: underline"><strong>Usage-Based Pricing</strong></span><br /> To meet the needs of these users and to make <a href="https://chime.aws" title="">Amazon Chime</a> even more economical we are introducing a new, usage-based pricing model that goes in to effect on April 1, 2018.</p> 
-<p>During the initial, 30-day free trial, users have access to all <a href="https://chime.aws" title="">Amazon Chime</a> features at no charge. After the trial period ends, the users can chat with each other and attend meetings, both at no charge. On days that they host meetings, a $3 per day charge will be made, up to a maximum of $15 per month. Based on historical usage patterns, this will result in an overall price reduction for virtually all <a href="https://chime.aws" title="">Amazon Chime</a> customers.</p> 
-<p>In order to use the scheduling and hosting features after the end of the trial period, users must be connected to an AWS account and the administrator must enable the Amazon Pro Features features for the account. Thanks to the usage-based model, administrators will no longer have to purchase licenses for individual users in their organization. Instead, they can use Active Directory settings and policy management within the Amazon Chime Console to set permissions as desired.</p> 
-<p>As part of this change we are also eliminating the Plus plan and adding the screen sharing and corporate directory features to the Basic plan.</p> 
-<p>This change goes in to effect on April 1, 2018! To learn more, take a look at the <a href="https://aws.amazon.com/chime/pricing/">Amazon Chime Pricing</a> page.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23198');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/09/reinvent_lego_eseerb_yelnif_1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Summit Season is Almost Here – Get Ready to Register!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-11T10:27:06+00:00">11 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/" title="View all posts in Events*"><span property="articleSection">Events*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/aws-summit-season-is-almost-here-get-ready-to-register/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23210" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23210&amp;disqus_title=AWS+Summit+Season+is+Almost+Here+%26%238211%3B+Get+Ready+to+Register%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-summit-season-is-almost-here-get-ready-to-register/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23210');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>I’m wr<a href="https://media.amazonwebservices.com/blog/2018/contraption A.jpg">i</a>ting th<a href="https://media.amazonwebservices.com/blog/2018/contraption B.jpg">i</a>s post from my hotel room <a href="https://media.amazonwebservices.com/blog/2018/contraption C.jpg">i</a>n Tokyo wh<a href="https://media.amazonwebservices.com/blog/2018/contraption D.jpg">i</a>le doing my best to f<a href="https://media.amazonwebservices.com/blog/2018/contraption E.jpg">i</a>ght jet lag! I’m here to speak at <a href="https://jawsdays2018.jaws-ug.jp/">JAWS Days</a> and <a href="https://aws.amazon.com/startup-day/">Startup Day</a>, and to meet w<a href="https://media.amazonwebservices.com/blog/2018/contraption F.jpg">i</a>th some local customers.</p> 
-<p>I do want to rem<a href="https://media.amazonwebservices.com/blog/2018/contraption G.jpg">i</a>nd you that the <a href="https://aws.amazon.com/summits/">AWS Global Summit</a> series <a href="https://media.amazonwebservices.com/blog/2018/contraption H.jpg">i</a>s just about to start! W<a href="https://media.amazonwebservices.com/blog/2018/contraption I.jpg">i</a>th events planned for <a href="https://aws.amazon.com/summits/#North_America">North America</a>, <a href="https://aws.amazon.com/summits/#Latin_America">Latin America</a>, <a href="https://aws.amazon.com/summits/#Japan">Japan</a> and the rest of <a href="https://aws.amazon.com/summits/#Asia_Pacific">Asia</a>, <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Europe</a>, the <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Middle East</a>, <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Africa</a>, and <a href="https://aws.amazon.com/summits/#Greater_China">Greater China</a>, odds are that there’s one not too far from you. You can reg<a href="https://media.amazonwebservices.com/blog/2018/contraption J.jpg">i</a>ster for the <a href="https://aws.amazon.com/summits/san-francisco/">San Francisco Summit</a> today and you can <a href="https://pages.awscloud.com/2018GlobalSummit.html">ask to be notified</a> as soon as reg<a href="https://media.amazonwebservices.com/blog/2018/contraption K.jpg">i</a>stration for the other 30+ c<a href="https://media.amazonwebservices.com/blog/2018/contraption L.jpg">i</a>ties opens up<a href="https://media.amazonwebservices.com/blog/2018/contraption M.jpg">.</a></p> 
-<p>The Summits are offered at no charge and are an excellent way for you to learn more about AWS. You’ll get to hear from our leaders and tech teams, our partners, and from other customers. You can also participate in hands-on workshops, labs, and team challenges.</p> 
-<p>Because the events are multi-track, you may want to bring a colleague or two in order to make sure that you don’t miss something of interest to your organization.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>PS – I keep meaning to share this <a href="https://www.youtube.com/watch?v=tGjyPMNnFTQ&amp;feature=youtu.be">cool video</a> that my friend <a href="https://en.wikipedia.org/wiki/Mike_Selinker">Mike Selinker</a> took at <a href="https://reinvent.awsevents.com/" title="">AWS re:Invent</a>. Check it out!</p> 
-<p><a href="https://www.youtube.com/watch?v=tGjyPMNnFTQ&amp;feature=youtu.be"><img width="100%" src="https://media.amazonwebservices.com/blog/2018/reinvent_lego_1.png" /></a></p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23210');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/22/ozz_2_0_2.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Join the AWS Quest – Help me to Rebuild Ozz!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-09T10:10:13+00:00">09 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23136" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23136&amp;disqus_title=Join+the+AWS+Quest+%26%238211%3B+Help+me+to+Rebuild+Ozz%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23136');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/ozz_2_0_3.jpg">weekly videos</a>, you may have noticed an orange robot in the background from time to time. That’s Ozz, my robot friend and helper. Built from the ground up in my home laboratory, Ozz is an invaluable part of the AWS blogging process!</p> 
-<p>Sadly, when we announced we are adding the <a href="http://d1le29qyzha1u4.cloudfront.net/AWS_Podcast_Episode_234.mp3">AWS Podcast</a> to the blog, Ozz literally went to pieces and all I have left is a large pile of bricks and some great memories of our time together. From what I can tell, Ozz went haywire over this new development due to excessive enthusiasm!</p> 
-<p>Ozz, perhaps anticipating that this could happen at some point, buried a set of clues (each pointing to carefully protected plans) in this blog, in the AWS Podcast, and in other parts of the AWS site. If we can find and decode these plans, we can rebuild Ozz, <a href="https://en.wikipedia.org/wiki/The_Six_Million_Dollar_Man">better, stronger, and faster</a>. Unfortunately, due to concerns about the ultra-competitive robot friend market, Ozz concealed each of the plans inside a set of devious, brain-twisting puzzles. You are going to need to look high, low, inside, outside, around, and through the clues in order to figure this one out. You may even need to <a href="https://en.wikipedia.org/wiki/Who_Wants_to_Be_a_Millionaire%3F">phone a friend</a> or two.</p> 
-<p>Your mission, <a href="https://en.wikiquote.org/wiki/Mission:_Impossible">should you choose to accept it</a>, is to find these clues, decode the plans, and help me to rebuild Ozz. The information that I have is a bit fuzzy, but I think there are 20 or so puzzles, each one describing one part of Ozz. If we can solve them all, we’ll get together on <a href="https://www.twitch.tv/aws">Twitch</a> later this month and put Ozz back together. We’ll be posting additional clues every day or two, so be sure to keep your eyes wide open.</p> 
-<p>Are you with me on this? <a href="https://aws.amazon.com/awsquest/">Let’s do it! </a></p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23136');
 });
 </script> 
 </article> 

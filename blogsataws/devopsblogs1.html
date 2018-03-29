@@ -190,6 +190,214 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/21/CodeDeploy-migration-arch-overview.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Migrating from an In-House Deployment Agent to AWS CodeDeploy and AWS CodePipeline</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Charles Fort</span></span> | on 
+<time property="datePublished" datetime="2018-03-26T21:03:54+00:00">26 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codedeploy/" title="View all posts in AWS CodeDeploy*"><span property="articleSection">AWS CodeDeploy*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codepipeline/" title="View all posts in AWS CodePipeline*"><span property="articleSection">AWS CodePipeline*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/migrating-from-an-in-house-deployment-agent-to-aws-codedeploy-and-aws-codepipeline/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>I’m Charles Fort, a developer at Woot who specializes in deployments and developer experience. Woot is the original daily deals website. It was founded in 2004 and acquired by Amazon in 2010 –&nbsp;<a href="https://www.woot.com">https://www.woot.com</a></p> 
+<p>We just moved our web front-end deployments from Troop, a deployment agent we developed ourselves, to AWS CodeDeploy and AWS CodePipeline. This migration involved launching a new customer-facing EC2 web server fleet with the CodeDeploy agent installed and creating and managing our CodeDeploy and CodePipeline resources with AWS CloudFormation. Immediately after we completed the migration, we observed a ~50% reduction in HTTP 500 errors during deployment.</p> 
+<p>In this blog post, I’m going to show you:</p> 
+<li>Why we chose AWS deployment tools.</li> 
+<li>An architectural diagram of Woot’s systems.</li> 
+<li>An overview of the migration project.</li> 
+<li>Our migration results.</li> 
+<p>&nbsp;</p> 
+<b>The old and busted</b> 
+<p>We wanted to replace our in-house deployment system with something we could build automation on top of, and something that we didn’t have to own or maintain. We already own and maintain a build system, which is bad enough. We didn’t want to run additional infrastructure for our deployment pipeline.</p> 
+<p>In short, we wanted a cloud service. Because all of our infrastructure is in AWS, CodeDeploy was a natural fit to replace our deployment agent. CodePipeline acts as the automation orchestrator, our wizard in the cloud telling CodeDeploy what to deploy and when.</p> 
+<p>&nbsp;</p> 
+<b>Architecture overview</b> 
+<p>Here’s a look at the architecture of a Woot web front end:</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/21/CodeDeploy-migration-arch-overview.png" /> 
+<p class="wp-caption-text">Woot architecture overview</p> 
+<b>Project overview</b> 
+<p>Our project involved migrating five web front ends, which together handle an average of 12 million requests per day, to CodeDeploy and CodePipeline while keeping the site live for our customers.</p> 
+<p>Here are the steps we took:</p> 
+<li>Wrote some new deployment scripts.</li> 
+<li>Launched a new fleet of EC2 web servers with CodeDeploy support.</li> 
+<li>Created a deployment pipeline for our CloudFormation-defined CodeDeploy and CodePipeline configuration.</li> 
+<li>Introduced our new fleet to live traffic. Hello, customers!</li> 
+<p>&nbsp;</p> 
+<h3>Deployment scripts</h3> 
+<p>Our old deployment system didn’t stop or start our web server. Instead, it tried to swap out the build artifacts from under the server while the server was running. That’s definitely a bad idea.</p> 
+<p>We wrote some deployment scripts in Powershell that are run by CodeDeploy to stop and start our IIS web servers. These scripts work in conjunction with the Elastic Load Balancing (ELB) support in CodeDeploy because we certainly didn’t want to stop the web server while it’s serving customer traffic.</p> 
+<p>&nbsp;</p> 
+<h3>New fleet</h3> 
+<p>Because our fleet is running on Amazon EC2, we built an Amazon Machine Image (AMI) for our web fleet with the CodeDeploy agent already installed. From a fleet perspective, this was most of what we had to do. With the agent installed, CodeDeploy can use our deployment scripts to deploy our web projects.</p> 
+<p>&nbsp;</p> 
+<h3>AWS CloudFormation deployment pipeline</h3> 
+<p>Because we needed a deployment pipeline and several pieces of CodeDeploy configuration (a CodeDeploy application and at least one CodeDeploy deployment group) for each web project we want to deploy, we decided to use AWS CloudFormation to version this configuration. Our build system (TeamCity) can read from our version control system and write to Amazon S3. We made a simple build in TeamCity to push an AWS CloudFormation template to S3, which triggers a pipeline that deploys to AWS CloudFormation. This creates the CodePipeline and CodeDeploy resources. Now we can do code reviews on our infrastructure changes. More eyes is more safety! We can also trace infrastructure changes over time, just like we can with code changes.</p> 
+<p>&nbsp;</p> 
+<h3>Live traffic time!</h3> 
+<p>Our web fleets run behind Classic Load Balancers. By choosing CodeDeploy, we can use its sweet new ELB features. For example, through an elastic load balancer, CodeDeploy can prevent internet traffic from being routed to an instance while it is being deployed to. After the deployment to that instance is complete, it then makes the instance available for traffic.</p> 
+<p>We launched new hosts with the CodeDeploy agent and deployed to them without ELB support turned on. Then we slowly, manually introduced them into our fleet while monitoring stats. After we had the new machines in, we slowly removed the old ones from the load balancer until our fleet was fully supported by CodeDeploy. Doing the migration this way resulted in 0 downtime for our sites.</p> 
+<p>One fun detail: When we had 2/3 of the new fleet in our load balancer, we triggered a CodeDeploy deployment to the fleet, but this time with ELB support turned on. This caused CodeDeploy to place the rest of the machines into the load balancer (coexisting with the old fleet), and there were slightly fewer buttons to press.</p> 
+<p>&nbsp;</p> 
+<b>AWS CloudFormation example</b> 
+<p>This is a simplified example of the AWS CloudFormation template we use to manage the AWS configuration for one of our web projects. It is deployed in a deployment pipeline, much like the web projects themselves.</p> 
+<code class="lang-yaml">Parameters:
+CodePipelineBucket:
+Type: String
+CodePipelineRole:
+Type: String
+CodeDeployRole:
+Type: String
+CodeDeployBucket:
+Type: String
+Resources:
+### Woot.Example deployment configuration ###
+ExampleDeploymentConfig:
+Type: 'AWS::CodeDeploy::DeploymentConfig'
+Properties:
+MinimumHealthyHosts:
+Type: FLEET_PERCENT
+Value: '66' # Let's keep 2/3 of the fleet healthy at any point
+#Woot.Example CodeDeploy application
+WootExampleApplication:
+Type: &quot;AWS::CodeDeploy::Application&quot;
+Properties:
+ApplicationName: &quot;Woot.Example&quot;
+#Woot.Example CodeDeploy deployment groups
+WootExampleDeploymentGroup:
+DependsOn: &quot;WootExampleApplication&quot;
+Type: &quot;AWS::CodeDeploy::DeploymentGroup&quot;
+Properties:
+ApplicationName: &quot;Woot.Example&quot;
+DeploymentConfigName: !Ref &quot;ExampleDeploymentConfig&quot; # use the deployment configuration we created
+DeploymentGroupName: &quot;Woot.Example.Main&quot;
+AutoRollbackConfiguration:
+Enabled: true
+Events:
+- DEPLOYMENT_FAILURE # this makes the deployment rollback when the deployment hits the failure threshold
+- DEPLOYMENT_STOP_ON_REQUEST # this makes the deployment rollback if you hit the stop button
+LoadBalancerInfo:
+ElbInfoList:
+- Name: &quot;WootExampleInternal&quot; # this is the ELB the hosts live in, they will be added and removed from here
+DeploymentStyle:
+DeploymentOption: &quot;WITH_TRAFFIC_CONTROL&quot; # this tells CodeDeploy to actually add/remove the hosts from the ELB
+Ec2TagFilters:
+-
+Key: &quot;Name&quot;
+Value: &quot;exampleweb*&quot; # deploy to all machines named like exampleweb001.yourdomain.com, etc
+Type: &quot;KEY_AND_VALUE&quot;
+ServiceRoleArn: !Sub &quot;arn:aws:iam::${AWS::AccountId}:role/${CodeDeployRole}&quot; # this is the IAM role CodeDeploy in your account should use
+#Woot.Example CodePipeline
+WootExampleDeploymentPipeline:
+DependsOn: &quot;WootExampleDeploymentGroup&quot;
+Type: &quot;AWS::CodePipeline::Pipeline&quot;
+Properties:
+RoleArn: !Sub &quot;arn:aws:iam::${AWS::AccountId}:role/${CodePipelineRole}&quot; # this is the IAM role CodePipeline in your account should use
+Name: &quot;Woot.Example&quot; # name of the pipeline
+ArtifactStore:
+Type: S3
+Location: !Ref &quot;CodePipelineBucket&quot; # the bucket CodePipeline uses in your account to shuffle artifacts around
+Stages:
+-
+Name: Source # one S3 source stage
+Actions:
+-
+Name: SourceAction
+ActionTypeId:
+Category: Source
+Owner: AWS
+Version: 1
+Provider: S3
+OutputArtifacts:
+-
+Name: SourceOutput
+Configuration:
+S3Bucket: !Ref &quot;CodeDeployBucket&quot; # the S3 bucket your builds go into (needs to be versioned)
+S3ObjectKey: &quot;Woot.Example/Woot.Example-Release.zip&quot; # build artifact path for this application
+RunOrder: 1
+-
+Name: Deploy # one deploy stage that triggers the CodeDeploy deployment
+Actions:
+-
+Name: DeployAction
+ActionTypeId:
+Category: Deploy
+Owner: AWS
+Version: 1
+Provider: CodeDeploy
+InputArtifacts:
+-
+Name: SourceOutput
+Configuration:
+ApplicationName: &quot;Woot.Example&quot;
+DeploymentGroupName: &quot;Woot.Example.Main&quot;
+RunOrder: 2</code> 
+<b></b> 
+<b>Appspec.yml example</b> 
+<p>This is the appspec.yml file we use for our main web front end (Woot.Web.Retail). The appspec.yml file tells CodeDeploy where to put files and when to run our deployment scripts.</p> 
+<code class="lang-yaml">version: 0.0
+os: windows
+files:
+- source: /
+destination: C:\Woot\Woot.Web.Retail\Initial
+hooks:
+BeforeInstall:
+- location: bin\Deployment\stopWebsite.ps1
+- location: bin\Deployment\clearWebsiteDeployment.ps1
+AfterInstall:
+- location: bin\Deployment\startWebsite.ps1</code> 
+<b></b> 
+<b>Deployment scripts</b> 
+<p>Because our server-launching infrastructure doesn’t use CodeDeploy for initial placement of the build artifacts, CodeDeploy won’t overwrite the files. (The service has no knowledge of them.) This is both good and bad: good because CodeDeploy won’t overwrite files it didn’t write, and bad because it means we have to have a deployment script like clearWebsiteDeployment.ps1:</p> 
+<p><strong>clearWebsiteDeployment.ps1:</strong></p> 
+<code class="lang-powershell">$appName = $env:APPLICATION_NAME
+Remove-Item &quot;C:\Woot\$appName\Initial\*&quot; -recurse -force</code> 
+<p>&nbsp;</p> 
+<p><strong>stopWebsite.ps1:</strong></p> 
+<code class="lang-powershell"># restart script as 64bit powershell if it's 32 bit
+if ($PSHOME -like &quot;*SysWOW64*&quot;) {
+&amp; (Join-Path ($PSHOME -replace &quot;SysWOW64&quot;, &quot;SysNative&quot;) powershell.exe) -File `
+(Join-Path $PSScriptRoot $MyInvocation.MyCommand) @args
+Exit $LastExitCode
+}
+Import-Module WebAdministration
+Stop-Website -name $env:APPLICATION_NAME
+#sleep for 10 seconds to give IIS a chance to stop
+Start-Sleep -s 10
+$website = Get-Website -name &quot;*$env:APPLICATION_NAME*&quot;
+if ($website.state -ne 'stopped') {
+throw &quot;The website cannot be stopped&quot;
+}</code> 
+<p>&nbsp;</p> 
+<p><strong>startWebsite.ps1:</strong></p> 
+<code class="lang-powershell"># restart script as 64bit powershell if it's 32 bit
+if ($PSHOME -like &quot;*SysWOW64*&quot;) {
+&amp; (Join-Path ($PSHOME -replace &quot;SysWOW64&quot;, &quot;SysNative&quot;) powershell.exe) -File `
+(Join-Path $PSScriptRoot $MyInvocation.MyCommand) @args
+Exit $LastExitCode
+}
+Import-Module WebAdministration
+Start-Website -name $env:APPLICATION_NAME
+#sleep for 10 seconds to give IIS a chance to start
+Start-Sleep -s 10
+$website = Get-Website -name &quot;*$env:APPLICATION_NAME*&quot;
+if ($website.state -ne 'started') {
+throw &quot;The website cannot be started&quot;
+}</code> 
+<p>You can see we used a CodeDeploy environment variable ($env:APPLICATION_NAME) in our scripts. The name of the CodeDeploy application is also the name of the IIS website. This way, we can use the same deployment scripts for multiple websites.</p> 
+<p>&nbsp;</p> 
+<b>The new hotness</b> 
+<p>Now that we’re running CodeDeploy in production we are extremely pleased with the results. Our old deployment agent, Troop, did not give us much control over the way releases went out. Now we can check on a deployment at a per-instance level, and the opportunities for automation are impressive.</p> 
+<p>After our migration, we saw a 50% reduction in HTTP 500 errors served to customers during deployments. We looked at the one-hour time slices during a deployment and compared the average count before and after our migration to CodeDeploy. These numbers show our old deployment system was hella busted (really broken).</p> 
+<p>This graph shows summed deployment errors over time and compares CodeDeploy to our legacy in-house deployment agent (Troop).</p> 
+<p>&nbsp;</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/15/CodeDeploy_vs_troop-1.png" /> 
+<p class="wp-caption-text">CodeDeploy vs Troop</p> 
+<p>We plan to implement a full cross-account release process on AWS deployment tools. We will have a single AWS account with a pipeline that controls CodeDeploy in our various environments, triggering tests and promoting to the next environment as they pass. Building something like that with our own tooling would take a lot of work. Thanks to CodeDeploy, CodePipeline, and AWS CloudFormation for making our lives easier.</p> 
+<p>&nbsp;</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/25/CB-GHE-1.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Announcing AWS CodeBuild Support for GitHub Enterprise as a Source Type and Shallow Cloning</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1083,54 +1291,6 @@ paths:
 <b>Conclusion</b> 
 <p>In this blog post, I showed you how to enable and configure cache setting for AWS CodeBuild. As you see, this can save considerable build time. It also improves resiliency by avoiding external network connections to an artifact repository.</p> 
 <p>I hope you found this post useful. Feel free to leave your feedback or suggestions in the comments.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/02/CodeBuild-social.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Access Resources in a VPC from AWS CodeBuild Builds</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">John Pignata</span></span> | on 
-<time property="datePublished" datetime="2017-11-21T11:32:09+00:00">21 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/access-resources-in-a-vpc-from-aws-codebuild-builds/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-1886" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-devops-blog&amp;disqus_identifier=1886&amp;disqus_title=Access+Resources+in+a+VPC+from+AWS+CodeBuild+Builds&amp;disqus_url=https://aws.amazon.com/blogs/devops/access-resources-in-a-vpc-from-aws-codebuild-builds/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1886');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>John Pignata, Startup Solutions Architect, Amazon Web Services</em></p> 
-<p>In this blog post we’re going to discuss a new <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> feature that is available starting today. CodeBuild&nbsp;builds can now access resources in a VPC&nbsp;directly without these resources being exposed to the public internet. These resources include <a href="https://aws.amazon.com/rds">Amazon Relational Database Service (Amazon RDS)</a>&nbsp;databases, <a href="https://aws.amazon.com/elasticache">Amazon ElastiCache</a> clusters, internal services running on <a href="https://aws.amazon.com/ec2/">Amazon Elastic Compute Cloud (Amazon EC2)</a>, and <a href="https://aws.amazon.com/ecs/">Amazon EC2 Container Service (Amazon ECS)</a>, or any service endpoints that are only reachable from within a specific VPC.</p> 
-<p>CodeBuild is a fully managed build service that compiles source code, runs tests, and produces software packages that are ready to deploy. As part of the build process, developers often require access to resources that should be isolated from the public Internet. Now CodeBuild builds can be optionally configured to have VPC connectivity and access these resources directly.</p> 
-<p><strong>Accessing Resources in a VPC</strong></p> 
-<p>You can configure builds to have access to a VPC when you create a CodeBuild project or you can update an existing CodeBuild project with VPC configuration attributes. Here’s how it looks in the console:</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/16/Picture1.png" /></p> 
-<p>&nbsp;</p> 
-<p>To configure VPC connectivity: select a VPC, one or more subnets within that VPC, and one or more VPC security groups that CodeBuild should apply when attaching to your VPC. Once configured, commands running as part of your build will be able to access resources in your VPC without transiting across the public Internet.</p> 
-<p><strong>Use Cases</strong></p> 
-<p>The availability of VPC connectivity from CodeBuild builds unlocks many potential uses. For example, you can:</p> 
-<li>Run integration tests from your build against data in an Amazon RDS instance that’s isolated on a private subnet.</li> 
-<li>Query data in an ElastiCache cluster directly from tests.</li> 
-<li>Interact with internal web services hosted on Amazon EC2, Amazon ECS, or services that use internal Elastic Load Balancing.</li> 
-<li>Retrieve dependencies from self-hosted, internal artifact repositories such as PyPI for Python, Maven for Java, npm for Node.js, and so on.</li> 
-<li>Access objects in an Amazon S3 bucket configured to allow access only through a VPC endpoint.</li> 
-<li>Query external web services that require fixed IP addresses through the Elastic IP address of the NAT gateway associated with your subnet(s).</li> 
-<p>… and more! Your builds can now access any resource that’s hosted in your VPC without any compromise on network isolation.</p> 
-<p><strong>Internet Connectivity</strong></p> 
-<p>CodeBuild requires access to resources on the public Internet to successfully execute builds. At a minimum, it must be able to reach your source repository system (such as <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a>, <a href="https://github.com">GitHub</a>, <a href="https://www.bitbucket.org">Bitbucket</a>), <a href="https://aws.amazon.com/s3/">Amazon Simple Storage Service (Amazon S3)</a> to deliver build artifacts, and <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html">Amazon CloudWatch Logs</a> to stream logs from the build process. The interface attached to your VPC will not be assigned a public IP address so to enable Internet access from your builds, you will need to set up a managed <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html">NAT Gateway</a> or <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html">NAT instance</a> for the subnets you configure. You must also ensure your security groups allow outbound access to these services.</p> 
-<p><strong>IP Address Space</strong></p> 
-<p>Each running build will be assigned an IP address from one of the subnets in your VPC that you designate for CodeBuild to use. As CodeBuild scales to meet your build volume, ensure that you select subnets with enough address space to accommodate your expected number of concurrent builds.</p> 
-<p><strong>Service Role Permissions</strong></p> 
-<p>CodeBuild requires new permissions in order to manage network interfaces on your VPCs. If you create a service role for your new projects, these permissions will be included in that role’s policy automatically. For existing service roles, you can edit the policy document to include the additional actions. For the full policy document to apply to your service role, see <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/setting-up.html#setting-up-service-permissions-group">Advanced Setup</a> in the CodeBuild documentation.</p> 
-<p>For more information, see <a href="https://docs.aws.amazon.com/codebuild/latest/userguide/vpc-support.html">VPC Support</a> in the CodeBuild documentation. We hope you find the ability to access internal resources on a VPC useful&nbsp;in your build processes! If you have any questions or feedback, feel free to reach out to us through the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=230">AWS CodeBuild forum</a> or leave a comment!</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-1886');
-});
-</script> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

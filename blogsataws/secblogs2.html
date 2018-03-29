@@ -190,6 +190,850 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/03/07/Rajat-featured-image-800-by-400.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Use Bucket Policies and Apply Defense-in-Depth to Help Secure Your Amazon S3 Data</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Rajat Ravinder Varuni</span></span> and 
+<span property="author" typeof="Person"><span property="name">Rafael Marcelino Koike</span></span> | on 
+<time property="datePublished" datetime="2018-03-07T09:26:22+00:00">07 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-route-53/" title="View all posts in Amazon Route 53*"><span property="articleSection">Amazon Route 53*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/" title="View all posts in Networking &amp; Content Delivery*"><span property="articleSection">Networking &amp; Content Delivery*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/storage/" title="View all posts in Storage*"><span property="articleSection">Storage*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-use-bucket-policies-and-apply-defense-in-depth-to-help-secure-your-amazon-s3-data/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7392" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7392&amp;disqus_title=How+to+Use+Bucket+Policies+and+Apply+Defense-in-Depth+to+Help+Secure+Your+Amazon+S3+Data&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-use-bucket-policies-and-apply-defense-in-depth-to-help-secure-your-amazon-s3-data/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7392');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Amazon S3 provides comprehensive security and compliance capabilities that meet even the most stringent regulatory requirements. It gives you flexibility in the way you manage data for cost optimization, access control, and compliance. However, because the service is flexible, a user could accidentally configure buckets in a manner that is not secure. For example, let’s say you uploaded files to an Amazon S3 bucket with public read permissions, even though you intended only to share this file with a colleague or a partner. Although this might have accomplished your task to share the file internally, the file is now available to anyone on the internet, even without authentication.</p> 
+<p>In this blog post, we show you how to prevent your Amazon S3 buckets and objects from allowing public access. We discuss how to secure data in Amazon S3 with a <a title="undefined" href="https://en.wikipedia.org/wiki/Defense_in_depth_(computing)" target="_blank" rel="noopener noreferrer">defense-in-depth</a> approach, where multiple security controls are put in place to help prevent data leakage. This approach helps prevent you from allowing public access to confidential information, such as personally identifiable information (PII) or protected health information (PHI).</p> 
+<b>Preventing your Amazon S3 buckets and objects from allowing public access</b> 
+<p>Every call to an Amazon S3 service becomes a <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html" target="_blank" rel="noopener noreferrer">REST API request</a>. When your request is transformed via a REST call, the permissions are converted into parameters included in the HTTP header or as URL parameters. The Amazon S3 bucket policy allows or denies access to the Amazon S3 bucket or Amazon S3 objects based on policy statements, and then evaluates conditions based on those parameters. To learn more, see <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/using-iam-policies.html" target="_blank" rel="noopener noreferrer">Using Bucket Policies and User Policies</a>.</p> 
+<p>With this in mind, let’s say multiple <a title="undefined" href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) users at Example Corp. have access to an Amazon S3 bucket and the objects in the bucket. Example Corp. wants to share the objects among its IAM users, while at the same time preventing the objects from being made available publicly.</p> 
+<p>To demonstrate how to do this, we start by creating an Amazon S3 bucket named <code>examplebucket</code>. After creating this bucket, we must apply the following bucket policy. This policy denies any uploaded object (<code>PutObject</code>) with the attribute <code>x-amz-acl</code> having the values <code>public-read</code>, <code>public-read-write</code>, or <code>authenticated-read</code>. This means authenticated users cannot upload objects to the bucket if the objects have public permissions.</p> 
+<code class="lang-text">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;DenyPublicReadACL&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: [
+&quot;s3:PutObject&quot;,
+&quot;s3:PutObjectAcl&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket/*&quot;,
+&quot;Condition&quot;: {
+&quot;StringEquals&quot;: {
+&quot;s3:x-amz-acl&quot;: [
+&quot;public-read&quot;,
+&quot;public-read-write&quot;,
+&quot;authenticated-read&quot;
+]
+}
+}
+},
+{
+&quot;Sid&quot;: &quot;DenyPublicReadGrant&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: [
+&quot;s3:PutObject&quot;,
+&quot;s3:PutObjectAcl&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket/*&quot;,
+&quot;Condition&quot;: {
+&quot;StringLike&quot;: {
+&quot;s3:x-amz-grant-read&quot;: [
+&quot;*http://acs.amazonaws.com/groups/global/AllUsers*&quot;,
+&quot;*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*&quot;
+]
+}
+}
+},
+{
+&quot;Sid&quot;: &quot;DenyPublicListACL&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: &quot;s3:PutBucketAcl&quot;,
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket&quot;,
+&quot;Condition&quot;: {
+&quot;StringEquals&quot;: {
+&quot;s3:x-amz-acl&quot;: [
+&quot;public-read&quot;,
+&quot;public-read-write&quot;,
+&quot;authenticated-read&quot;
+]
+}
+}
+},
+{
+&quot;Sid&quot;: &quot;DenyPublicListGrant&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: &quot;s3:PutBucketAcl&quot;,
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket&quot;,
+&quot;Condition&quot;: {
+&quot;StringLike&quot;: {
+&quot;s3:x-amz-grant-read&quot;: [
+&quot;*http://acs.amazonaws.com/groups/global/AllUsers*&quot;,
+&quot;*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*&quot;
+]
+}
+}
+}
+]
+}
+</code> 
+<p>To better understand what is happening in this bucket policy, we’ll explain each statement. Let’s start with the first statement.</p> 
+<code class="lang-text">
+{
+&quot;Sid&quot;: &quot;DenyPublicReadACL&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: [
+&quot;s3:PutObject&quot;,
+&quot;s3:PutObjectAcl&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket/*&quot;,
+&quot;Condition&quot;: {
+&quot;StringEquals&quot;: {
+&quot;s3:x-amz-acl&quot;: [
+&quot;public-read&quot;,
+&quot;public-read-write&quot;,
+&quot;authenticated-read&quot;
+]
+}
+}
+}
+</code> 
+<p>This statement accomplishes the following:</p> 
+<blockquote> 
+<p>“Deny any Amazon S3 request to <code>PutObject</code> or <code>PutObjectAcl</code> in the bucket <code>examplebucket</code> when the request includes one of the following access control lists (ACLs): <code>public-read</code>, <code>public-read-write</code>, or <code>authenticated-read</code>.”</p> 
+</blockquote> 
+<p>Remember that <a title="undefined" href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html#policy-eval-denyallow" target="_blank" rel="noopener noreferrer">IAM policies are evaluated</a> not in a first-match-and-exit model. Instead, IAM evaluates first if there is an explicit Deny. If there is not, IAM continues to evaluate if you have an explicit Allow and then you have an implicit Deny.</p> 
+<p>The above policy creates an explicit Deny. Even when any authenticated user tries to upload (<code>PutObject</code>) an object with public read or write permissions, such as <code>public-read</code> or <code>public-read-write</code> or <code>authenticated-read</code>, the action will be denied. To understand how S3 Access Permissions work, you must understand what <strong>Access Control Lists</strong> (ACL) and <strong>Grants</strong> are. You can find the documentation <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/acl-overview.html" target="_blank" rel="noopener noreferrer">here</a>.</p> 
+<p>Now let’s continue our bucket policy explanation by examining the next statement.</p> 
+<code class="lang-text">{
+&quot;Sid&quot;: &quot;DenyPublicReadGrant&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: [
+&quot;s3:PutObject&quot;,
+&quot;s3:PutObjectAcl&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket/*&quot;,
+&quot;Condition&quot;: {
+&quot;StringLike&quot;: {
+&quot;s3:x-amz-grant-read&quot;: [
+&quot;*http://acs.amazonaws.com/groups/global/AllUsers*&quot;,
+&quot;*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*&quot;
+]
+}
+}
+}
+</code> 
+<p>This statement is very similar to the first statement, except that instead of checking the ACLs, we are checking specific user groups’ grants that represent the following groups:</p> 
+<li><strong>AuthenticatedUsers group</strong>. Represented by <code>http://acs.amazonaws.com/groups/global/AuthenticatedUsers</code>, this group represents all AWS accounts. Access permissions to this group allow any AWS account to access the resource. However, all requests must be signed (authenticated).</li> 
+<li><strong>AllUsers group</strong>. Represented by <code>http://acs.amazonaws.com/groups/global/AllUsers</code>, access permissions to this group allow anyone on the internet access to the resource. The requests can be signed (authenticated) or unsigned (anonymous). Unsigned requests omit the <code>Authentication</code> header in the request.</li> 
+<p>For more information about which parameters you can use to create bucket policies, see <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/using-iam-policies.html" target="_blank" rel="noopener noreferrer">Using Bucket Policies and User Policies</a>.</p> 
+<p>Now that you know how to deny object uploads with permissions that would make the object public, you just have two statement policies that prevent users from changing the bucket permissions (Denying s3:PutBucketACL from ACL and Denying s3:PutBucketACL from Grants).</p> 
+<p>Below is how we’re preventing users from changing the bucket permisssions.</p> 
+<code class="lang-text">{
+&quot;Sid&quot;: &quot;DenyPublicListACL&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: &quot;s3:PutBucketAcl&quot;,
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket&quot;,
+&quot;Condition&quot;: {
+&quot;StringEquals&quot;: {
+&quot;s3:x-amz-acl&quot;: [
+&quot;public-read&quot;,
+&quot;public-read-write&quot;,
+&quot;authenticated-read&quot;
+]
+}
+}
+},
+{
+&quot;Sid&quot;: &quot;DenyPublicListGrant&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: {
+&quot;AWS&quot;: &quot;*&quot;
+},
+&quot;Action&quot;: &quot;s3:PutBucketAcl&quot;,
+&quot;Resource&quot;: &quot;arn:aws:s3:::examplebucket&quot;,
+&quot;Condition&quot;: {
+&quot;StringLike&quot;: {
+&quot;s3:x-amz-grant-read&quot;: [
+&quot;*http://acs.amazonaws.com/groups/global/AllUsers*&quot;,
+&quot;*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*&quot;
+]
+}
+}
+}
+</code> 
+<p>As you can see above, the statement is very similar to the Object statements, except that now we use <code>s3:PutBucketAcl</code> instead of <code>s3:PutObjectAcl</code>, the Resource is just the bucket ARN, and the objects have the “<code>/*</code>” in the end of the ARN.</p> 
+<p>In this section, we showed how to prevent IAM users from accidently uploading Amazon S3 objects with public permissions to buckets. In the next section, we show you how to enforce multiple layers of security controls, such as encryption of data at rest and in transit while serving traffic from Amazon S3.</p> 
+<b>Securing data on Amazon S3 with defense-in-depth</b> 
+<p>Let’s say that Example Corp. wants to serve files securely from Amazon S3 to its users with the following requirements:</p> 
+<li>The data must be encrypted at rest and during transit.</li> 
+<li>The data must be accessible only by a limited set of public IP addresses.</li> 
+<li>All requests for data should be handled only by <a title="undefined" href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a> (which is a content delivery network) instead of being directly available from an Amazon S3 URL. If you’re using an Amazon S3 bucket as the origin for a CloudFront distribution, you can grant public permission to read the objects in your bucket. This allows anyone to access your objects either through CloudFront or the Amazon S3 URL. CloudFront doesn’t expose Amazon S3 URLs, but your users still might have access to those URLs if your application serves any objects directly from Amazon S3, or if anyone gives out direct links to specific objects in Amazon S3.</li> 
+<li>A domain name is required to consume the content. Custom SSL certificate support lets you deliver content over HTTPS by using your own domain name and your own SSL certificate. This gives visitors to your website the security benefits of CloudFront over an SSL connection that uses your own domain name, in addition to lower latency and higher reliability.</li> 
+<p>To represent defense-in-depth visually, the following diagram contains several Amazon S3 objects (A) in a single Amazon S3 bucket (B). You can encrypt these objects on the server side or the client side. You also can configure the bucket policy such that objects are accessible only through CloudFront, which you can accomplish through an <a title="undefined" href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html" target="_blank" rel="noopener noreferrer">origin access identity</a> (C). You then can configure CloudFront to deliver content only over HTTPS in addition to using your own domain name (D).</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/bucket_policies_defense_s3.43e6c93a095f2f55b33b30276f4782ab9ec79f47.png" /></p> 
+<b>Defense-in-depth requirement 1: Data must be encrypted at rest and during transit</b> 
+<p>Let’s start with the objects themselves. Amazon S3 objects—files in this case—can range from zero bytes to multiple terabytes in size (see <a title="undefined" href="http://docs.aws.amazon.com/AmazonS3/latest/dev/UploadingObjects.html" target="_blank" rel="noopener noreferrer">service limits</a> for the latest information). Each Amazon S3 bucket includes a collection of objects, and the objects can be uploaded via the Amazon S3 console, <a title="undefined" href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS CLI</a>, or <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html" target="_blank" rel="noopener noreferrer">AWS API</a>.</p> 
+<p>You can encrypt Amazon S3 objects at rest and during transit. At rest, objects in a bucket are encrypted with <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingServerSideEncryption.html" target="_blank" rel="noopener noreferrer">server-side encryption</a> by using <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingServerSideEncryption.html" target="_blank" rel="noopener noreferrer">Amazon S3 managed keys</a> or AWS Key Management Service (AWS KMS) <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingKMSEncryption.html" target="_blank" rel="noopener noreferrer">managed keys</a> or <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/ServerSideEncryptionCustomerKeys.html" target="_blank" rel="noopener noreferrer">customer-provided</a> keys through AWS KMS. You also can encrypt objects on the <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingClientSideEncryption.html" target="_blank" rel="noopener noreferrer">client side</a> by using AWS KMS managed keys or a customer-supplied <a title="undefined" href="https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingClientSideEncryptionUpload.html" target="_blank" rel="noopener noreferrer">client-side master key</a>.</p> 
+<p>If you choose to use server-side encryption, Amazon S3 encrypts your objects before saving them on disks in AWS data centers. To encrypt an object at the time of upload, you need to add the <code>x-amz-server-side-encryption</code> header to the request to tell Amazon S3 to encrypt the object using Amazon S3 managed keys (SSE-S3), AWS KMS managed keys (SSE-KMS), or customer-provided keys (SSE-C). There are two possible values for the <code>x-amz-server-side-encryption</code> header: <code>AES256</code>, which tells Amazon S3 to use Amazon S3 managed keys, and <code>aws:kms</code>, which tells Amazon S3 to use AWS KMS managed keys.</p> 
+<p>The following code example shows a <code>Put</code> request using SSE-S3.</p> 
+<code class="lang-text">PUT /example-object HTTP/1.1
+Host: myBucket.s3.amazonaws.com
+Date: Wed, 8 Jun 2016 17:50:00 GMT
+Authorization: authorization string
+Content-Type: text/plain
+Content-Length: 11434
+x-amz-meta-author: Janet
+Expect: 100-continue
+x-amz-server-side-encryption: AES256
+[11434 bytes of object data]
+</code> 
+<p>If you choose to use client-side encryption, you can encrypt data on the client side and upload the encrypted data to Amazon S3. In this case, you manage the encryption process, the encryption keys, and related tools. You encrypt data on the client side by using AWS KMS managed keys or a customer-supplied, client-side master key.</p> 
+<b>Defense-in-depth requirement 2: Data must be accessible only by a limited set of public IP addresses</b> 
+<p>At the Amazon S3 bucket level, you can configure permissions through a bucket policy. For example, you can limit access to the objects in a bucket by IP address range or specific IP addresses. Alternatively, you can make the objects accessible only through HTTPS.</p> 
+<p>The following bucket policy allows access to Amazon S3 objects only through HTTPS (the policy was generated with the <a title="undefined" href="http://awspolicygen.s3.amazonaws.com/policygen.html" target="_blank" rel="noopener noreferrer">AWS Policy Generator</a>). Here the bucket policy explicitly denies (<code>&quot;Effect&quot;: &quot;Deny&quot;</code>) all read access (<code>&quot;Action&quot;: &quot;s3:GetObject&quot;</code>) from anybody who browses (<code>&quot;Principal&quot;: &quot;*&quot;</code>) to Amazon S3 objects within an Amazon S3 bucket if they are not accessed through HTTPS (<code>&quot;aws:SecureTransport&quot;: &quot;false&quot;</code>).</p> 
+<code class="lang-text">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Id&quot;: &quot;Policy1504640911349&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot;Stmt1504640908907&quot;,
+&quot;Effect&quot;: &quot;Deny&quot;,
+&quot;Principal&quot;: &quot;*&quot;,
+&quot;Action&quot;: &quot;s3:GetObject&quot;,
+&quot;Resource&quot;: &quot;arn:aws:s3:::/*&quot;,
+&quot;Condition&quot;: {
+&quot;Bool&quot;: {
+&quot;aws:SecureTransport&quot;: &quot;false&quot;
+}
+}
+}
+]
+}
+</code> 
+<b>Defense-in-depth requirement 3: Data must not be publicly accessible directly from an Amazon S3 URL</b> 
+<p>Next, configure <a title="undefined" href="https://aws.amazon.com/cloudfront/" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a> to serve traffic from within the bucket. The use of CloudFront serves several purposes:</p> 
+<li>CloudFront is a content delivery network that acts as a cache to serve static files quickly to clients.</li> 
+<li>Depending on the number of requests, the cost of delivery is less than if objects were served directly via Amazon S3.</li> 
+<li>Objects served through CloudFront can be limited to specific countries.</li> 
+<p>Access to these Amazon S3 objects is available only through CloudFront. We do this by creating an <a title="undefined" href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html" target="_blank" rel="noopener noreferrer">origin access identity</a> (OAI) for CloudFront and granting access to objects in the respective Amazon S3 bucket only to that OAI. As a result, access to Amazon S3 objects from the internet is possible only through CloudFront; all other means of accessing the objects—such as through an Amazon S3 URL—are denied. CloudFront acts not only as a content distribution network, but also as a host that denies access based on geographic restrictions. You apply these restrictions by updating your CloudFront web distribution and adding a whitelist that contains only a specific country’s name (let’s say Liechtenstein). Alternatively, you could add a blacklist that contains every country except that country. Learn more about how to use CloudFront geographic restriction to whitelist or blacklist a country to restrict or allow users in specific locations from accessing web content in the <a title="undefined" href="https://aws.amazon.com/premiumsupport/knowledge-center/cloudfront-geo-restriction/" target="_blank" rel="noopener noreferrer">AWS Support Knowledge Center</a>.</p> 
+<b>Defense-in-depth requirement 4: A domain name is required to consume the content</b> 
+<p>To serve content from CloudFront, you must use a domain name in the URLs for objects on your webpages or in your web application. The domain name can be either of the following:</p> 
+<li>The domain name that CloudFront automatically assigns when you create a distribution, such as <code>d111111abcdef8.cloudfront.net</code></li> 
+<li>Your own domain name, such as <code>example.com</code></li> 
+<p>For example, you might use one of the following URLs to return the file image.jpg:</p> 
+<li>http://d111111abcdef8.cloudfront.net/images/image.jpg</li> 
+<li>http://example.com/images/image.jpg</li> 
+<p>You use the same URL format whether you store the content in Amazon S3 buckets or at a custom origin, like one of your own web servers.</p> 
+<p>Instead of using the default domain name that CloudFront assigns for you when you create a distribution, you can <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-web-values-specify.html#DownloadDistValuesCNAME" target="_blank" rel="noopener noreferrer">add an alternate domain name</a> that’s easier to work with, like <code>example.com</code>. By setting up your own domain name with CloudFront, you can use a URL like this for objects in your distribution: <code>http://example.com/images/image.jpg</code>.</p> 
+<p>Let’s say that you already have a domain name hosted on <a title="undefined" href="https://aws.amazon.com/route53/" target="_blank" rel="noopener noreferrer">Amazon Route 53</a>. You would like to serve traffic from the domain name, request an SSL certificate, and add this to your CloudFront web distribution. The <a title="undefined" href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html" target="_blank" rel="noopener noreferrer">SSL offloading</a> occurs in CloudFront by serving traffic securely from each CloudFront location. You also can <a title="undefined" href="http://docs.aws.amazon.com/AmazonS3/latest/dev/website-hosting-cloudfront-walkthrough.html" target="_blank" rel="noopener noreferrer">configure CloudFront</a> to deliver your content over <a title="undefined" href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html" target="_blank" rel="noopener noreferrer">HTTPS</a> by using your custom domain name and your own <a title="undefined" href="https://aws.amazon.com/blogs/aws/new-aws-certificate-manager-deploy-ssltls-based-apps-on-aws/" target="_blank" rel="noopener noreferrer">SSL certificate</a>. Serving web content through CloudFront reduces response from the origin as requests are redirected to the nearest edge location. This results in faster download times than if the visitor had requested the content from a data center that is located farther away.</p> 
+<b>Summary</b> 
+<p>In this post, we demonstrated how you can apply policies to Amazon S3 buckets so that only users with appropriate permissions are allowed to access the buckets. Anonymous users (with public-read/public-read-write permissions) and authenticated users without the appropriate permissions are prevented from accessing the buckets.</p> 
+<p>We also examined how to secure access to objects in Amazon S3 buckets. The objects in Amazon S3 buckets can be encrypted at rest and during transit. Doing so helps provide end-to-end security from the source (in this case, Amazon S3) to your users.</p> 
+<p>If you have feedback about this blog post, submit comments in the “Comments” section below. If you have questions about this blog post, start a new thread on the <a title="undefined" href="https://forums.aws.amazon.com/forum.jspa?forumID=24" target="_blank" rel="noopener noreferrer">Amazon S3 forum</a> or contact <a title="undefined" href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">AWS Support</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7392');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/23/federated_auth_with_adfs_1-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Federated Authentication with Active Directory Federation Services (AD FS)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Kevin Higgins</span></span> | on 
+<time property="datePublished" datetime="2018-03-02T16:20:07+00:00">02 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/developer-tools/aws-command-line-interface/" title="View all posts in AWS Command Line Interface*"><span property="articleSection">AWS Command Line Interface*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/aws-federated-authentication-with-active-directory-federation-services-ad-fs/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7338" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7338&amp;disqus_title=AWS+Federated+Authentication+with+Active+Directory+Federation+Services+%28AD+FS%29&amp;disqus_url=https://aws.amazon.com/blogs/security/aws-federated-authentication-with-active-directory-federation-services-ad-fs/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7338');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Today we’d like to walk you through AWS Identity and Access Management (IAM), federated sign-in through Active Directory (AD) and Active Directory Federation Services (ADFS). With IAM, you can centrally manage users, security credentials such as access keys, and permissions that control which resources users can access. Customers have the option of creating users and group objects within IAM or they can utilize a third-party federation service to assign external directory users access to AWS resources. To streamline the administration of user access in AWS, organizations can utilize a federated solution with an external directory, allowing them to minimize administrative overhead. Benefits of this approach include leveraging existing passwords and password policies, roles and groups. This guide provides a walk-through on how to automate the federation setup across multiple accounts/roles with an Active Directory backing identity store. This will establish the minimum baseline for the authentication architecture, including the initial IdP deployment and elements for federation.</p> 
+<p><span style="text-decoration: underline"><strong>ADFS Federated Authentication Process</strong></span></p> 
+<p>The following describes the process a user will follow to authenticate to AWS using Active Directory and ADFS as the identity provider and identity brokers:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_25.dc86ecbfbbf80af3f553e7374d2a55ad1afb7016.png" /></p> 
+<ol> 
+<li>Corporate user accesses the corporate Active Directory Federation Services portal sign-in page and provides Active Directory authentication credentials.</li> 
+<li>AD FS authenticates the user against Active Directory.</li> 
+<li>Active Directory returns the user’s information, including AD group membership information.</li> 
+<li>AD FS dynamically builds ARNs by using Active Directory group memberships for the IAM roles and user attributes for the AWS account IDs, and sends a signed assertion to the users browser with a redirect to post the assertion to AWS STS.</li> 
+<li>Temporary credentials are returned using STS AssumeRoleWithSAML.</li> 
+<li>The user is authenticated and provided access to the AWS management console.</li> 
+</ol> 
+<p><span style="text-decoration: underline"><strong>Configuration Steps</strong></span></p> 
+<p>Configuration requires setup in the Identity Provider store (e.g. Active Directory), the identity broker (e.g. Active Directory Federation Services), and AWS. It is possible to configure AWS to federate authentication using a variety of third-party SAML 2.0 compliant identity providers, more information can be <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_saml_3rd-party.html">found here</a>.</p> 
+<p><span style="text-decoration: underline"><strong>AWS Configuration</strong></span></p> 
+<p>The configuration steps outlined in this document can be completed to enable federated access to multiple AWS accounts, facilitating a single sign on process across a multi-account AWS environment. Access can also be provided to multiple roles in each AWS account. The roles available to a user are based on their group memberships in the identity provider (IdP). In a multi-role and/or multi-account scenario, role assumption requires the user to select the account and role they wish to assume during the authentication process.</p> 
+<p><span style="text-decoration: underline"><strong>Identity Provider</strong></span></p> 
+<p>A SAML 2.0 identity provider is an IAM resource that describes an identity provider (IdP) service that supports the <a href="https://wiki.oasis-open.org/security">SAML 2.0 (Security Assertion Markup Language 2.0)</a> standard. AWS SAML identity provider configurations can be used to establish trust between AWS and SAML-compatible identity providers, such as Shibboleth or Microsoft Active Directory Federation Services. These enable users in an organization to access AWS resources using existing credentials from the identity provider.</p> 
+<p>A SAML identify provider can be configured using the AWS console by completing the following steps.</p> 
+<p>1. Access the “Identity Providers” section of the AWS IAM console at the following URL: <a href="https://console.aws.amazon.com/iam/home?region=us-east-1#/providers">https://console.aws.amazon.com/iam/home?region=us-east-1#/providers</a>. Click on the “Create Provider” button.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_2.3a1032e31a5de83c858ee1810b1a6842830538b3.png" /></p> 
+<p>2. Select SAML for the provider type. Select a provider name of your choosing (this will become the logical name used in the identity provider ARN). Lastly, download the FederationMetadata.xml file from your ADFS server to your client system file (https://yourADFSserverFQDN/FederationMetadata/2007-06/FederationMetadata.xml). Click “Choose File” and upload it to AWS.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_3.8b3a464702bc5a12d2ca84342040b86575eabb06.png" /></p> 
+<p>3. Click “Next Step” and then verify the information you have entered. Click “Create” to complete the AWS identity provider configuration process.</p> 
+<p><strong>IAM Role Naming Convention for User Access</strong><br /> Once the AWS identity provider configuration is complete, it is necessary to create the roles in AWS that federated users can assume via SAML 2.0. An IAM role is an AWS identity with permission policies that determine what the identity can and cannot do in AWS. In a federated authentication scenario, users (as defined in the IdP) assume an AWS role during the sign-in process. A role should be defined for each access delineation that you wish to define. For example, create a role for each line of business (LOB), or each function within a LOB. Each role will then be assigned a set of policies that define what privileges the users who will be assuming that role will have.</p> 
+<p>The following steps detail how to create a single role. These steps should be completed multiple times to enable assumption of different roles within AWS, as required.</p> 
+<p>1. Access the “Roles” section of the AWS IAM console at the following URL: <a href="https://console.aws.amazon.com/iam/home?region=us-east-1#/roles">https://console.aws.amazon.com/iam/home?region=us-east-1#/roles</a>. Click on the “Create Role” button.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_4.b66327250fe514d1522d9dafba2ec8a77de0725f.png" /></p> 
+<p>2. Select “SAML” as the trusted entity type. Click Next Step.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_5.69a994ecc1645a52e53648efaae211cdfcfaa55a.png" /></p> 
+<p>3. Select your previously created identity provider. Click Next: Permissions.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_6.d5efa7a6b3f8b6e01f1dd9b80c2d2d42d021a2e2.png" /></p> 
+<p>4. The next step requires selection of policies that represent the desired permissions the user should obtain in AWS, once they have authenticated and successfully assumed the role. This can be either a custom policy or preferably an AWS managed policy. AWS recommends leveraging existing <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_job-functions.html">AWS access policies for job functions</a> for common levels of access. For example, the “Billing” AWS Managed policy should be utilized to provide financial analyst access to AWS billing and cost information.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_7.ef4226b439e98c4ecbe39c96479c7cb1388a4362.png" /></p> 
+<p>5.&nbsp;Provide a name for your role. All roles should be created with the prefix ADFS-&lt;rolename&gt; to simplify the identification of roles in AWS that are accessed through the federated authentication process. Next click, “Create Role”.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_8.75deb2c2ef9ab7528e95185865044e1dc09bbb11.png" /></p> 
+<p><span style="text-decoration: underline"><strong>Active Directory Configuration</strong></span></p> 
+<p>Determining how you will create and delineate your AD groups and IAM roles in AWS is crucial to how you secure access to your account and manage resources. SAML assertions to the AWS environment and the respective IAM role access will be managed through regular expression (regex) matching between your on-premises AD group name to an AWS IAM role.</p> 
+<p>One approach for creating the AD groups that uniquely identify the AWS IAM role mapping is by selecting a common group naming convention. For example, your AD groups would start with an identifier, for example AWS-, as this will distinguish your AWS groups from others within the organization. Next, include the 12-digit AWS account number. Finally, add the matching role name within the AWS account. Here is an example:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_9.8631e991b7762154a86c95050781fa2e40d169c4.png" /></p> 
+<p>You should do this for each role and corresponding AWS account you wish to support with federated access. Users in Active Directory can subsequently be added to the groups, providing the ability to assume access to the corresponding roles in AWS. If a user is associated with multiple Active Directory groups and AWS accounts, they will see a list of roles by AWS account and will have the option to choose which role to assume. A user will not be able to assume more than one role at a time, but has the ability to switch between them as needed.</p> 
+<p>Note: Microsoft imposes a limit on the number of groups a user can be a member of (approximately 1,015 groups) due to the size limit for the access token that is created for each security principal. This limitation, however, is not affected by how the groups may or may not be nested.</p> 
+<p><span style="text-decoration: underline"><strong>Active Directory Federation Services Configuration</strong></span></p> 
+<p>ADFS federation occurs with the participation of two parties; the identity or claims provider (in this case the owner of the identity repository – Active Directory) and the relying party, which is another application that wishes to outsource authentication to the identity provider; in this case Amazon Secure Token Service (STS). The relying party is a federation partner that is represented by a claims provider trust in the federation service.</p> 
+<p><span style="text-decoration: underline"><strong>Relying Party</strong></span></p> 
+<p>You can configure a new relying party in Active Directory Federation Services by doing the following.</p> 
+<p>1. From the ADFS Management Console, right-click ADFS and select Add Relying Party Trust.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_10.9fd79859843b0f010de321d51f35f5a94dc5c2e0.png" /></p> 
+<p>2. In the Add Relying Party Trust Wizard, click Start.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_11.09329982f8db9c655a025040b6e1586d09b309a9.png" /></p> 
+<p>3. Check Import data about the relying party published online or on a local network, enter<br /> https://signin.aws.amazon.com/static/saml-metadata.xml, and then click Next. The metadata XML file is a standard SAML metadata document that describes AWS as a relying party.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_12.4932a319727e7185476763684ab525cb38373e2f.png" /></p> 
+<p>Note: SAML federations use metadata documents to maintain information about the public keys and certificates that each party utilizes. At run time, each member of the federation can then use this information to validate that the cryptographic elements of the distributed transactions come from the expected actors and haven’t been tampered with. Since these metadata documents do not contain any sensitive cryptographic material, AWS publishes federation metadata at <a href="https://signin.aws.amazon.com/static/saml-metadata.xml">https://signin.aws.amazon.com/static/saml-metadata.xml</a></p> 
+<p>4. Set the display name for the relying party and then click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_13.185958f6c7870d9b6144b06a274d6049a64b062d.png" /></p> 
+<p>5. We will not choose to enable/configure the MFA settings at this time.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_14.f8d6fdb15f19bcd1f1b4557e429b31802d03c091.png" /></p> 
+<p>6. Select “Permit all users to access this relying party” and click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_15.0e4626b25a2a85532da8c1497b7d02ce9baa01dc.png" /></p> 
+<p>7. Review your settings and then click Next.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_16.e5bbe2e02c7b0bcc73cdd4fee9e5d3840e30eff2.png" /></p> 
+<p>8. Choose Close on the Finish page to complete the Add Relying Party Trust Wizard. AWS is now configured as a relying party.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_26.png.01e599495877e5ad0aa2eba234bee6f83c90a32e.jpg" /></p> 
+<p><span style="text-decoration: underline"><strong>Custom Claim Rules</strong></span></p> 
+<p>Microsoft Active Directory Federation Services (AD FS) uses Claims Rule Language to issue and transform claims between claims providers and relying parties. A claim is information about a user from a trusted source. The trusted source is asserting that the information is true, and that source has authenticated the user in some manner. The claims provider is the source of the claim. This can be information pulled from an attribute store such as Active Directory (AD). The relying party is the destination for the claims, in this case AWS.</p> 
+<p>AD FS provides administrators with the option to define custom rules that they can use to determine the behavior of identity claims with the claim rule language. The Active Directory Federation Services (AD FS) claim rule language acts as the administrative building block to help manage the behavior of incoming and outgoing claims. There are four claim rules that need to be created to effectively enable Active Directory users to assume roles in AWS based on group membership in Active Directory.</p> 
+<p>Right-click on the relying party (in this case Amazon Web Services) and then click Edit Claim Rules</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_19.594240ea64134bc2c79239d9aba7f7de572df07b.png" /></p> 
+<p>Here are the steps used to create the claim rules for NameId, RoleSessionName, Get AD Groups and Roles.</p> 
+<p>1. NameId</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) In the Edit Claim Rules for &lt;relying party&gt; dialog box, click Add Rule.<br /> b) Select Transform an Incoming Claim and then click Next.<br /> c) Use the following settings:</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Claim rule name: NameId<br /> ii) Incoming claim type: Windows Account Name<br /> iii) Outgoing claim type: Name ID<br /> iv) Outgoing name ID format: Persistent Identifier<br /> v) Pass through all claim values: checked</p> 
+<p style="margin-left: 5%;margin-right: 5%">d) Click OK.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_20.982922cd43adf189967386acfb3feb380d6a4de2.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;]<br /> =&gt; issue(Type = &quot;http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier&quot;, Issuer = c.Issuer, OriginalIssuer = c.OriginalIssuer, Value = c.Value, ValueType = c.ValueType, Properties[&quot;http://schemas.xmlsoap.org/ws/2005/05/identity/claimproperties/format&quot;] = &quot;urn:oasis:names:tc:SAML:2.0:nameid-format:persistent&quot;);</code></p> 
+<p>2. RoleSessionName</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Click Add Rule<br /> b) In the Claim rule template list, select Send LDAP Attributes as Claims.<br /> c) Use the following settings:</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Claim rule name: RoleSessionName<br /> ii) Attribute store: Active Directory<br /> iii) LDAP Attribute: E-Mail-Addresses<br /> iv) Outgoing Claim Type: https://aws.amazon.com/SAML/Attributes/RoleSessionName</p> 
+<p style="margin-left: 5%;margin-right: 5%">d) Click OK</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_21.f184e9d25b5213e26499c647704cb60022d05003.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;]<br /> =&gt; issue(store = &quot;Active Directory&quot;, types = (&quot;https://aws.amazon.com/SAML/Attributes/RoleSessionName&quot;), query = &quot;;mail;{0}&quot;, param = c.Value);</code></p> 
+<p>3. Get AD Groups</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Click Add Rule.<br /> b) In the Claim rule template list, select Send Claims Using a Custom Rule and then click Next.<br /> c) For Claim Rule Name, select Get AD Groups, and then in Custom rule, enter the following:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_22.6274a5dddac2a7f58315f2c0cc3fc4f0a69b9505.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://schemas.microsoft.com/ws/2008/06/identity/claims/windowsaccountname&quot;, Issuer == &quot;AD AUTHORITY&quot;]<br /> =&gt; add(store = &quot;Active Directory&quot;, types = (&quot;http://temp/variable&quot;), query = &quot;;tokenGroups;{0}&quot;, param = c.Value);</code></p> 
+<p>This custom rule uses a script in the claim rule language that retrieves all the groups the authenticated user is a member of and places them into a temporary claim named http://temp/variable. Think of this as a variable you can access later.</p> 
+<p>Note: Ensure there’s no trailing whitespace to avoid unexpected results.</p> 
+<p>4. Role Attributes</p> 
+<p style="margin-left: 5%;margin-right: 5%">a) Unlike the two previous claims, here we used custom rules to send role attributes. This is done by retrieving all the authenticated user’s AD groups and then matching the groups that start with to IAM roles of a similar name. I used the names of these groups to create Amazon Resource Names (ARNs) of IAM roles in my AWS account (i.e., those that start with AWS-). Sending role attributes requires two custom rules. The first rule retrieves all the authenticated user’s AD group memberships and the second rule performs the transformation to the roles claim.</p> 
+<p style="margin-left: 10%;margin-right: 10%">i) Click Add Rule.<br /> ii) In the Claim rule template list, select Send Claims Using a Custom Rule and then click Next.<br /> iii) For Claim Rule Name, enter Roles, and then in Custom rule, enter the following:</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_23.99bb0356c4f02c4cdb9f91888490bf6210bca0cc.png" /></p> 
+<p>Rule language:<br /> <code>c:[Type == &quot;http://temp/variable&quot;, Value =~ &quot;(?i)^AWS-([\d]{12})&quot;] =&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/Role&quot;, Value = RegExReplace(c.Value, &quot;AWS-([\d]{12})-&quot;, &quot;arn:aws:iam::$1:saml-provider/idp1,arn:aws:iam::$1:role/&quot;));</code></p> 
+<p>This custom rule uses regular expressions to transform each of the group memberships of the form AWS-&lt;Account Number&gt;-&lt;Role Name&gt; into in the IAM role ARN, IAM federation provider ARN form AWS expects.</p> 
+<p>Note: In the example rule language above idp1 represents the logical name given to the SAML identity provider in the AWS identity provider setup. Please change this based on the logical name you chose in the IAM console for your identity provider.</p> 
+<p><span style="text-decoration: underline"><strong>Adjusting Session Duration</strong></span></p> 
+<p>By default, the temporary credentials that are issued by AWS IAM for SAML federation are valid for an hour. Depending on your organizations security stance, you may wish to adjust. You can allow your federated users to work in the AWS Management Console for up to 12 hours. This can be accomplished by adding another claim rule in your ADFS configuration. To add the rule, do the following:</p> 
+<p style="margin-left: 5%;margin-right: 5%">1. Access ADFS Management Tool on your ADFS Server.<br /> 2. Choose Relying Party Trusts, then select your AWS Relying Party configuration.<br /> 3. Choose Edit Claim Rules.<br /> 4. Choose Add Rule to configure a new rule, and then choose Send claims using a custom rule. Finally, choose Next.<br /> 5. Name your Rule “Session Duration” and add the following rule syntax.<br /> 6. Adjust the value of 28800 seconds (8 hours) as appropriate.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/federated_auth_with_adfs_24.edae1e081bc5baeb1979fc2b398f29a81e35607c.png" /></p> 
+<p>Rule language:<br /> <code>=&gt; issue(Type = &quot;https://aws.amazon.com/SAML/Attributes/SessionDuration&quot;, Value = &quot;28800&quot;);</code></p> 
+<p>Note: AD FS 2012 R2 and AD FS 2016 tokens have a sixty-minute validity period by default. This value is configurable on a per-relying party trust basis. In addition to adding the “Session Duration” claim rule, you will also need to update the security token created by AD FS. To update this value, run the following command:</p> 
+<p><code>Set-ADFSRelyingPartyTrust -TargetName “[Display Name]” -TokenLifetime 480</code></p> 
+<p>The Parameter “-TokenLifetime” determines the Lifetime in Minutes. In this example, we set the Lifetime to 480 minutes, eight hours.</p> 
+<p>These are the main settings related to session lifetimes and user authentication. Once updated, any new console session your federated users initiate will be valid for the duration specified in the SessionDuration claim.</p> 
+<p><span style="text-decoration: underline"><strong>API/CLI Access</strong></span><br /> Access to the AWS API and command-line tools using federated access can be accomplished using techniques in the following blog article:</p> 
+<p><a href="https://blogs.aws.amazon.com/security/post/Tx1LDN0UBGJJ26Q/How-to-Implement-Federated-API-and-CLI-Access-Using-SAML-2-0-and-AD-FS">https://blogs.aws.amazon.com/security/post/Tx1LDN0UBGJJ26Q/How-to-Implement-Federated-API-and-CLI-Access-Using-SAML-2-0-and-AD-FS</a></p> 
+<p>This will enable your users to access your AWS environment using their domain credentials through the AWS CLI or one of the AWS SDKs.</p> 
+<p><span style="text-decoration: underline"><strong>Conclusion</strong></span><br /> In this post, I’ve shown you how to provide identity federation, and thus SSO, to the AWS Management Console for multiple accounts using SAML assertions. With this approach, the AWS Security Token service (STS) will provide temporary credentials (via SAML) for the user to ‘assume’ a role (that they have access to use, as denoted by AD Group membership) that has specific permissions associated; as opposed to providing long-term access credentials to the AWS resources. By adopting this model, you will have a secure and robust IAM approach for accessing AWS resources that align with AWS security best practices.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7338');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/26/ha_hero_certificate.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Preparing for AWS Certificate Manager (ACM) Support of Certificate Transparency</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Jonathan Kozolchyk</span></span> | on 
+<time property="datePublished" datetime="2018-02-26T14:27:52+00:00">26 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-certificate-manager/" title="View all posts in AWS Certificate Manager*"><span property="articleSection">AWS Certificate Manager*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-get-ready-for-certificate-transparency/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7278" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7278&amp;disqus_title=Preparing+for+AWS+Certificate+Manager+%28ACM%29+Support+of+Certificate+Transparency&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-get-ready-for-certificate-transparency/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7278');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><img width="100%" src="https://d1.awsstatic.com/Digital%20Marketing/House/Hero/products/certificate-manager/ha_hero_certificate-manager.d0ab7b1a8bb871a42a5651a59b110c528fa83553.png" /></p> 
+<p>&nbsp;</p> 
+<p><strong>Update from March 27, 2018</strong>: On March 27, 2018, we updated ACM APIs so that you can disable Certificate Transparency logging on a per-certificate basis.</p> 
+<hr /> 
+<p><a href="https://groups.google.com/a/chromium.org/forum/#!topic/ct-policy/wHILiYf31DE" target="_blank" rel="noopener noreferrer">Starting April 30, 2018</a>, Google Chrome will require all publicly trusted certificates to be logged in at least two <a href="https://www.certificate-transparency.org/" target="_blank" rel="noopener noreferrer">Certificate Transparency</a>&nbsp;logs. This means that any certificate issued that is not logged will result in an error message in Google Chrome. Beginning April 24, 2018, Amazon will log all new and renewed certificates in at least two public logs unless you disable Certificate Transparency logging.</p> 
+<p>Without Certificate Transparency, it can be difficult for a domain owner to know if an unexpected certificate was issued for their domain. Under the current system, no record is kept of certificates being issued, and domain owners&nbsp;do not have a reliable way to identify rogue certificates.</p> 
+<p>To address this situation, Certificate Transparency creates a cryptographically secure log of each certificate issued. Domain owners can search the log to identify unexpected certificates, whether issued by mistake or malice. Domain owners can also identify Certificate Authorities (CAs) that are improperly issuing certificates. In this blog post, I explain more about Certificate Transparency and tell you how to prepare for it.</p> 
+<h3>How does Certificate Transparency work?</h3> 
+<p>When a CA issues a publicly trusted certificate, the CA must submit the certificate to one or more Certificate Transparency log servers. The Certificate Transparency log server responds with a signed certificate timestamp (SCT) that confirms the log server will add the certificate to the list of known certificates. The SCT is then embedded in the certificate and delivered automatically to a browser.&nbsp;The SCT is like a receipt that proves the certificate was published into the Certificate Transparency log. Starting April 30, Google Chrome will require an SCT as proof that the certificate was published to a Certificate Transparency log in order to trust the certificate without displaying an error message.</p> 
+<h3>What is Amazon doing to support Certificate Transparency?</h3> 
+<p>Certificate Transparency is a good practice.&nbsp;It enables AWS customers to be more confident that an unauthorized certificate hasn’t been issued by a CA. Beginning on April 24, 2018, Amazon will log all new and renewed certificates in at least two Certificate Transparency logs unless you disable Certificate Transparency logging.</p> 
+<p>We recognize that there can be times when our customers do not want to log certificates. For example, if you are building a website for an unreleased product and have registered the subdomain, <code>newproduct.example.com</code>, requesting a logged certificate for your domain will make it publicly known that the new product is coming. Certificate Transparency logging also can expose server hostnames that you want to keep private.&nbsp;Hostnames such as <code>payments.example.com</code>&nbsp;can reveal the purpose of a server and provide attackers with information about your private network. These logs <strong>do not</strong> contain the private key for your certificate. For these reasons, on March 27, 2018 we updated ACM APIs so that you can disable Certificate Transparency logging on a per-certificate basis using the ACM APIs or with the AWS CLI. Doing so will lead to errors in Google Chrome, which may be preferable to exposing the information.</p> 
+<p>Please refer to ACM documentation for specifics on <a href="https://docs.aws.amazon.com/acm/latest/userguide/acm-bestpractices.html#best-practices-transparency" title="undefined" target="_blank">how to opt out of Certificate Transparency logging</a>.</p> 
+<h3>Conclusion</h3> 
+<p>Beginning April 24, 2018, ACM will begin logging all new and renewed certificates by default. If you don’t want a certificate to be logged, you’ll be able to&nbsp;opt out using the AWS API or CLI. However, for Google Chrome to trust the certificate, all issued or imported certificates must have the SCT information embedded in them by April 30, 2018.</p> 
+<p>If you have comments about this blog post, submit them in the “Comments” section below. If you have questions, start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=206">ACM forum</a>.</p> 
+<p>– Jonathan</p> 
+<p><strong>Interested in additional AWS Security news? Follow the AWS Security Blog <a href="https://twitter.com/AWSsecurityinfo">on Twitter</a>.</strong></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7278');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/22/sso_user_portal_3-1136x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Single Sign-On Now Enables Command Line Interface Access for AWS Accounts Using Corporate Credentials</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Anand Murugesan</span></span> | on 
+<time property="datePublished" datetime="2018-02-22T21:57:27+00:00">22 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/developer-tools/aws-command-line-interface/" title="View all posts in AWS Command Line Interface*"><span property="articleSection">AWS Command Line Interface*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-single-sign-on-sso/" title="View all posts in AWS Single Sign-On (SSO)"><span property="articleSection">AWS Single Sign-On (SSO)</span></a>, <a href="https://aws.amazon.com/blogs/security/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/aws-single-sign-on-now-enables-command-line-interface-access-for-aws-accounts-using-corporate-credentials/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7301" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7301&amp;disqus_title=AWS+Single+Sign-On+Now+Enables+Command+Line+Interface+Access+for+AWS+Accounts+Using+Corporate+Credentials&amp;disqus_url=https://aws.amazon.com/blogs/security/aws-single-sign-on-now-enables-command-line-interface-access-for-aws-accounts-using-corporate-credentials/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7301');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Today, AWS made it easier to use the <a href="https://aws.amazon.com/cli/">AWS Command Line Interface</a> (CLI) to manage services in your AWS accounts. Now you can sign into the <a href="https://aws.amazon.com/single-sign-on/">AWS Single Sign-On</a> (AWS SSO) user portal using your existing corporate credentials, choose an AWS account and a specific permission set, and get temporary credentials to manage your AWS services through the AWS CLI.</p> 
+<p><a href="https://aws.amazon.com/blogs/security/introducing-aws-single-sign-on/">AWS SSO</a> is a service that enables you to centrally manage single sign-on access to multiple AWS accounts and business applications. <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html">AWS temporary security credentials</a> are an easy way to get short-term credentials to manage your AWS services through the AWS CLI or a <a href="https://aws.amazon.com/tools/">programmatic client</a>.</p> 
+<p>Previously, when you issued commands from the CLI to access resources in each of several AWS accounts, you had to remember the password for each account, sign in to each AWS account individually, and fetch the credentials for each account one at a time. Now, AWS SSO eliminates the need to sign in to each AWS account individually to get temporary credentials. Instead, you can sign in to the AWS SSO user portal once using your existing corporate credentials and then fetch temporary credentials for any of your authorized AWS accounts to use with the AWS CLI to access the resources in that account, limited by the permissions granted to you.</p> 
+<p>In this blog post, I’ll show how to fetch temporary credentials from the AWS SSO user portal to use with the AWS CLI to access resources in your AWS accounts. First, I’ll show you how to obtain short-term credentials for any account for a permission set for which you are authorized. Next, I’ll show you three ways to use these credentials.</p> 
+<p>For this scenario, let’s say I am an administrator at “AnyCompany” and I want to list instances in two AWS accounts by using the AWS CLI command, <code>aws ec2 describe-instances</code>. “AnyCompany” has enabled access to AWS accounts through AWS SSO.</p> 
+<p><strong>Prerequisites</strong></p> 
+<p>You need to install the <a href="https://aws.amazon.com/cli/">AWS CLI</a> to use this feature. You also need to configure AWS SSO, connect a corporate directory, and grant access to users or groups to access AWS accounts with permission sets. To learn more, see, “<a href="https://aws.amazon.com/blogs/security/introducing-aws-single-sign-on/">Introducing AWS Single Sign-On</a>“.</p> 
+<p><span style="text-decoration: underline"><strong>How to access resources in your AWS accounts by using AWS SSO and the AWS CLI</strong></span></p> 
+<p>1. Sign in to the AWS SSO user portal using your corporate credentials. If you don’t know the URL of your AWS SSO user portal, ask your IT administrator. This URL can be found in <a href="https://console.aws.amazon.com/singlesignon">AWS SSO Console</a> in the <strong>Dashboard</strong> menu, under “<strong>User portal URL</strong>” section. In the user portal, you will see the AWS accounts to which you have been granted access.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_1.acb9ce3eaf5a8249f6e27e7f8d6f343211ae297d.png" /></p> 
+<p>2. Choose “<strong>AWS Account</strong>” to expand the list of AWS accounts.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_2.90e159e24f3395a815f65ee6f66dd2db8bcea7bf.png" /></p> 
+<p>3. Choose the AWS account that you want to access using the AWS CLI. This expands the list of permission sets in the account that you can use to access the account. For this example, I choose “<strong>Administrator</strong>” permission set which has the necessary permissions to create security groups in accounts. I then choose “<strong>Command Line</strong>” or “<strong>Programmatic Access</strong>” associated with the “<strong>Administrator</strong>” permissions set.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_3.092c0aae7b0ae1b4fb702b913290114414fa8d10.png" /></p> 
+<p>4. AWS SSO shows the credentials you requested in the appropriate format for your operating system. If you need credentials for an operating system that is different from the one shown, you can switch between the <strong>MacOS</strong> <strong>and Linux</strong> and <strong>Windows</strong> tabs. AWS SSO offers three options to use the temporary security credentials (these credentials are valid for up to 60 minutes; see the following screenshot for examples of each option):</p> 
+<p>a. To run commands from the AWS CLI against the selected AWS account, copy the commands in the “<strong>Setup AWS CLI environment variables</strong>” section and paste the commands in the terminal window to set the necessary environment variables. These environment variables will be effective in the current terminal window.</p> 
+<p>b. To run commands from multiple terminal windows against the same AWS account, copy the profile in the “<strong>Setup AWS CLI profile</strong>” section<strong>&nbsp;</strong>to setup a new named profile in your AWS credentials file. To learn more, see: “<a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-config-files.html">Configuration and Credential Files</a>“. You then will be able to use the –profile option with your AWS CLI command to use this credential. This will be effective in all terminal windows that use the same credential file.</p> 
+<p>c. To access AWS resources from an AWS service client, use the credentials under the “<strong>Copy individual values</strong>” section to initialize your client. For more information, see the “Use the temporary credentials to access AWS resources” section on “<a href="https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/prog-services-sts.html">Getting Temporary Credentials with AWS STS</a>“.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_4.a38806efb8077d7708aa33cb0ece339a540bca60.png" /></p> 
+<p>5. Move your mouse over the option you want to copy credentials. I chose option 1.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_5.50ba04f52ade52f6d8420b317025e94c6e3a899a.png" /></p> 
+<p>6. I have copied, pasted, and run the AWS CLI environment variables commands in my terminal window:</p> 
+<p><code>$ export AWS_ACCESS_KEY_ID=“ASIAJWOHLDZASDEXAMPLE&quot;<br /> $ export AWS_SECRET_ACCESS_KEY=&quot;feTxcGI2aus2m4RZh+eDASvqw3vOq/jS+EXAMPLE&quot;<br /> $ export AWS_SESSION_TOKEN=&quot;FQoDYXdzEFQaDIiq9STHISISEXAMPLE”</code></p> 
+<p>7. Optionally, you can verify that the credentials are set up correctly by running the “<code>aws configure list</code>” command. Verify that the <code>access_key</code> and <code>secret_key</code> have values assigned.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_7.a5b50f4bb1f5abff2173c222c119df89cfa214d1.png" /></p> 
+<p>8. Now you can run any applicable AWS CLI commands (based on the permission set granted to you by your administrator). In the following example, I list instances in my AWS account.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/security-center/SecurityBlog/sso_user_portal_8.a9314a8cad12331c4620fd2df7041df872ca8579.png" /></p> 
+<p>9. To run the same (or different) AWS CLI command against a different AWS account, repeat this process, starting with Step 3. By keeping the AWS SSO user portal open in a browser window, you can easily switch to another AWS account without needing to sign in again. Every time you want to switch between accounts/permission sets or do additional work in an account after the temporary credentials expire, just copy fresh credentials for that account/permission set from the user portal.</p> 
+<p><span style="text-decoration: underline"><strong>Conclusion</strong></span></p> 
+<p>In this post, in order to manage services using the AWS CLI, I’ve showed you how to use your existing corporate username and password to get temporary credentials from AWS SSO. If you have questions, please start a new thread in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=277">AWS SSO Forum</a>.</p> 
+<p>– Anand Murugesan</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7301');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH3a1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Use New Advanced Security Features for Amazon Cognito User Pools</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tim Hunt</span></span> | on 
+<time property="datePublished" datetime="2018-02-19T07:57:01+00:00">19 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/mobile-services/amazon-cognito/" title="View all posts in Amazon Cognito*"><span property="articleSection">Amazon Cognito*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/mobile-services/" title="View all posts in Mobile Services*"><span property="articleSection">Mobile Services*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-use-new-advanced-security-features-for-amazon-cognito-user-pools/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7234" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7234&amp;disqus_title=How+to+Use+New+Advanced+Security+Features+for+Amazon+Cognito+User+Pools&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-use-new-advanced-security-features-for-amazon-cognito-user-pools/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7234');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/cognito/" target="_blank" rel="noopener noreferrer">Amazon Cognito</a> lets you easily add user sign-up, sign-in, and access control to your mobile and web apps. You can use fully managed user directories, called <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html" target="_blank" rel="noopener noreferrer">Amazon Cognito user pools</a>, to create accounts for your users, allow them to sign in, and update their profiles. Your users also can sign in by using external identity providers (IdPs) by <a href="https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-identity-federation.html" target="_blank" rel="noopener noreferrer">federating</a> with Amazon, Google, Facebook, SAML, or OpenID Connect (OIDC)–based IdPs. If your app is backed by resources, Amazon Cognito also gives you tools to manage permissions for accessing resources through <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html" target="_blank" rel="noopener noreferrer">roles</a> and <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html" target="_blank" rel="noopener noreferrer">policies</a>, and through integration with <a href="https://aws.amazon.com/apigateway/" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a>.</p> 
+<p>In this post, I explain some new advanced security features (in beta) that were launched at AWS re:Invent 2017 for Amazon Cognito user pools and how to use them. Note that separate prices apply to these advanced security features, as described on our <a href="https://aws.amazon.com/cognito/pricing/" target="_blank" rel="noopener noreferrer">pricing page</a>.</p> 
+<h3>The new advanced security features of Amazon Cognito</h3> 
+<p>Security is the top priority for Amazon Cognito. We handle user authentication and authorization to control access to your web and mobile apps, so security is vital. The new advanced security features add additional protections for your users that you manage in Amazon Cognito user pools. In particular, we have added protection against compromised credentials and risk-based adaptive authentication.</p> 
+<h4>Compromised credentials protection</h4> 
+<p>Our compromised credentials feature protects your users’ accounts by preventing your users from reusing credentials (a user name and password pair) that have been exposed elsewhere. This new feature addresses the issue of users reusing the same credentials for multiple websites and apps. For example, a user might use the same email address and password to sign in to multiple websites.</p> 
+<p>A security best practice is to never use the same user name password in different systems. If an attacker is able to obtain user credentials through a breach of one system, they could use those user credentials to access other systems. AWS has been able to form partnerships and programs so that Amazon Cognito is informed when a set of credentials has been compromised elsewhere. When you use compromised credentials protection in Amazon Cognito, you can prevent users of your application from signing up, signing in, and changing their password with credentials that are recognized as having been compromised. If a user attempts to use credentials that we detect have been compromised, that user is required to choose a different password.</p> 
+<h4>Risk-based adaptive authentication</h4> 
+<p>The other major advanced security feature we launched at AWS re:Invent 2017 is risk-based adaptive authentication. Adaptive authentication protects your users from attempts to compromise their accounts—and it does so intelligently to minimize any inconvenience for your customers. With adaptive authentication, Amazon Cognito examines each user pool sign-in attempt and generates a risk score for how likely the sign-in request is to be from a malicious attacker.</p> 
+<p>Amazon Cognito examines a number of factors, including whether the user has used the same device before, or has signed in from the same location or IP address. A detected risk is rated as low, medium, or high, and you can determine what actions should be taken at each risk level. You can choose to block the request if the risk level is high, or you can choose to require a second factor of authentication, in addition to the password, for the user to sign in using multi-factor authentication (MFA). With adaptive authentication, users continue to sign in with just their password when the request has characteristics of successful sign-ins in the past. Users are prompted for a second factor only when some risk is detected with a sign-in request.</p> 
+<p>To learn more about using MFA with adaptive authentication, see <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa.html" target="_blank" rel="noopener noreferrer">Multi-Factor (MFA) Authentication Settings</a>. Amazon Cognito also can now <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-email-phone-verification.html" target="_blank" rel="noopener noreferrer">verify email addresses and mobile phone numbers</a> as part of the authentication process.</p> 
+<h4><strong>Metrics and data with the advanced security features</strong></h4> 
+<p>In addition, both the compromised credentials and adaptive authentication features provide metrics and data about the following:</p> 
+<li>Sign-up, sign-in, and forgotten-password events</li> 
+<li>The risk scores that are assigned to events</li> 
+<li>The results of sign-in attempts and second-factor challenges</li> 
+<p>You can view aggregate metrics by using the <a href="https://aws.amazon.com/cloudwatch/" target="_blank" rel="noopener noreferrer">Amazon CloudWatch</a> console. You also can view each user’s sign-in history in the <a href="https://console.aws.amazon.com/cognito/home" target="_blank" rel="noopener noreferrer">Amazon Cognito console</a>.</p> 
+<h3>How to configure the advanced security features</h3> 
+<p>Now that I’ve described the new advanced security features, I will show how to configure them for your mobile or web app. You have to create an Amazon Cognito user pool in the console and save it before you can see the advanced security settings.</p> 
+<p>First you must create and configure an Amazon Cognito user pool:</p> 
+<ol> 
+<li>Go to the <a href="https://console.aws.amazon.com/cognito/home" target="_blank" rel="noopener noreferrer">Amazon Cognito console</a>, and choose <strong>Manage your User Pools</strong> to get started. If you already have a user pool that you can work with, choose that user pool. Otherwise, choose <strong>Create a user pool</strong> to create a new one.</li> 
+<li>On the <strong>MFA and verifications</strong> tab (see the following screenshot), enable MFA as <strong>Optional</strong> so that your individual users can choose to configure second factors of authentication, which are needed for adaptive authentication. (If you were to choose <strong>Required</strong> as the MFA setting for your user pool instead, all sign-ins would require a second factor of authentication. This would effectively disable adaptive authentication because a second factor of authentication would always be required.)</li> 
+</ol> 
+<p style="padding-left: 40px">You should also enable at least one second factor of authentication. As shown in the following screenshot, I have enabled both <strong>SMS text message</strong> and <strong>Time-based One-time Password</strong> (TOTPs).<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH1a.png" /></p> 
+<ol start="3"> 
+<li>On the <strong>App clients</strong> tab, create an app client by choosing <strong>add an app client</strong>, entering a name, and choosing <strong>Create app client</strong>.</li> 
+</ol> 
+<p>Second, configure the advanced security features:</p> 
+<ol> 
+<li>After you’ve configured and saved your user pool, you will see the <strong>Advanced security</strong> tab, as shown in the following screenshot. You can choose one of three modes for enabling the advanced security features: <strong>Yes</strong>, <strong>Audit only</strong>, and <strong>No</strong>: 
+<li>If you choose <strong>No</strong>, the advanced features are all turned off.</li> 
+<li>If you choose <strong>Audit only</strong>, Amazon Cognito logs all related events to CloudWatch metrics so that you can see what risks are detected, but Amazon Cognito doesn’t take any explicit actions to protect your users. Use the <strong>Audit only</strong> mode to understand what events are happening before you fully turn on the advanced security features.</li> 
+<li>If you choose <strong>Yes</strong>, you turn on the advanced security features. We recommend that you initially run the advanced security features in <strong>Audit only</strong> mode for two weeks before choosing <strong>Yes</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH2a.png" /></li> 
+</ul> </li> 
+</ol> 
+<ol start="2"> 
+<li>When you choose <strong>Yes</strong> to turn on the advanced security features, configuration options appear, as shown in the following screenshot: 
+<ol type="a"> 
+<li>First, choose if you want to configure default settings for all of your app clients, or if you want to configure settings for a specific app client. As shown in the following screenshot, you can see that I’ve chosen global default settings for all my app clients.</li> 
+<li>Next, choose the action you want to take when compromised credentials are detected. You can either <strong>Allow</strong> compromised credentials, or you can <strong>Block use </strong>of them. If you want to protect your users, you should choose <strong>Block use</strong>. However, you first can watch the metrics in CloudWatch without taking action by choosing <strong>Allow</strong>. You also can choose <strong>Customize when compromised credentials are blocked</strong>, which allows you to choose for which operations—sign up, sign in, and forgotten password—Amazon Cognito will detect and block use of compromised credentials.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH3a.png" /></li> 
+</ol> </li> 
+</ol> 
+<ol start="3"> 
+<li>The next section on the <strong>Advanced security</strong> tab includes the configuration for adaptive authentication. For each risk level (<strong>Low</strong>, <strong>Medium</strong>, and <strong>High</strong>), you can require a second factor for MFA or you can block the request, and you can notify users about the events through email. You have two MFA choices for each risk level: 
+<ol type="a"> 
+<li><strong>Optional MFA</strong> – Requires a second factor at that risk level for all users who have configured either SMS or TOTP as a second factor of authentication. Users who haven’t configured a second factor are allowed to sign in without a second factor. For optional MFA, you should encourage your users to configure a second factor of authentication for added security, but users who haven’t configured a second factor aren’t blocked from signing in.</li> 
+<li><strong>Require MFA</strong> – Requires a second factor of authentication from all users when a risk is detected, so any users who haven’t configured a second factor are blocked from signing in at any risk level that requires MFA.</li> 
+<li><strong>Block –</strong> Blocks the sign-in attempt.</li> 
+<li><strong>Notify users</strong> – Sends an email to the users to notify them about the sign-in attempt. You can customize the emails as described below.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH4a.png" /></li> 
+</ol> </li> 
+<li>In the next section on the <strong>Advanced security</strong> tab, you can customize the email notifications that Amazon Cognito sends to your users if you have selected <strong>Notify users</strong>. Amazon Cognito sends these notification emails through <a href="https://aws.amazon.com/ses/" target="_blank" rel="noopener noreferrer">Amazon Simple Email Service</a> (Amazon SES). If you haven’t already, you should go to the <a href="https://console.aws.amazon.com/ses/home" target="_blank" rel="noopener noreferrer">Amazon SES console</a> to <a href="https://docs.aws.amazon.com/ses/latest/DeveloperGuide/verify-addresses-and-domains.html" target="_blank" rel="noopener noreferrer">configure and verify an email address or domain</a> so that you can use it as the <strong>FROM email address</strong> for the notification emails that Amazon Cognito sends.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH5a.png" /></li> 
+</ol> 
+<p style="padding-left: 40px">You can customize the email subject and body for the email notifications with both HTML and plain text versions, as shown in the following screenshot.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH6a.png" /></p> 
+<ol start="5"> 
+<li>Optionally, you can enter IP addresses that you either want to <strong>Always allow</strong> by bypassing the compromised credentials and adaptive authentication features, or to <strong>Always block</strong>. For example, if you have a site where you do testing and development, you might want to include the IP address range from that site in the <strong>Always allow</strong> list so that it doesn’t get mistaken as a risky sign-in attempt.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH7a.png" /></li> 
+</ol> 
+<p>That’s all it takes to configure the advanced security features in the Amazon Cognito console.</p> 
+<h3>Enabling the advanced security features from you app</h3> 
+<p>After you have configured the advanced security features for your user pool, you need to enable them in your mobile or web app. First you need to include a version of our SDK that is recent enough to support the features, and second in some cases, you need to set some values for iOS, Android, and JavaScript.</p> 
+<p><strong>iOS:</strong> If you’re building your own user interface to sign in users and integrating the <a href="https://github.com/aws/aws-sdk-ios/tree/master/AWSCognitoIdentityProvider" target="_blank" rel="noopener noreferrer">Amazon Cognito Identity Provider SDK</a>, use at least version 2.6.7 of the SDK. If you’re using the <a href="https://github.com/aws/aws-sdk-ios/tree/master/AWSCognitoAuth" target="_blank" rel="noopener noreferrer">Amazon Cognito Auth SDK</a> to incorporate the customizable, hosted user interface to sign in users, also use at least version 2.6.7. If you’re configuring the Auth SDK by using <code>Info.plist</code>, add the <code>PoolIdForEnablingASF</code> key to your Amazon Cognito user pool configuration, and set it to your user pool ID. If you’re configuring the Auth SDK by using <code>AWSCognitoAuthConfiguration</code>, use <a href="http://docs.aws.amazon.com/AWSiOSSDK/latest/Classes/AWSCognitoAuthConfiguration.html#//api/name/initWithAppClientId:appClientSecret:scopes:signInRedirectUri:signOutRedirectUri:webDomain:identityProvider:idpIdentifier:userPoolIdForEnablingASF:" target="_blank" rel="noopener noreferrer">this initializer</a> and specify your user pool ID as <code>userPoolIdForEnablingASF</code>. For more details, see the <a href="https://github.com/awslabs/aws-sdk-ios-samples/tree/master/CognitoAuth-Sample" target="_blank" rel="noopener noreferrer">CognitoAuth sample app</a>.</p> 
+<p><strong>Android:</strong> If you’re using the <a href="https://github.com/aws/aws-sdk-android/tree/master/aws-android-sdk-cognitoauth" target="_blank" rel="noopener noreferrer">Amazon Cognito Auth SDK for Android</a> that incorporates the hosted UI to sign in users, or if you’re using the <a href="https://github.com/aws/aws-sdk-android/tree/master/aws-android-sdk-cognitoidentityprovider" target="_blank" rel="noopener noreferrer">Amazon Cognito Identity Provider SDK for Android</a> to integrate your own native user interface, use at least version 2.6.9 of the SDK.</p> 
+<p><strong>JavaScript:</strong> If you’re using the <a href="https://github.com/aws/amazon-cognito-auth-js" target="_blank" rel="noopener noreferrer">Amazon Cognito Auth JS SDK</a> to incorporate the customizable, hosted UI to sign in users, use at least version 1.1.0 of the SDK. To configure the advanced security features, add the <code>AdvancedSecurityDataCollectionFlag</code> parameter and set it as <code>true</code>. Also add the <code>UserPoolId</code> parameter and set it to your user pool ID.&nbsp;In your application, you need to include <code>&quot;https://amazon-cognito-assets.&lt;region&gt;.amazoncognito.com/amazon-cognito-advanced-security-data.min.js&quot;</code> to collect data about requests. For more details, see the <a href="https://github.com/aws/amazon-cognito-auth-js/blob/master/README.md" target="_blank" rel="noopener noreferrer">README.md</a> of the Auth JavaScript SDK and the <a href="https://github.com/aws/amazon-cognito-auth-js/blob/master/sample/SAMPLEREADME.md" target="_blank" rel="noopener noreferrer">SAMPLEREADME.md</a> of the web app sample. If you’re using the <a href="https://github.com/aws/amazon-cognito-identity-js/" target="_blank" rel="noopener noreferrer">Amazon Cognito Identity SDK</a> to build your own UI, use at least version 1.28.0 of the SDK.</p> 
+<h3>Some examples of the advanced security features in action</h3> 
+<p>Now that I have configured these advanced security features, let’s look at them in action. I’m using the customizable, hosted sign-up and sign-in screens that are built into Amazon Cognito user pools. I’ve done some minimal customization, and my sign-up page is shown in the following screenshot.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH8.png" /></p> 
+<p>With the compromised credentials feature, if a user tries to sign up with credentials that have been exposed at another site, the user is told they cannot use that password for security reasons.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH9.png" /></p> 
+<p>If a user signs in, Amazon Cognito detects a risk, and you have configured adaptive authentication, the user is asked for a second factor of authentication. The following screenshot shows an example of an SMS text message used for MFA. After the user enters a valid code from their phone, they’re successfully signed in.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH10.png" /></p> 
+<p>As I mentioned earlier in this post, Amazon Cognito also can notify your users whenever there’s a sign-in attempt that’s determined to have some risk. The following screenshot shows a basic example of a notification message, and you can customize these messages, as described previously.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH11.png" /></p> 
+<p>The advanced security features also provide aggregate metrics and event histories for individual users. You can view the aggregate metrics in the <a href="https://console.aws.amazon.com/cloudwatch" target="_blank" rel="noopener noreferrer">CloudWatch console</a>. Navigate to the <strong>Metrics</strong> section under <strong>Cognito</strong>. When you’re graphing, choose the <strong>Graphed metrics</strong> tab and choose <strong>Sum</strong> as the <strong>Statistic</strong>.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH12a.png" /></p> 
+<p>You can view the event histories for users in the Amazon Cognito console on the <strong>Users and groups</strong> tab. When you choose an individual user, you see that user’s event history listed under their profile information. As the following screenshot shows, you can see information about users’ events, including the date and time, the event type, the risk detected, and location. The event history includes the <strong>Risk level</strong> that indicates the <strong>Low</strong>, <strong>Medium</strong>, or <strong>High</strong> ratings described earlier and the <strong>Risk decision</strong> that indicates if a risk was detected and what type.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/TH13a.png" /></p> 
+<p>When you choose an entry, you see the event details and the option to <strong>Mark event as</strong> <strong>valid</strong> if it was from the user, or <strong>Mark event as invalid</strong> if it wasn’t.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/15/TH14a.png" /></p> 
+<h3>Summary</h3> 
+<p>You can use these advanced security features of Amazon Cognito user pools to protect your users from compromised credentials and attempts to compromise their user pool–based accounts in your app. You also can customize the actions taken in response to different risks, or you can use audit mode to gather metrics on detected risks without taking action. For more information about using these features, see the <a href="http://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-settings-advanced-security.html" target="_blank" rel="noopener noreferrer">Amazon Cognito Developer Guide</a>.</p> 
+<p>If you have comments about this post, submit them in the “Comments” section below. If you have questions about how to configure or use these features, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=173" target="_blank" rel="noopener noreferrer">Amazon Cognito forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Tim</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7234');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/KVB_0118-767x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Patch Linux Workloads on AWS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Koen van Blijderveen</span></span> | on 
+<time property="datePublished" datetime="2018-02-15T08:04:20+00:00">15 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-patch-linux-workloads-on-aws/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7266" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7266&amp;disqus_title=How+to+Patch+Linux+Workloads+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-patch-linux-workloads-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7266');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Most malware tries to compromise your systems by using a known vulnerability that the operating system maker has already patched. As best practices to help prevent malware from affecting your systems, you should apply all operating system patches and actively monitor your systems for missing patches.</p> 
+<p>In this blog post, I show you how to patch Linux workloads using <a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a>. To accomplish this, I will show you how to use the <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS Command Line Interface</a> (AWS CLI) to:</p> 
+<ol> 
+<li><strong>Launch an </strong><a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer"><strong>Amazon EC2</strong></a><strong> instance</strong> for use with Systems Manager.</li> 
+<li><strong>Configure Systems Manager</strong> to patch your Amazon EC2 Linux instances.</li> 
+</ol> 
+<p>In two previous blog posts (<a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">Part 1</a> and <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" target="_blank" rel="noopener noreferrer">Part 2</a>), I showed how to use the AWS Management Console to perform the necessary steps to patch, inspect, and protect Microsoft Windows workloads. You can implement those same processes for your Linux instances running in AWS by changing the instance tags and types shown in the previous blog posts.</p> 
+<p>Because most Linux system administrators are more familiar with using a command line, I show how to patch Linux workloads by using the AWS CLI in this blog post. The steps to use the <a href="https://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/overview.html" target="_blank" rel="noopener noreferrer">Amazon EBS Snapshot Scheduler</a> and <a href="https://aws.amazon.com/inspector/" target="_blank" rel="noopener noreferrer">Amazon Inspector</a> are identical for both Microsoft Windows and Linux.</p> 
+<h3>What you should know first</h3> 
+<p>To follow along with the solution in this post, you need one or more Amazon EC2 instances. You may use existing instances or create new instances. For this post, I assume this is an <a href="https://aws.amazon.com/amazon-linux-ami/" target="_blank" rel="noopener noreferrer">Amazon EC2 for Amazon Linux</a> instance installed from <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html" target="_blank" rel="noopener noreferrer">Amazon Machine Images</a> (AMIs).</p> 
+<p>Systems Manager is a collection of capabilities that helps you automate management tasks for AWS-hosted instances on Amazon EC2 and your on-premises servers. In this post, I use Systems Manager for two purposes: to run remote commands and apply operating system patches. To learn about the full capabilities of Systems Manager, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/what-is-systems-manager.html" target="_blank" rel="noopener noreferrer">What Is AWS Systems Manager?</a></p> 
+<p>As of Amazon Linux 2017.09, the AMI comes preinstalled with the Systems Manager agent. <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-patch.html" target="_blank" rel="noopener noreferrer">Systems Manager Patch Manager</a> also supports Red Hat and Ubuntu. To install the agent on these Linux distributions or an older version of Amazon Linux, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-ssm-agent.html" target="_blank" rel="noopener noreferrer">Installing and Configuring SSM Agent on Linux Instances</a>.</p> 
+<p>If you are not familiar with how to launch an Amazon EC2 instance, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html" target="_blank" rel="noopener noreferrer">Launching an Instance</a>. I also assume you launched or will launch your instance in a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Subnets.html" target="_blank" rel="noopener noreferrer">private subnet</a>. You must make sure that the Amazon EC2 instance can connect to the internet using a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) instance</a> or <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> to communicate with Systems Manager. The following diagram shows how you should structure your VPC.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/13/KVB_0118_a.png" /></p> 
+<p>Later in this post, you will assign tasks to a maintenance window to patch your instances with Systems Manager. To do this, the <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html" target="_blank" rel="noopener noreferrer">IAM user</a> you are using for this post must have the <code><a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html" target="_blank" rel="noopener noreferrer">iam:PassRole</a></code> permission. This permission allows the IAM user assigning tasks to pass his own IAM permissions to the AWS service. In this example, when you assign a task to a maintenance window, IAM passes your credentials to Systems Manager. You also should authorize your IAM user to use Amazon EC2 and Systems Manager. As mentioned before, you will be using the AWS CLI for most of the steps in this blog post. Our documentation shows you <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-welcome.html" target="_blank" rel="noopener noreferrer">how to get started with the AWS CLI</a>. Make sure you have the AWS CLI installed and configured with an AWS access key and secret access key that belong to an IAM user that have the following AWS managed policies attached to the IAM user you are using for this example: <code>AmazonEC2FullAccess</code> and <code>AmazonSSMFullAccess</code>.</p> 
+<b>Step 1: Launch an Amazon EC2 Linux instance</b> 
+<p>In this section, I show you how to launch an Amazon EC2 instance so that you can use Systems Manager with the instance. This step requires you to do three things:</p> 
+<ol type="A"> 
+<li><strong>Create an IAM role for Systems Manager</strong> before launching your Amazon EC2 instance.</li> 
+<li><strong>Launch your Amazon EC2 instance </strong>with Amazon EBS and the IAM role for Systems Manager.</li> 
+<li><strong>Add tags</strong> to the instances so that you can add your instances to a Systems Manager maintenance window based on tags.</li> 
+</ol> 
+<h3>A. Create an IAM role for Systems Manager</h3> 
+<p>Before launching an Amazon EC2 instance, I recommend that you first create an <a href="https://aws.amazon.com/iam/details/manage-roles/" target="_blank" rel="noopener noreferrer">IAM role</a> for Systems Manager, which you will use to update the Amazon EC2 instance. AWS already provides a preconfigured policy that you can use for the new role and it is called <code>AmazonEC2RoleforSSM</code>.</p> 
+<ol> 
+<li>Create a JSON file named <code>trustpolicy-ec2ssm.json</code> that contains the following trust policy. This policy describes which principal (an entity that can take action on an AWS resource) is allowed to assume the role we are going to create. In this example, the principal is the Amazon EC2 service. 
+<code class="lang-text">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: {
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to create a role named <code>EC2SSM</code> that has the AWS managed policy <code>AmazonEC2RoleforSSM</code> attached to it. This generates JSON-based output that describes the role and its parameters, if the command is successful. 
+<code class="lang-text">$ aws iam create-role --role-name EC2SSM --assume-role-policy-document file://trustpolicy-ec2ssm.json</code> 
+</ol> 
+<ol start="3"> 
+<li>Use the following command to attach the AWS managed IAM policy (<code>AmazonEC2RoleforSSM</code>) to your newly created role. 
+<code class="lang-text">$ aws iam attach-role-policy --role-name EC2SSM --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM</code> 
+</ol> 
+<ol start="4"> 
+<li>Use the following commands to create the IAM <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html" target="_blank" rel="noopener noreferrer">instance profile</a> and add the role to the instance profile. The instance profile is needed to attach the role we created earlier to your Amazon EC2 instance. 
+<code class="lang-text">$ aws iam create-instance-profile --instance-profile-name EC2SSM-IP
+$ aws iam add-role-to-instance-profile --instance-profile-name EC2SSM-IP --role-name EC2SSM</code> 
+</ol> 
+<h3>B. Launch your Amazon EC2 instance</h3> 
+<p>To follow along, you need an Amazon EC2 instance that is running Amazon Linux. You can use any existing instance you may have or create a new instance.</p> 
+<p>When launching a new Amazon EC2 instance, be sure that:</p> 
+<li>The operating system is Amazon Linux.</li> 
+<li>You attach the newly created IAM role (<code>EC2SSM</code>).</li> 
+<li>The Amazon EC2 instance can connect to Systems Manager through a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) gateway</a> or a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">NAT instance</a>.</li> 
+<ol> 
+<li>Use the following command to launch a new Amazon EC2 instance using an Amazon Linux AMI available in the US East (N. Virginia) Region (also known as us-east-1). Replace <code>YourKeyPair</code> and <code>YourSubnetId</code> with your information. For more information about creating a key pair, see the <a href="https://docs.aws.amazon.com/cli/latest/reference/ec2/create-key-pair.html" target="_blank" rel="noopener noreferrer">create-key-pair documentation</a>. Write down the <code>InstanceId</code> that is in the output because you will need it later in this post. 
+<code class="lang-text">$ aws ec2 run-instances --image-id ami-cb9ec1b1 --instance-type t2.micro --key-name <span style="color: #ff0000">YourKeyPair</span> --subnet-id <span style="color: #ff0000">YourSubnetId</span> --iam-instance-profile Name=EC2SSM-IP</code> 
+</ol> 
+<ol start="2"> 
+<li>If you are using an existing Amazon EC2 instance, you can use the following command to attach the instance profile you created earlier to your instance. 
+<code class="lang-text">$ aws ec2 associate-iam-instance-profile --instance-id <span style="color: #ff0000">YourInstanceId</span> --iam-instance-profile Name=EC2SSM-IP</code> 
+</ol> 
+<h3>C. Add tags</h3> 
+<p>The final step of configuring your Amazon EC2 instances is to add tags. You will use these tags to configure Systems Manager in Step 2 of this post. For this example, I add a tag named <code>Patch Group</code> and set the value to <code>Linux Servers</code>. I could have other groups of Amazon EC2 instances that I treat differently by having the same tag name but a different tag value. For example, I might have a collection of other servers with the tag name <code>Patch Group</code> with a value of <code>Web Servers</code>.</p> 
+<li>Use the following command to add the <code>Patch Group</code> tag to your Amazon EC2 instance. 
+<code class="lang-text">$ aws ec2 create-tags --resources <span style="color: #ff0000">YourInstanceId</span> --tags --tags Key=&quot;Patch Group&quot;,Value=&quot;Linux Servers&quot;</code> 
+<p style="padding-left: 40px"><strong>Note:</strong> You must wait a few minutes until the Amazon EC2 instance is available before you can proceed to the next section. To make sure your Amazon EC2 instance is online and ready, you can use the following AWS CLI command:</p> 
+<code class="lang-text">$ aws ec2 describe-instance-status --instance-ids <span style="color: #ff0000">YourInstanceId</span></code> 
+<p>At this point, you now have at least one Amazon EC2 instance you can use to configure Systems Manager.</p> 
+<b>Step 2: Configure Systems Manager</b> 
+<p>In this section, I show you how to configure and use Systems Manager to apply operating system patches to your Amazon EC2 instances, and how to manage patch compliance.</p> 
+<p>To start, I provide some background information about Systems Manager. Then, I cover how to:</p> 
+<ol> 
+<li><strong>Create the Systems Manager IAM role</strong> so that Systems Manager is able to perform patch operations.</li> 
+<li><strong>Create a Systems Manager patch baseline and associate it with your instance </strong>to define which patches Systems Manager should apply.</li> 
+<li><strong>Define a maintenance window</strong> to make sure Systems Manager patches your instance when you tell it to.</li> 
+<li><strong>Monitor patch compliance </strong>to verify the patch state of your instances.</li> 
+</ol> 
+<p>You must meet two prerequisites to use Systems Manager to apply operating system patches. First, you must attach the IAM role you created in the previous section, <code>EC2SSM</code>, to your Amazon EC2 instance. Second, you must install the Systems Manager agent on your Amazon EC2 instance. If you have used a recent Amazon Linux AMI, Amazon has already installed the Systems Manager agent on your Amazon EC2 instance. You can confirm this by logging in to an Amazon EC2 instance and checking the Systems Manager agent log files that are located at <code>/var/log/amazon/ssm/</code>.</p> 
+<p>To install the Systems Manager agent on an instance that does not have the agent preinstalled or if you want to use the Systems Manager agent on your on-premises servers, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-ssm-agent.html" target="_blank" rel="noopener noreferrer">Installing and Configuring the Systems Manager Agent on Linux Instances</a>. If you forgot to attach the newly created role when launching your Amazon EC2 instance or if you want to attach the role to already running Amazon EC2 instances, see <a href="https://aws.amazon.com/blogs/security/new-attach-an-aws-iam-role-to-an-existing-amazon-ec2-instance-by-using-the-aws-cli/" target="_blank" rel="noopener noreferrer">Attach an AWS IAM Role to an Existing Amazon EC2 Instance by Using the AWS CLI</a> or use the <a href="https://aws.amazon.com/blogs/security/easily-replace-or-attach-an-iam-role-to-an-existing-ec2-instance-by-using-the-ec2-console/" target="_blank" rel="noopener noreferrer">AWS Management Console</a>.</p> 
+<h3>A. Create the Systems Manager IAM role</h3> 
+<p>For a maintenance window to be able to run any tasks, you must create a new role for Systems Manager. This role is a different kind of role than the one you created earlier: this role will be used by Systems Manager instead of Amazon EC2. Earlier, you created the role, <code>EC2SSM</code>, with the policy, <code>AmazonEC2RoleforSSM</code>, which allowed the Systems Manager agent on your instance to communicate with Systems Manager. In this section, you need a new role with the policy, <code>AmazonSSMMaintenanceWindowRole</code>, so that the Systems Manager service can execute commands on your instance.</p> 
+<p>To create the new IAM role for Systems Manager:</p> 
+<ol> 
+<li>Create a JSON file named <code>trustpolicy-maintenancewindowrole.json</code> that contains the following trust policy. This policy describes which principal is allowed to assume the role you are going to create. This trust policy allows not only Amazon EC2 to assume this role, but also Systems Manager. 
+<code class="lang-text">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Statement&quot;:[
+{
+&quot;Sid&quot;:&quot;&quot;,
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Principal&quot;:{
+&quot;Service&quot;:[
+&quot;ec2.amazonaws.com&quot;,
+&quot;ssm.amazonaws.com&quot;
+]
+},
+&quot;Action&quot;:&quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to create a role named <code>MaintenanceWindowRole</code> that has the AWS managed policy, <code>AmazonSSMMaintenanceWindowRole</code>, attached to it. This command generates JSON-based output that describes the role and its parameters, if the command is successful. 
+<code class="lang-text">$ aws iam create-role --role-name MaintenanceWindowRole --assume-role-policy-document file://trustpolicy-maintenancewindowrole.json</code> 
+</ol> 
+<ol start="3"> 
+<li>Use the following command to attach the AWS managed IAM policy (<code>AmazonEC2RoleforSSM</code>) to your newly created role. 
+<code class="lang-text">$ aws iam attach-role-policy --role-name MaintenanceWindowRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonSSMMaintenanceWindowRole</code> 
+</ol> 
+<h3>B. Create a Systems Manager patch baseline and associate it with your instance</h3> 
+<p>Next, you will create a Systems Manager patch baseline and associate it with your Amazon EC2 instance. A patch baseline defines which patches Systems Manager should apply to your instance. Before you can associate the patch baseline with your instance, though, you must determine if Systems Manager recognizes your Amazon EC2 instance. Use the following command to list all instances managed by Systems Manager. The <code>--filters</code> option ensures you look only for your newly created Amazon EC2 instance.</p> 
+<code class="lang-text">$ aws ssm describe-instance-information --filters Key=InstanceIds,Values= <span style="color: #ff0000">YourInstanceId</span>
+{
+&quot;InstanceInformationList&quot;: [
+{
+&quot;IsLatestVersion&quot;: true,
+&quot;ComputerName&quot;: &quot;ip-10-50-2-245&quot;,
+&quot;PingStatus&quot;: &quot;Online&quot;,
+&quot;InstanceId&quot;: &quot;<span style="color: #ff0000">YourInstanceId</span>&quot;,
+&quot;IPAddress&quot;: &quot;10.50.2.245&quot;,
+&quot;ResourceType&quot;: &quot;EC2Instance&quot;,
+&quot;AgentVersion&quot;: &quot;2.2.120.0&quot;,
+&quot;PlatformVersion&quot;: &quot;2017.09&quot;,
+&quot;PlatformName&quot;: &quot;Amazon Linux AMI&quot;,
+&quot;PlatformType&quot;: &quot;Linux&quot;,
+&quot;LastPingDateTime&quot;: 1515759143.826
+}
+]
+}</code> 
+<p>If your instance is missing from the list, verify that:</p> 
+<ol> 
+<li>Your instance is running.</li> 
+<li>You attached the Systems Manager IAM role, <code>EC2SSM</code>.</li> 
+<li>You deployed a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> in your public subnet to ensure your VPC reflects the diagram shown earlier in this post so that the Systems Manager agent can connect to the Systems Manager internet endpoint.</li> 
+<li>The <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-agent-logs.html" target="_blank" rel="noopener noreferrer">Systems Manager agent logs</a> don’t include any unaddressed errors.</li> 
+</ol> 
+<p>Now that you have checked that Systems Manager can manage your Amazon EC2 instance, it is time to create a patch baseline. With a patch baseline, you define which patches are approved to be installed on all Amazon EC2 instances associated with the patch baseline. The <code>Patch Group</code> resource tag you defined earlier will determine to which patch group an instance belongs. If you do not specifically define a patch baseline, the default AWS-managed patch baseline is used.</p> 
+<p>To create a patch baseline:</p> 
+<ol> 
+<li>Use the following command to create a patch baseline named <code>AmazonLinuxServers</code>. With approval rules<strong>,</strong> you can determine the approved patches that will be included in your patch baseline. In this example, you add all <code>Critical</code> severity patches to the patch baseline as soon as they are released, by setting the <code>Auto approval delay</code> to <code>0 days</code>. By setting the <code>Auto approval delay</code> to <code>2 days</code>, you add to this patch baseline the <code>Important</code>, <code>Medium</code>, and <code>Low</code> severity patches two days after they are released. 
+<code class="lang-text">$ aws ssm create-patch-baseline --name &quot;AmazonLinuxServers&quot; --description &quot;Baseline containing all updates for Amazon Linux&quot; --operating-system AMAZON_LINUX --approval-rules &quot;PatchRules=[{PatchFilterGroup={PatchFilters=[{Values=[Critical],Key=SEVERITY}]},ApproveAfterDays=0,ComplianceLevel=CRITICAL},{PatchFilterGroup={PatchFilters=[{Values=[Important,Medium,Low],Key=SEVERITY}]},ApproveAfterDays=2,ComplianceLevel=HIGH}]&quot;
+{
+&quot;BaselineId&quot;: &quot;<span style="color: #ff0000">YourBaselineId</span>&quot;
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to register the patch baseline you created with your instance. To do so, you use the <code>Patch Group</code> tag that you added to your Amazon EC2 instance. 
+<code class="lang-text">$ aws ssm register-patch-baseline-for-patch-group --baseline-id <span style="color: #ff0000">YourPatchBaselineId</span> --patch-group &quot;Linux Servers&quot;
+{
+&quot;PatchGroup&quot;: &quot;Linux Servers&quot;,
+&quot;BaselineId&quot;: &quot;<span style="color: #ff0000">YourBaselineId</span>&quot;
+}</code> 
+</ol> 
+<h3>C.&nbsp; Define a maintenance window</h3> 
+<p>Now that you have successfully set up a role, created a patch baseline, and registered your Amazon EC2 instance with your patch baseline, you will define a maintenance window so that you can control when your Amazon EC2 instances will receive patches. By creating multiple maintenance windows and assigning them to different patch groups, you can make sure your Amazon EC2 instances do not all reboot at the same time.</p> 
+<p>To define a maintenance window:</p> 
+<ol> 
+<li>Use the following command to define a maintenance window. In this example command, the maintenance window will start every Saturday at 10:00 P.M. UTC. It will have a duration of 4 hours and will not start any new tasks 1 hour before the end of the maintenance window. 
+<code class="lang-text">$ aws ssm create-maintenance-window --name SaturdayNight --schedule &quot;cron(0 0 22 ? * SAT *)&quot; --duration 4 --cutoff 1 --allow-unassociated-targets
+{
+&quot;WindowId&quot;: &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;
+}</code> 
+</ol> 
+<p style="padding-left: 30px">For more information about defining a cron-based schedule for maintenance windows, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-cron.html#sysman-cron-maintenance-window" target="_blank" rel="noopener noreferrer">Cron and Rate Expressions for Maintenance Windows</a>.</p> 
+<ol start="2"> 
+<li>After defining the maintenance window, you must register the Amazon EC2 instance with the maintenance window so that Systems Manager knows which Amazon EC2 instance it should patch in this maintenance window. You can register the instance by using the same <code>Patch Group</code> tag you used to associate the Amazon EC2 instance with the AWS-provided patch baseline, as shown in the following command. 
+<code class="lang-text">$ aws ssm register-target-with-maintenance-window --window-id <span style="color: #ff0000">YourMaintenanceWindowId</span> --resource-type INSTANCE --targets &quot;Key=tag:Patch Group,Values=Linux Servers&quot;
+{
+&quot;WindowTargetId&quot;: &quot;<span style="color: #ff0000">YourWindowTargetId</span>&quot;
+}</code> 
+</ol> 
+<ol start="3"> 
+<li>Assign a task to the maintenance window that will install the operating system patches on your Amazon EC2 instance. The following command includes the following options. 
+<ol type="a"> 
+<li><code>name</code> is the name of your task and is optional. I named mine <code>Patching</code>.</li> 
+<li><code>task-arn</code> is the name of the task document you want to run.</li> 
+<li><code>max-concurrency</code> allows you to specify how many of your Amazon EC2 instances Systems Manager should patch at the same time. <code>max-errors</code> determines when Systems Manager should abort the task. For patching, this number should not be too low, because you do not want your entire patch task to stop on all instances if one instance fails. You can set this, for example, to <code>20%</code>.</li> 
+<li><code>service-role-arn</code> is the <a href="https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Name</a> (ARN) of the <code>AmazonSSMMaintenanceWindowRole</code> role you created earlier in this blog post.</li> 
+<li><code>task-invocation-parameters</code> defines the parameters that are specific to the <code>AWS-RunPatchBaseline</code> task document and tells Systems Manager that you want to install patches with a timeout of 600 seconds (10 minutes). 
+<code class="lang-text">$ aws ssm register-task-with-maintenance-window --name &quot;Patching&quot; --window-id &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot; --targets &quot;Key=WindowTargetIds,Values=<span style="color: #ff0000">YourWindowTargetId</span>&quot; --task-arn AWS-RunPatchBaseline --service-role-arn &quot;<span style="color: #ff0000">arn:aws:iam::123456789012:role/MaintenanceWindowRole</span>&quot; --task-type &quot;RUN_COMMAND&quot; --task-invocation-parameters &quot;RunCommand={Comment=,TimeoutSeconds=600,Parameters={SnapshotId=[''],Operation=[Install]}}&quot; --max-concurrency &quot;500&quot; --max-errors &quot;20%&quot;
+{
+&quot;WindowTaskId&quot;: &quot;<span style="color: #ff0000">YourWindowTaskId</span>&quot;
+}</code> 
+</ol> </li> 
+</ol> 
+<p>Now, you must wait for the maintenance window to run at least once according to the schedule you defined earlier. If your maintenance window has expired, you can check the status of any maintenance tasks Systems Manager has performed by using the following command.</p> 
+<code class="lang-text">$ aws ssm describe-maintenance-window-executions --window-id &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;
+{
+&quot;WindowExecutions&quot;: [
+{
+&quot;Status&quot;: &quot;SUCCESS&quot;,
+&quot;WindowId&quot;: &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;,
+&quot;WindowExecutionId&quot;: &quot;b594984b-430e-4ffa-a44c-a2e171de9dd3&quot;,
+&quot;EndTime&quot;: 1515766467.487,
+&quot;StartTime&quot;: 1515766457.691
+}
+]
+}</code> 
+<h3>D.&nbsp; Monitor patch compliance</h3> 
+<p>You also can see the overall patch compliance of all Amazon EC2 instances using the following command in the AWS CLI.</p> 
+<code class="lang-text">$ aws ssm list-compliance-summaries</code> 
+<p>This command shows you the number of instances that are compliant with each category and the number of instances that are not in JSON format.</p> 
+<p>You also can see overall patch compliance by choosing <strong>Compliance</strong> under <strong>Insights </strong>in the navigation pane of the <a href="https://console.aws.amazon.com/systems-manager/" target="_blank" rel="noopener noreferrer">Systems Manager console</a>. You will see a visual representation of how many Amazon EC2 instances are up to date, how many Amazon EC2 instances are noncompliant, and how many Amazon EC2 instances are compliant in relation to the earlier defined patch baseline.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/KVB_0218.png" /></p> 
+<p>In this section, you have set everything up for patch management on your instance. Now you know how to patch your Amazon EC2 instance in a controlled manner and how to check if your Amazon EC2 instance is compliant with the patch baseline you have defined. Of course, I recommend that you apply these steps to all Amazon EC2 instances you manage.</p> 
+<h3>Summary</h3> 
+<p>In this blog post, I showed how to use Systems Manager to create a patch baseline and maintenance window to keep your Amazon EC2 Linux instances up to date with the latest security patches. Remember that by creating multiple maintenance windows and assigning them to different patch groups, you can make sure your Amazon EC2 instances do not all reboot at the same time.</p> 
+<p>If you have comments about this post, submit them in the “Comments” section below. If you have questions about or issues implementing any part of this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=30" target="_blank" rel="noopener noreferrer">Amazon EC2 forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Koen</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7266');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/06/RB_CustomAuth_diagram_020618aaa-956x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Use Your Own Identity and Access Management Systems to Control Access to AWS IoT Resources</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -573,411 +1417,6 @@ ListIndexResult filteredResults = cloudDirectoryClient.listIndex(new ListIndexRe
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-7172');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/01/whitepaper-generic_1100x550_whitebg.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Addressing Data Residency with AWS</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Min Hyun</span></span> | on 
-<time property="datePublished" datetime="2018-02-02T07:59:57+00:00">02 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/addressing-data-residency-with-aws/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7161" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7161&amp;disqus_title=Addressing+Data+Residency+with+AWS&amp;disqus_url=https://aws.amazon.com/blogs/security/addressing-data-residency-with-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7161');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/01/whitepaper-generic-300x235.png" /></p> 
-<p>AWS has released a new whitepaper that has been requested by many AWS customers: <a href="https://d1.awsstatic.com/whitepapers/compliance/Data_Residency_Whitepaper.pdf" target="_blank" rel="noopener noreferrer">AWS Policy Perspectives: Data Residency</a>. <em>Data residency</em> is the requirement that all customer content processed and stored in an IT system must remain within a specific country’s borders, and it is one of the foremost concerns of governments that want to use commercial cloud services. General cybersecurity concerns and&nbsp;concerns about government requests for data have contributed to a continued focus on keeping data within countries’ borders. In fact, some governments have determined that <a href="http://www2.itif.org/2015-cross-border-data-flows.pdf?_ga=1.8208626.1580578791.1473954628" target="_blank" rel="noopener noreferrer">mandating data residency provides an extra layer of security</a>.</p> 
-<p>This approach, however, is counterproductive to the data protection objectives and the&nbsp;<a href="http://documents.worldbank.org/curated/en/961621467994698644/pdf/102724-WDR-WDR2016Overview-ENGLISH-WebResBox-394840B-OUO-9.pdf" target="_blank" rel="noopener noreferrer">IT modernization and global economic growth goals</a> that many governments have set as milestones. This new whitepaper addresses the real and perceived security risks expressed by governments when they demand in-country data residency by identifying the most likely and prevalent IT vulnerabilities and security risks, explaining the native security embedded in cloud services, and highlighting the roles and responsibilities of cloud service providers (CSPs), governments, and customers in protecting data.</p> 
-<p>Large-scale, multinational CSPs, often called <em>hyperscale</em> CSPs, represent a transformational disruption in technology because of how they support their customers with high degrees of efficiency, agility, and innovation as part of world-class security offerings. The whitepaper explains how hyperscale CSPs, such as AWS, that might be located out of country provide their customers the ability to achieve high levels of data protection through safeguards on their own platform and with turnkey tooling for their customers. They do this while at the same time preserving nation-state regulatory sovereignty.</p> 
-<p>The whitepaper also considers the commercial, public-sector, and economic effects of data residency policies and offers considerations for governments to evaluate before enforcing requirements that can unintentionally limit public-sector digital transformation goals, in turn possibly leading to increased cybersecurity risk.</p> 
-<p>AWS continues to engage with governments around the world to hear and address their top-of-mind security concerns. We take seriously our commitment to advocate for our customers’ interests and enforce security from “ground zero.” This means that when customers use AWS, they can have the confidence that their data is protected with a level of assurance that meets, if not exceeds, their needs, regardless of where the data resides.</p> 
-<p>–&nbsp;Min Hyun, Cloud Security Policy Strategist</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7161');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/16/PCIBox11.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Adds 16 More Services to Its PCI DSS Compliance Program</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chad Woolf</span></span> | on 
-<time property="datePublished" datetime="2018-01-26T07:49:31+00:00">26 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/aws-adds-16-more-services-to-its-pci-dss-compliance-program/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7094" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7094&amp;disqus_title=AWS+Adds+16+More+Services+to+Its+PCI+DSS+Compliance+Program&amp;disqus_url=https://aws.amazon.com/blogs/security/aws-adds-16-more-services-to-its-pci-dss-compliance-program/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7094');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/16/PCIBox11.jpg" /></p> 
-<p>AWS has added 16 more AWS services to its&nbsp;<a href="https://aws.amazon.com/compliance/pci-dss-level-1-faqs/" target="_blank" rel="noopener noreferrer">Payment Card Industry Data Security Standard</a>&nbsp;(PCI DSS) compliance program, giving you more options, flexibility, and functionality to process and store sensitive payment card data in the AWS Cloud. The services were audited by&nbsp;<a href="https://www.coalfire.com/" target="_blank" rel="noopener noreferrer">Coalfire</a>&nbsp;to ensure that they meet strict&nbsp;<a href="https://www.pcisecuritystandards.org/" target="_blank" rel="noopener noreferrer">PCI DSS standards</a>.</p> 
-<p>The newly compliant AWS services are:</p> 
-<li><a href="https://aws.amazon.com/inspector" target="_blank" rel="noopener noreferrer">Amazon Inspector</a></li> 
-<li><a href="http://aws.amazon.com/macie" target="_blank" rel="noopener noreferrer">Amazon Macie</a></li> 
-<li><a href="https://aws.amazon.com/quicksight" target="_blank" rel="noopener noreferrer">Amazon QuickSight</a></li> 
-<li><a href="https://docs.aws.amazon.com/AmazonS3/latest/dev/transfer-acceleration.html" target="_blank" rel="noopener noreferrer">Amazon S3 Transfer Acceleration</a></li> 
-<li><a href="https://aws.amazon.com/documentation/sagemaker/" target="_blank" rel="noopener noreferrer">Amazon SageMaker</a></li> 
-<li><a href="http://aws.amazon.com/sns" target="_blank" rel="noopener noreferrer">Amazon Simple Notification Service</a></li> 
-<li><a href="http://aws.amazon.com/batch" target="_blank" rel="noopener noreferrer">AWS Batch</a></li> 
-<li><a href="http://aws.amazon.com/codebuild" target="_blank" rel="noopener noreferrer">AWS CodeBuild</a></li> 
-<li><a href="https://aws.amazon.com/lambda/edge/" target="_blank" rel="noopener noreferrer">AWS Lambda@Edge</a></li> 
-<li><a href="http://aws.amazon.com/shield" target="_blank" rel="noopener noreferrer">AWS Shield</a></li> 
-<li><a href="http://aws.amazon.com/snowball" target="_blank" rel="noopener noreferrer">AWS Snowball</a></li> 
-<li><a href="https://aws.amazon.com/snowball-edge/" target="_blank" rel="noopener noreferrer">AWS Snowball Edge</a></li> 
-<li><a href="http://aws.amazon.com/snowmobile/" target="_blank" rel="noopener noreferrer">AWS Snowmobile</a></li> 
-<li><a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a></li> 
-<li><a href="http://aws.amazon.com/xray" target="_blank" rel="noopener noreferrer">AWS X-Ray</a></li> 
-<p>AWS now offers&nbsp;<a href="https://aws.amazon.com/compliance/services-in-scope/" target="_blank" rel="noopener noreferrer">58 services</a>&nbsp;that are officially PCI DSS compliant, giving administrators more service options for implementing a PCI-compliant cardholder environment.</p> 
-<p>For more information about the AWS PCI DSS compliance program, see&nbsp;<a href="https://aws.amazon.com/compliance/resources/" target="_blank" rel="noopener noreferrer">Compliance Resources</a>,&nbsp;<a href="https://aws.amazon.com/compliance/services-in-scope/" target="_blank" rel="noopener noreferrer">AWS Services in Scope by Compliance Program</a>, and&nbsp;<a href="https://aws.amazon.com/compliance/pci-dss-level-1-faqs/" target="_blank" rel="noopener noreferrer">PCI DSS Compliance</a>.</p> 
-<p>– Chad Woolf</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7094');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR_Diagram_010418.png" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Create an AWS IAM Policy to Grant AWS Lambda Access to an Amazon DynamoDB Table</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Andrew Robinson</span></span> | on 
-<time property="datePublished" datetime="2018-01-23T06:57:07+00:00">23 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-identity-and-access-management-iam/" title="View all posts in AWS Identity and Access Management (IAM)*"><span property="articleSection">AWS Identity and Access Management (IAM)*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/how-to-create-an-aws-iam-policy-to-grant-aws-lambda-access-to-an-amazon-dynamodb-table/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7128" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7128&amp;disqus_title=How+to+Create+an+AWS+IAM+Policy+to+Grant+AWS+Lambda+Access+to+an+Amazon+DynamoDB+Table&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-create-an-aws-iam-policy-to-grant-aws-lambda-access-to-an-amazon-dynamodb-table/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7128');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>When managing your AWS resources, you often need to grant one AWS service access to another to accomplish tasks. For example, you could use an <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a> <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-introduction-function.html" target="_blank" rel="noopener noreferrer">function</a> to resize, watermark, and postprocess images, for which you would need to store the associated metadata in <a href="https://aws.amazon.com/dynamodb/" target="_blank" rel="noopener noreferrer">Amazon DynamoDB</a>. You also could use Lambda, <a href="https://aws.amazon.com/s3/" target="_blank" rel="noopener noreferrer">Amazon S3</a>, and <a href="https://aws.amazon.com/cloudfront/" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a> to build a serverless website that uses a DynamoDB <a href="http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithTables.html" target="_blank" rel="noopener noreferrer">table</a> as a session store, with Lambda updating the information in the table. In both these examples, you need to grant Lambda functions permissions to write to DynamoDB.</p> 
-<p>In this post, I demonstrate how to create an <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html" target="_blank" rel="noopener noreferrer">policy</a> that will be attached to an IAM role. The role is then used to grant a Lambda function access to a DynamoDB table. By using an IAM policy and role to control access, I don’t need to embed credentials in code and can tightly control which services the Lambda function can access. The policy also includes permissions to allow the Lambda function to write log files to <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html" target="_blank" rel="noopener noreferrer">Amazon CloudWatch Logs</a>. This allows me to view utilization statistics for your Lambda functions and to have access to additional logging for troubleshooting issues.</p> 
-<h3>Solution overview</h3> 
-<p>The following architecture diagram presents an overview of the solution in this post.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR_Diagram_010418.png" /></p> 
-<p>The architecture of this post’s solution uses a Lambda function (1 in the preceding diagram) to make read API calls such as <code>GET</code> or <code>SCAN</code> &nbsp;and write API calls such as <code>PUT</code> or <code>UPDATE</code> to a DynamoDB table (2). The Lambda function also writes log files to CloudWatch Logs (3). The Lambda function uses an IAM role (4) that has an IAM policy attached (5) that grants access to DynamoDB and CloudWatch.</p> 
-<h3>Overview of the AWS services used in this post</h3> 
-<p>I use the following AWS services in this post’s solution:</p> 
-<li>IAM – For securely controlling access to AWS services. With IAM, you can centrally manage users, security credentials such as access keys, and permissions that control which AWS resources users and applications can access.</li> 
-<li>DynamoDB – A fast and flexible&nbsp;<a href="https://aws.amazon.com/nosql/" target="_blank" rel="noopener noreferrer">NoSQL database</a>&nbsp;service for all applications that need consistent, single-digit-millisecond latency at any scale.</li> 
-<li>Lambda – Run code without provisioning or managing servers. You pay only for the compute time you consume—there is no charge when your code is not running.</li> 
-<li>CloudWatch Logs– For monitoring, storing, and accessing log files generated by AWS resources, including Lambda.</li> 
-<h3>IAM access policies</h3> 
-<p>I have authored an IAM access policy with <a href="http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/working-with-json.html" target="_blank" rel="noopener noreferrer">JSON</a> to grant the required permissions to the DynamoDB table and CloudWatch Logs. I will attach this policy to a role, and this role will then be attached to a Lambda function, which will assume the required access to DynamoDB and CloudWatch Logs</p> 
-<p>I will walk through this policy, and explain its elements and how to create the policy in the IAM console.</p> 
-<p>The following policy grants a Lambda function read and write access to a DynamoDB table and writes log files to CloudWatch Logs. This policy is called <code>MyLambdaPolicy</code>. The following is the full JSON document of this policy (the <span style="color: #ff0000"><strong>AWS account ID</strong></span> is a placeholder value that you would replace with your own account ID).</p> 
-<code class="lang-text">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;dynamodb:BatchGetItem&quot;,
-&quot;dynamodb:GetItem&quot;,
-&quot;dynamodb:Query&quot;,
-&quot;dynamodb:Scan&quot;,
-&quot;dynamodb:BatchWriteItem&quot;,
-&quot;dynamodb:PutItem&quot;,
-&quot;dynamodb:UpdateItem&quot;
-],
-&quot;Resource&quot;: &quot;arn:aws:dynamodb:eu-west-1:<strong><span style="color: #ff0000">123456789012</span></strong>:table/SampleTable&quot;
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;logs:CreateLogStream&quot;,
-&quot;logs:PutLogEvents&quot;
-],
-&quot;Resource&quot;: &quot;arn:aws:logs:eu-west-1:<span style="color: #ff0000"><strong>123456789012</strong></span>:*&quot;
-},
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: &quot;logs:CreateLogGroup&quot;,
-&quot;Resource&quot;: &quot;*&quot;
-}
-]
-}</code> 
-<p>The first element in this policy is the <code>Version</code>, which defines the JSON version. At the time of this post’s publication, the most recent version of JSON is <code>2012-10-17</code>.</p> 
-<p>The next element in this first policy is a <code>Statement</code>. This is the main section of the policy and includes multiple elements. This first statement is to <code>Allow</code> access to DynamoDB, and in this example, the elements I use are:</p> 
-<li>An <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Effect" target="_blank" rel="noopener noreferrer">Effect</a> element – Specifies whether the statement results in an <code>Allow</code> or an explicit <code>Deny</code>. By default, access to resources is implicitly denied. In this example, I have used <code>Allow</code> because I want to allow the actions.</li> 
-<li>An <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Action" target="_blank" rel="noopener noreferrer">Action</a> element – Describes the specific actions for this statement. Each AWS service has its own set of actions that describe tasks that you can perform with that service. I have used the DynamoDB actions that I want to allow. For the definitions of all available actions for DynamoDB, see the <a href="http://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Operations.html" target="_blank" rel="noopener noreferrer">DynamoDB API Reference</a>.</li> 
-<li>A <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Resource" target="_blank" rel="noopener noreferrer">Resource</a> element – Specifies the object or objects for this statement using <a href="https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Names</a> (ARNs). You use an ARN to uniquely identify an AWS resource. All Resource elements start with <code>arn:aws</code> and then define the object or objects for the statement. I use this to specify the DynamoDB table to which I want to allow access. To build the <code>Resource</code> element for DynamoDB, I have to specify: 
-<li>The AWS service (<code>dynamodb</code>)</li> 
-<li>The AWS Region (<code>eu-west-1</code>)</li> 
-<li>The AWS account ID (<code><span style="color: #ff0000"><strong>123456789012</strong></span></code>)</li> 
-<li>The table (<code>table/SampleTable</code>)</li> 
-</ul> </li> 
-<p>The complete <code>Resource</code> element of the first statement is: <code>arn:aws:dynamodb:eu-west-1:<span style="color: #ff0000"><strong>123456789012</strong></span>:table/SampleTable</code></p> 
-<p>In this policy, I created a second statement to allow access to CloudWatch Logs so that the Lambda function can write log files for troubleshooting and analysis. I have used the same elements as for the DynamoDB statement, but have changed the following values:</p> 
-<li>For the <code>Action</code> element, I used the CloudWatch actions that I want to allow. Definitions of all the available actions for CloudWatch are provided in the <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_Operations.html" target="_blank" rel="noopener noreferrer">CloudWatch API Reference</a>.</li> 
-<li>For the <code>Resource</code> element, I specified the AWS account to which I want to allow my Lambda function to write its log files. As in the preceding example for DynamoDB, I have to use the ARN for CloudWatch Logs to specify where access should be granted. To build the <code>Resource</code> element for CloudWatch Logs, I have to specify: 
-<li>The AWS service (<code>logs</code>)</li> 
-<li>The AWS Region (<code>eu-west-1</code>)</li> 
-<li>The AWS account ID (<code><span style="color: #ff0000"><strong>123456789012</strong></span></code>)</li> 
-<li>All log groups in this account&nbsp;(<code>*</code>)</li> 
-</ul> </li> 
-<p>The complete <code>Resource</code> element of the second statement is: <code>arn:aws:logs:eu-west-1:<span style="color: #ff0000"><strong>123456789012</strong></span>:*</code></p> 
-<p>I also created a third statement to allow access to CloudWatch Logs so that the Lambda function can create a log group. This is required because the <code>logs:CreateLogGroup</code> action supports only wildcard element names.&nbsp;I used the same elements as for the DynamoDB statement, but changed the following values:</p> 
-<li>For the&nbsp;<code>Action</code>&nbsp;element, I used the CloudWatch actions that I want to allow. Definitions of all the available actions for CloudWatch are provided in the&nbsp;<a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_Operations.html" target="_blank" rel="noopener noreferrer">CloudWatch API Reference</a>.</li> 
-<li>For the&nbsp;<code>Resource</code>&nbsp;element, I used a wildcard character (“<code>*</code>“) because the <code>logs:CreateLogGroup</code> action supports only wildcard element names.</li> 
-<p>The complete <code>Resource</code> element of the second statement is: <code>*</code></p> 
-<h3>Create the IAM policy in your account</h3> 
-<p>Before you can apply <code>MyLambdaPolicy</code> to a Lambda function, you have to create the policy in your own account and then apply it to an IAM role.</p> 
-<p>To create an IAM policy:</p> 
-<ol> 
-<li>Navigate to the <a href="https://console.aws.amazon.com/iam/home" target="_blank" rel="noopener noreferrer">IAM console</a> and choose <strong>Policies</strong> in the navigation pane. Choose <strong>Create policy</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR1_0118.png" /></li> 
-<li>Because I have already written the policy in JSON, you don’t need to use the Visual Editor, so you can choose the <strong>JSON</strong> tab and paste the content of the JSON policy document shown earlier in this post (remember to replace the <span style="color: #ff0000"><strong>placeholder account ID</strong>&nbsp;</span>with your own account ID). Choose <strong>Review policy</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/30/AR2_0118_a.png" /></li> 
-<li>Name the policy <code>MyLambdaPolicy</code> and give it a description that will help you remember the policy’s purpose. You also can view a summary of the policy’s permissions. Choose <strong>Create policy</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/30/AR3_0118_a.png" /></li> 
-</ol> 
-<p>You have created the IAM policy that you will apply to the Lambda function.</p> 
-<h3>Attach the IAM policy to an IAM role</h3> 
-<p>To apply <code>MyLambdaPolicy</code> to a Lambda function, you first have to attach the policy to an IAM role.</p> 
-<p>To create a new role and attach <code>MyLambdaPolicy</code> to the role:</p> 
-<ol> 
-<li>Navigate to the <a href="https://console.aws.amazon.com/iam/home" target="_blank" rel="noopener noreferrer">IAM console</a> and choose <strong>Roles</strong> in the navigation pane. Choose <strong>Create role</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR4_0118.png" /></li> 
-<li>Choose <strong>AWS service</strong> and then choose <strong>Lambda</strong>. Choose <strong>Next: Permissions</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR5_0118.png" /></li> 
-<li>On the <strong>Attach permissions policies</strong> page, type <code>MyLambdaPolicy</code> in the <strong>Search</strong>&nbsp;box. Choose <code>MyLambdaPolicy</code> from the list of returned search results, and then choose <strong>Next: Review</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR6_0118.png" /></li> 
-<li>On the <strong>Review</strong> page, type <code>MyLambdaRole</code> in the <strong>Role name</strong> box and an appropriate description, and then choose <strong>Create role</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR7_0118.png" /></li> 
-</ol> 
-<p>You have attached the policy you created earlier to a new IAM role, which in turn can be used by a Lambda function.</p> 
-<h3>Apply the IAM role to a Lambda function</h3> 
-<p>You have created an IAM role that has an attached IAM policy that grants both read and write access to DynamoDB and write access to CloudWatch Logs. The next step is to apply the IAM role to a Lambda function.</p> 
-<p>To apply the IAM role to a Lambda function:</p> 
-<ol> 
-<li>Navigate to the <a href="https://console.aws.amazon.com/lambda/home" target="_blank" rel="noopener noreferrer">Lambda console</a> and choose <strong>Create function</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR8_0118.png" /></li> 
-<li>On the <strong>Create function</strong> page under <strong>Author from scratch</strong>, name the function <code>MyLambdaFunction</code>, and choose the runtime you want to use based on your application requirements. Lambda currently supports Node.js, Java, Python, Go, and .NET Core. From the <strong>Role</strong> dropdown, choose <strong>Choose an existing role</strong>, and from the <strong>Existing role</strong> dropdown, choose <strong>MyLambdaRole</strong>. Then choose <strong>Create function</strong>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/21/AR9_0118.png" /></li> 
-</ol> 
-<p><code>MyLambdaFunction</code> now has access to CloudWatch Logs and DynamoDB. You can choose either of these services to see the details of which permissions the function has.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/30/AR10_0118_a.png" /></p> 
-<h3>Summary</h3> 
-<p>In this post, I demonstrated how to grant a Lambda function access to a DynamoDB table by using an IAM policy. The <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-dg.pdf" target="_blank" rel="noopener noreferrer">Lambda Developer Guide</a> features guidance about how you can expand on the examples in this post and how to integrate Lambda with <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-on-demand-https.html" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a>, <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-s3.html" target="_blank" rel="noopener noreferrer">S3</a>, <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-ddb.html" target="_blank" rel="noopener noreferrer">DynamoDB</a>, <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-kinesis.html" target="_blank" rel="noopener noreferrer">Amazon Kinesis</a>, <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-cloudtrail.html" target="_blank" rel="noopener noreferrer">AWS CloudTrail</a>, and <a href="http://docs.aws.amazon.com/lambda/latest/dg/with-sns.html" target="_blank" rel="noopener noreferrer">Amazon SNS</a>.</p> 
-<p>If you have any comments about this blog post, submit them in the “Comments” section below. If you have any questions about the services used, start a new thread in the applicable AWS forum: <a href="https://forums.aws.amazon.com/forum.jspa?forumID=76" target="_blank" rel="noopener noreferrer">IAM</a>, <a href="https://forums.aws.amazon.com/forum.jspa?forumID=186" target="_blank" rel="noopener noreferrer">Lambda</a>, <a href="https://forums.aws.amazon.com/forum.jspa?forumID=131" target="_blank" rel="noopener noreferrer">DynamoDB</a>, or <a href="https://forums.aws.amazon.com/forum.jspa?forumID=138" target="_blank" rel="noopener noreferrer">CloudWatch</a>.</p> 
-<p>– Andrew</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7128');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/22/KMS_social.png" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Connect Directly to AWS Key Management Service from Amazon VPC by Using an AWS PrivateLink Endpoint</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Joe Wright</span></span> | on 
-<time property="datePublished" datetime="2018-01-22T11:23:31+00:00">22 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/amazon-vpc-networking-content-delivery/" title="View all posts in Amazon VPC*"><span property="articleSection">Amazon VPC*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-key-management-service/" title="View all posts in AWS Key Management Service*"><span property="articleSection">AWS Key Management Service*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/networking-content-delivery/aws-privatelink/" title="View all posts in AWS PrivateLink"><span property="articleSection">AWS PrivateLink</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/how-to-connect-directly-to-aws-key-management-service-from-amazon-vpc-by-using-an-aws-privatelink-endpoint/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7104" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7104&amp;disqus_title=How+to+Connect+Directly+to+AWS+Key+Management+Service+from+Amazon+VPC+by+Using+an+AWS+PrivateLink+Endpoint&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-connect-directly-to-aws-key-management-service-from-amazon-vpc-by-using-an-aws-privatelink-endpoint/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7104');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/kms/" target="_blank" rel="noopener noreferrer">AWS Key Management Service (AWS KMS)</a> now supports <a href="https://aws.amazon.com/vpc/" target="_blank" rel="noopener noreferrer">Amazon Virtual Private Cloud (Amazon VPC)</a> endpoints powered by <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/introducing-aws-privatelink-for-aws-services/" target="_blank" rel="noopener noreferrer">AWS PrivateLink</a>. This means you now can connect directly to AWS KMS through a private endpoint in your VPC, keeping all traffic within your VPC and the AWS network.</p> 
-<p>Previously, applications running inside a VPC required internet access to connect to AWS KMS. This meant managing internet connectivity through <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Internet_Gateway.html" target="_blank" rel="noopener noreferrer">internet gateways</a>, <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">Network Address Translation</a> (NAT) devices, or firewall proxies. With support for Amazon VPC endpoints, you can now keep all traffic between your VPC and AWS KMS within the AWS network and avoid management of internet connectivity. In this blog post, I show you how to create and use an Amazon VPC endpoint for AWS KMS, audit the use of AWS KMS keys through the Amazon VPC endpoint, and build stricter access controls using <a href="https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html" target="_blank" rel="noopener noreferrer">key policies</a>.</p> 
-<h3>Create and use an Amazon VPC endpoint with AWS KMS</h3> 
-<p>To get started, I will show you how to use the <a href="https://console.aws.amazon.com/vpc/home" target="_blank" rel="noopener noreferrer">Amazon VPC console</a> to create an endpoint in the US East (N. Virginia) Region, also known as us-east-1.</p> 
-<p>To create an endpoint in the US East (N. Virginia) Region:</p> 
-<ol> 
-<li>Navigate to the <a href="https://console.aws.amazon.com/vpc/home?region=us-east-1" target="_blank" rel="noopener noreferrer">Amazon VPC console</a>. In the navigation pane, choose <strong>Endpoints</strong>, and then choose <strong>Create Endpoint</strong>.</li> 
-<li>Choose <strong>AWS services</strong> for <strong>Service category</strong>.</li> 
-<li>Choose the AWS KMS <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/endpoint-service.html" target="_blank" rel="noopener noreferrer">endpoint service</a>, <code>com.amazonaws.us-east-1.kms</code>, from the <strong>Service Name </strong>list, as shown in the following screenshot.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/19/JW_1_011818b.png" /></li> 
-<li>Your VPC endpoint can span multiple <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html" target="_blank" rel="noopener noreferrer">Availability Zones</a>, providing isolation and fault tolerance. Choose a subnet from each Availability Zone from which you want to connect. An elastic network interface for the VPC endpoint is created in each subnet that you choose, each with its own <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-dns.html#vpc-dns-hostnames" target="_blank" rel="noopener noreferrer">DNS hostname</a> and private IP address.&nbsp;<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/18/JW_2_011818.png" /></li> 
-<li>If your VPC has DNS hostnames and DNS support enabled, choose <strong>Enable for this endpoint</strong> under <strong>Enable Private DNS Name</strong> to have applications use the VPC endpoint by default.</li> 
-<li>You use <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_SecurityGroups.html" target="_blank" rel="noopener noreferrer">security groups</a> to control access to your endpoint. Choose a security group from the list, or create a new one.</li> 
-<li>To finish creating the endpoint, choose <strong>Create endpoint</strong>. The console returns a VPC Endpoint ID. In our example, the VPC Endpoint ID is <code>vpce-0c0052e3fbffdb450</code>.</li> 
-<li>To connect to this endpoint, you need a DNS hostname that is generated for this endpoint. You can view these DNS hostnames by choosing the VPC Endpoint ID and then choosing the <strong>Details</strong> tab of the endpoint in the Amazon VPC console. One of the DNS hostnames for the endpoint that I created in the previous step is <code>vpce-0c0052e3fbffdb450-afmosqu8.kms.us-east-1.vpce.amazonaws.com</code>.</li> 
-</ol> 
-<p style="padding-left: 30px"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/18/JW_3_011818.png" /></p> 
-<p>You can connect to AWS KMS through the VPC endpoint by using the <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS CLI</a> or an <a href="https://aws.amazon.com/tools/" target="_blank" rel="noopener noreferrer">AWS SDK</a>. In this example, I use the following AWS CLI command to list all AWS KMS keys in the account in us-east-1.</p> 
-<p><code>aws kms list-keys --endpoint-url https://vpce-0c0052e3fbffdb450-afmosqu8.kms.us-east-1.vpce.amazonaws.com</code></p> 
-<p>If your VPC has DNS hostnames and DNS support enabled and you enabled private DNS names in the preceding steps, you can connect to your VPC endpoint by using the standard AWS KMS DNS hostname (<code>https://kms.<strong>&lt;region&gt;</strong>.amazonaws.com</code>), instead of manually configuring the endpoints in the AWS CLI or AWS SDKs. The AWS CLI and SDKs use this hostname by default to connect to KMS, so there’s nothing to change in your application to begin using the VPC endpoint.</p> 
-<p>You can monitor and audit AWS KMS usage through your VPC endpoint. Every request made to AWS KMS is logged by <a href="https://aws.amazon.com/cloudtrail/" target="_blank" rel="noopener noreferrer">AWS CloudTrail</a>. Now, when you use a VPC endpoint to make requests to AWS KMS, the endpoint ID appears in the CloudTrail log entries.</p> 
-<h3>Restrict access using key policies</h3> 
-<p>A good security practice to follow is <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege" target="_blank" rel="noopener noreferrer">least privilege</a>: granting the fewest permissions required to complete a task. You can control access to your AWS KMS keys from a specific VPC endpoint by using <a href="https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html" target="_blank" rel="noopener noreferrer">AWS KMS key policies</a> and <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management (IAM) policies</a>. The <code>aws:sourceVpce</code> condition key lets you grant or restrict access to AWS KMS keys based on the VPC endpoint used. For example, the following example key policy allows a user to perform encryption operations with a key only when the request comes through the specified VPC endpoint (replace the <span style="color: #ff0000"><strong>placeholder AWS account ID</strong></span> with your own account ID, and the <span style="color: #0000ff"><strong>placeholder VPC endpoint ID</strong></span> with your own endpoint ID).</p> 
-<code class="lang-text">{
-&quot;Id&quot;: &quot;example-key-1&quot;,
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;Enable IAM user permissions&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {&quot;AWS&quot;:[&quot;<span style="color: #ff0000"><strong>123456789012</strong></span>&quot;]},
-&quot;Action&quot;: [&quot;kms:*&quot;],
-&quot;Resource&quot;: &quot;*&quot;
-},
-{
-&quot;Sid&quot;: &quot;Restrict usage to my VPC endpoint&quot;,
-&quot;Effect&quot;: &quot;Deny&quot;,
-&quot;Principal&quot;: &quot;*&quot;,
-&quot;Action&quot;: [
-&quot;kms:Encrypt&quot;,
-&quot;kms:Decrypt&quot;,
-&quot;kms:ReEncrypt*&quot;,
-&quot;kms:GenerateDataKey*&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;,
-&quot;Condition&quot;: {
-&quot;StringNotEquals&quot;: {
-&quot;aws:sourceVpce&quot;: &quot;<span style="color: #0000ff"><strong>vpce-1a2b3c4d5e6f7g8h</strong></span>&quot;
-}
-}
-}
-]
-}</code> 
-<p>This policy works by including a Deny statement with a <code>StringNotEquals</code> condition. When a user makes a request to AWS KMS through a VPC endpoint, the endpoint’s ID is compared to the <code>aws:sourceVpce</code> value specified in the policy. If the two values are not the same, the request is denied. You can modify AWS KMS key policies in the AWS KMS console. For more information, see <a href="https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-modifying.html" target="_blank" rel="noopener noreferrer">Modifying a Key Policy</a>.</p> 
-<p>You also can control access to your AWS KMS keys from any endpoint running in one or more VPCs by using the <code>aws:sourceVpc</code> policy condition key. Suppose you have an application that is running in one VPC, but uses a second VPC for resource management functions. In the following example policy, AWS KMS key administrative actions can only be made from VPC <code>vpc-12345678</code>, and the key can only be used for cryptographic operations from VPC <code>vpc-2b2b2b2b</code>.</p> 
-<code class="lang-text">{
-&quot;Id&quot;: &quot;example-key-2&quot;,
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Sid&quot;: &quot;Allow administrative actions from vpc-12345678&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {&quot;AWS&quot;: &quot;<span style="color: #ff0000"><strong>123456789012</strong></span>&quot;},
-&quot;Action&quot;: [
-&quot;kms:Create*&quot;,&quot;kms:Enable*&quot;,&quot;kms:Put*&quot;,&quot;kms:Update*&quot;,
-&quot;kms:Revoke*&quot;,&quot;kms:Disable*&quot;,&quot;kms:Delete*&quot;,
-&quot;kms:TagResource&quot;, &quot;kms:UntagResource&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;,
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;aws:sourceVpc&quot;: &quot;<span style="color: #0000ff"><strong>vpc-12345678</strong></span>&quot;
-}
-}
-},
-{
-&quot;Sid&quot;: &quot;Allow key usage from vpc-2b2b2b2b&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {&quot;AWS&quot;: &quot;<span style="color: #ff0000"><strong>123456789012</strong></span>&quot;},
-&quot;Action&quot;: [
-&quot;kms:Encrypt&quot;,&quot;kms:Decrypt&quot;,&quot;kms:GenerateDataKey*&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;,
-&quot;Condition&quot;: {
-&quot;StringEquals&quot;: {
-&quot;aws:sourceVpc&quot;: &quot;<span style="color: #0000ff"><strong>vpc-2b2b2b2b</strong></span>&quot;
-}
-}
-},
-{
-&quot;Sid&quot;: &quot;Allow read actions from everywhere&quot;,
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Principal&quot;: {&quot;AWS&quot;: &quot;<span style="color: #ff0000"><strong>123456789012</strong></span>&quot;},
-&quot;Action&quot;: [
-&quot;kms:Describe*&quot;,&quot;kms:List*&quot;,&quot;kms:Get*&quot;
-],
-&quot;Resource&quot;: &quot;*&quot;,
-}
-]
-}</code> 
-<p>The previous examples show how you can limit access to AWS KMS API actions that are attached to a key policy. If you want to limit access to AWS KMS API actions that are not attached to a specific key, you have to use these VPC-related conditions in an IAM policy that refers to the desired AWS KMS API actions.</p> 
-<h3>Summary</h3> 
-<p>In this post, I have demonstrated how to create and use a VPC endpoint for AWS KMS, and how to use the <code>aws:sourceVpc</code> and <code>aws:sourceVpce</code> policy conditions to scope permissions to call various AWS KMS APIs. AWS KMS VPC endpoints provide you with more control over how your applications connect to AWS KMS and can save you from managing internet connectivity from your VPC.</p> 
-<p>To learn more about connecting to AWS KMS through a VPC endpoint, see the <a href="https://docs.aws.amazon.com/kms/latest/developerguide/kms-vpc-endpoint.html" target="_blank" rel="noopener noreferrer">AWS KMS Developer Guide</a>. For helpful guidance about your overall VPC network structure, see <a href="https://aws.amazon.com/blogs/startups/practical-vpc-design/" target="_blank" rel="noopener noreferrer">Practical VPC Design</a>.</p> 
-<p>If you have questions about this feature or anything else related to AWS KMS, start a new thread in the&nbsp;<a href="https://forums.aws.amazon.com/forum.jspa?forumID=182" target="_blank" rel="noopener noreferrer">AWS KMS forum</a>.</p> 
-<p>– Joe</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7104');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/19/K-ISMS_800x400.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon Web Services Is the First Global Cloud Service Provider to Achieve the Korea-Information Security Management System Certification</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Oliver Bell</span></span> | on 
-<time property="datePublished" datetime="2018-01-21T13:49:08+00:00">21 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/amazon-web-services-is-the-first-global-cloud-service-provider-to-achieve-the-korea-information-security-management-system-certification/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7120" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7120&amp;disqus_title=Amazon+Web+Services+Is+the+First+Global+Cloud+Service+Provider+to+Achieve+the++Korea-Information+Security+Management+System+Certification&amp;disqus_url=https://aws.amazon.com/blogs/security/amazon-web-services-is-the-first-global-cloud-service-provider-to-achieve-the-korea-information-security-management-system-certification/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7120');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/19/K-ISMS_800x400.png" /></p> 
-<p style="text-align: center"><strong>Scope of certification:</strong> Operation of infrastructure in the AWS Asia Pacific (Seoul) Region<br /> <strong>Period of validity:</strong> December 27, 2017, through December 26, 2020</p> 
-<p>Amazon Web Services (AWS) has achieved the <a href="http://www.kisa.or.kr/eng/main.jsp" target="_blank" rel="noopener noreferrer">Korea-Information Security Management System</a> (K-ISMS) Certification. The <a href="http://www.kisa.or.kr/eng/main.jsp" target="_blank" rel="noopener noreferrer">Korea Internet and Security Agency</a> (KISA) completed its assessment of AWS, which covered the operation of infrastructure (such as compute, storage, networking, databases, and security) in the Asia Pacific (Seoul) Region. AWS is the first global cloud service provider to earn this status in Korea.</p> 
-<p>Sponsored by KISA and affiliated with the <a href="http://english.msip.go.kr/english/main/main.do" target="_blank" rel="noopener noreferrer">Korean Ministry of Science and ICT</a> (MSIT), K-ISMS serves as a standard for evaluating whether enterprises and organizations operate and manage their information security management systems consistently and securely such that they thoroughly protect their information assets. The K-ISMS certification assessment covers 104 criteria, including 12 control items in 5 sectors for information security management, and 92 control items in 13 sectors for information security countermeasures.</p> 
-<p>With this certification, enterprises and organizations across Korea can meet KISA compliance requirements more effectively. Achieving this certification demonstrates the proactive approach AWS has taken with regard to driving compliance with the Korean government’s requirements and delivering secure AWS services to Korean customers. Enterprises and organizations in Korea that need the K-ISMS certification can use the work that AWS has done to reduce the time and cost of getting their own certification.</p> 
-<p>– Oliver</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7120');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/12/C5.png" /> 
-<b class="lb-b blog-post-title" property="name headline">EU Compliance Update: AWS’s 2017 C5 Assessment</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Oliver Bell</span></span> | on 
-<time property="datePublished" datetime="2018-01-17T23:03:45+00:00">17 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/eu-compliance-update-awss-2017-c5-assessment/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7076" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7076&amp;disqus_title=EU+Compliance+Update%3A+AWS%E2%80%99s+2017+C5+Assessment&amp;disqus_url=https://aws.amazon.com/blogs/security/eu-compliance-update-awss-2017-c5-assessment/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7076');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/12/C5-300x1971.png" /></p> 
-<p>AWS has completed its 2017 assessment against the <a href="https://aws.amazon.com/compliance/bsi-c5/" target="_blank" rel="noopener noreferrer">Cloud Computing Compliance Controls Catalog</a> (C5) information security and compliance program. <a href="https://www.bsi.bund.de/DE/Home/home_node.html" target="_blank" rel="noopener noreferrer">Bundesamt f&uuml;r Sicherheit in der Informationstechnik</a> (BSI)—Germany’s national cybersecurity authority—established C5 to define a reference standard for German cloud security requirements. With C5 (as well as with <a href="https://www.bsi.bund.de/EN/Topics/ITGrundschutz/itgrundschutz_node.html" target="_blank" rel="noopener noreferrer">IT-Grundschutz</a>), customers in German member states can use the work performed under this BSI compliance catalogue to comply with stringent local requirements.</p> 
-<p>Continuing our&nbsp;commitment to Germany and the AWS European Regions, AWS has added 16 services to this year’s scope:</p> 
-<li><a href="https://aws.amazon.com/api-gateway" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a></li> 
-<li><a href="http://aws.amazon.com/cloudfront" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a></li> 
-<li><a href="http://aws.amazon.com/cognito/" target="_blank" rel="noopener noreferrer">Amazon Cognito</a></li> 
-<li><a href="http://aws.amazon.com/connect" target="_blank" rel="noopener noreferrer">Amazon Connect</a></li> 
-<li><a href="https://aws.amazon.com/ecr/" target="_blank" rel="noopener noreferrer">Amazon Elastic Container Registry</a></li> 
-<li><a href="https://aws.amazon.com/ecs/" target="_blank" rel="noopener noreferrer">Amazon Elastic Container Service</a></li> 
-<li><a href="http://aws.amazon.com/efs" target="_blank" rel="noopener noreferrer">Amazon Elastic File System</a></li> 
-<li><a href="https://aws.amazon.com/kinesis/data-streams/" target="_blank" rel="noopener noreferrer">Amazon Kinesis Data Streams</a></li> 
-<li><a href="https://docs.aws.amazon.com/AmazonS3/latest/dev/transfer-acceleration.html" target="_blank" rel="noopener noreferrer">Amazon S3 Transfer Acceleration</a></li> 
-<li><a href="http://aws.amazon.com/directoryservice" target="_blank" rel="noopener noreferrer">AWS Directory Service for Microsoft Active Directory</a></li> 
-<li><a href="https://aws.amazon.com/iot/" target="_blank" rel="noopener noreferrer">AWS IoT</a></li> 
-<li><a href="http://aws.amazon.com/lambda" target="_blank" rel="noopener noreferrer">AWS Lambda</a></li> 
-<li><a href="https://aws.amazon.com/lambda/edge/" target="_blank" rel="noopener noreferrer">AWS Lambda@Edge</a></li> 
-<li><a href="http://aws.amazon.com/shield" target="_blank" rel="noopener noreferrer">AWS Shield</a></li> 
-<li><a href="http://aws.amazon.com/step-functions" target="_blank" rel="noopener noreferrer">AWS Step Functions</a></li> 
-<li><a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a></li> 
-<p>The English version of the C5 report is available through <a href="https://console.aws.amazon.com/artifact" target="_blank" rel="noopener noreferrer">AWS Artifact</a>. The German version of the report will be available through AWS Artifact in the coming weeks.</p> 
-<p>– Oliver</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7076');
 });
 </script> 
 </article> 

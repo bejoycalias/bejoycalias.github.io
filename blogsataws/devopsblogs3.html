@@ -190,6 +190,127 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Validating AWS CloudFormation Templates</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Remek Hetman</span></span> | on 
+<time property="datePublished" datetime="2017-06-28T10:49:09+00:00">28 JUN 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/validating-aws-cloudformation-templates/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>For their continuous integration and continuous deployment (CI/CD) pipeline path, many companies use tools like Jenkins, Chef, and <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a>. Usually, the process is managed by two or more teams. One team is responsible for designing and developing an application, CloudFormation templates, and so on. The other team is generally responsible for integration and deployment.</p> 
+<p>One of the challenges that a CI/CD team has is to validate the CloudFormation templates provided by the development team. Validation provides early warning about any incorrect syntax and ensures that the development team follows company policies in terms of security and the resources created by CloudFormation templates.</p> 
+<p>In this post, I focus on the validation of <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> templates for syntax as well as in the context of business rules.</p> 
+<p><span id="more-1318"></span></p> 
+<h3>Scripted validation solution</h3> 
+<p>For CloudFormation syntax validation, one option is to use the <a href="https://aws.amazon.com/cli">AWS CLI </a>to call the <a href="http://docs.aws.amazon.com/cli/latest/reference/cloudformation/validate-template.html">validate-template command</a>. For security and resource management, another approach is to run a Jenkins pipeline from an Amazon EC2 instance under an EC2 role that has been granted only the necessary permissions.</p> 
+<p>What if you need more control over your CloudFormation templates, such as managing parameters or attributes? What if you have many development teams where permissions to the AWS environment required by one team are either too open or not open enough for another team?</p> 
+<p>To have more control over the contents of your CloudFormation template, you can use the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> Python script, which shows you how to validate different template aspects. With this script, you can validate:</p> 
+<li>JSON syntax</li> 
+<li>IAM capabilities</li> 
+<li>Root tags</li> 
+<li>Parameters</li> 
+<li>CloudFormation resources</li> 
+<li>Attributes</li> 
+<li>Reference resources</li> 
+<p>You can download this script from the <a href="https://github.com/awslabs/aws-cloudformation-validator">cf-validator</a> GitHub repo. Use the following command to run the script:</p> 
+python cf-validator.py 
+<p>The script takes the following parameters:</p> 
+<li><strong>–cf_path [Required]</strong><br /> 
+<blockquote> 
+<p>The location of the CloudFormation template in JSON format. Supported location types:</p> 
+<li>File system – Path to the CloudFormation template on the file system</li> 
+<li>Web – URL, for example, https://my-file.com/my_cf.json</li> 
+<li>Amazon S3 – Amazon S3 bucket, for example, s3://my_bucket/my_cf.json</li> 
+</blockquote> </li> 
+<li><strong>–cf_rules [Required]</strong><br /> 
+<blockquote> 
+<p>The location of the JSON file with the validation rules. This parameter supports the same locations as –cf_path. The next section of this post has more information about defining rules.</p> 
+</blockquote> </li> 
+<li><strong>–cf_res [Optional]</strong><br /> 
+<blockquote> 
+<p>The location of the JSON file with the defined AWS resources, which need to be confirmed before launching the CloudFormation template. A later section of this post has more information about resource validation.</p> 
+</blockquote> </li> 
+<li><strong>–allow_cap [Optional][yes/no]</strong><br /> 
+<blockquote> 
+<p>Controls whether you allow the creation of IAM resources by the CloudFormation template, such as policies, rules, or IAM users. The default value is no.</p> 
+</blockquote> </li> 
+<li><strong>–region [Optional]</strong><br /> 
+<blockquote> 
+<p>The AWS region where the existing resources were created. The default value is us-east-1.</p> 
+</blockquote> </li> 
+<h5>Defining rules</h5> 
+<p>All rules are defined in the JSON format file. Rules consist of the following keys:</p> 
+<li><strong>“allow_root_keys”</strong><br /> 
+<blockquote> 
+<p>Lists allowed root CloudFormation keys. Example of root keys are Parameters, Resources, Output, and so on. An empty list means that any key is allowed.</p> 
+</blockquote> </li> 
+<li><strong>“allow_parameters”</strong><br /> 
+<blockquote> 
+<p>Lists allowed CloudFormation parameters. For instance, to force each CloudFormation template to use only the set of parameters defined in your pipeline, list them under this key. An empty list means that any parameter is allowed.</p> 
+</blockquote> </li> 
+<li><strong>“allow_resources”</strong><br /> 
+<blockquote> 
+<p>Lists the AWS resources allowed for creation by a CloudFormation template. The format of the resource is the same as resource types in CloudFormation, but without the “AWS::” prefix. Examples:&nbsp; EC2::Instance, EC2::Volume, and so on. If you allow the creation of all resources from the given group, you can use a wildcard. For instance, if you allow all resources related to CloudFormation, you can add CloudFormation::* to the list instead of typing CloudFormation::Init, CloudFormation:Stack, and so on. An empty list means that all resources are allowed.</p> 
+</blockquote> </li> 
+<li><strong>“require_ref_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists attributes (per resource) that have to be defined in CloudFormation. The value must be referenced and cannot be hardcoded. For instance, you can require that each EC2 instance must be created from a specific AMI where Image ID has to be a passed-in parameter. An empty list means that you are not requiring specific attributes to be present for a given resource.</p> 
+</blockquote> </li> 
+<li><strong>“allow_additional_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists additional attributes (per resource) that can be defined and have any value in the CloudFormation template. An empty list means that any additional attribute is allowed. If you specify additional attributes for this key, then any resource attribute defined in a CloudFormation template that is not listed in this key or in the require_ref_attributes key causes validation to fail.</p> 
+</blockquote> </li> 
+<li><strong>“not_allow_attributes”</strong><br /> 
+<blockquote> 
+<p>Lists attributes (per resource) that are not allowed in the CloudFormation template. This key takes precedence over the require_ref_attributes and allow_additional_attributes keys.</p> 
+</blockquote> </li> 
+<h5>Rule file example</h5> 
+<p>The following is an example of a rule file:</p> 
+<code class="lang-json">{
+&quot;allow_root_keys&quot; : [&quot;AWSTemplateFormatVersion&quot;, &quot;Description&quot;, &quot;Parameters&quot;, &quot;Conditions&quot;, &quot;Resources&quot;, &quot;Outputs&quot;],
+&quot;allow_parameters&quot; : [],
+&quot;allow_resources&quot; : [
+&quot;CloudFormation::*&quot;,
+&quot;CloudWatch::Alarm&quot;,
+&quot;EC2::Instance&quot;,
+&quot;EC2::Volume&quot;,
+&quot;EC2::VolumeAttachment&quot;,
+&quot;ElasticLoadBalancing::LoadBalancer&quot;,
+&quot;IAM::Role&quot;,
+&quot;IAM::Policy&quot;,
+&quot;IAM::InstanceProfile&quot;
+],
+&quot;require_ref_attributes&quot; :
+{
+&quot;EC2::Instance&quot; : [ &quot;InstanceType&quot;, &quot;ImageId&quot;, &quot;SecurityGroupIds&quot;, &quot;SubnetId&quot;, &quot;KeyName&quot;, &quot;IamInstanceProfile&quot; ],
+&quot;ElasticLoadBalancing::LoadBalancer&quot; : [&quot;SecurityGroups&quot;, &quot;Subnets&quot;]
+},
+&quot;allow_additional_attributes&quot; : {},
+&quot;not_allow_attributes&quot; : {}
+}
+</code> 
+<h4>Validating resources</h4> 
+<p>You can use the –cf_res parameter to validate that the resources you are planning to reference in the CloudFormation template exist and are available. As a value for this parameter, point to the JSON file with defined resources. The format should be as follows:</p> 
+<code class="lang-json">[
+{ &quot;Type&quot; : &quot;SG&quot;,
+&quot;ID&quot; : &quot;sg-37c9b448A&quot;
+},
+{ &quot;Type&quot; : &quot;AMI&quot;,
+&quot;ID&quot; : &quot;ami-e7e523f1&quot;
+},
+{ &quot;Type&quot; : &quot;Subnet&quot;,
+&quot;ID&quot; : &quot;subnet-034e262e&quot;
+}
+]
+</code> 
+<h3>Summary</h3> 
+<p>At this moment, this CloudFormation template validation script supports only security groups, AMIs, and subnets. But anyone with some knowledge of Python and the boto3 package can add support for additional resources type, as needed.</p> 
+<p>For more tips please visit our <a href="https://aws.amazon.com/blogs/aws/category/aws-cloud-formation/">AWS CloudFormation blog</a></p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Continuous Delivery of Nested AWS CloudFormation Stacks Using AWS CodePipeline</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1571,23 +1692,6 @@ by
 </footer> 
 <p>AWS CodeDeploy is a service that automates code deployments to any instance, including Amazon EC2 instances and instances running on-premises. Many customers use AWS CodeDeploy to automate application deployment because it provides a uniform method for:<br /> • Updating applications across development, staging, and production environments.<br /> • Handling the complexity of updating applications and avoiding service downtime.</p> 
 <p>&nbsp;<br /> Visit this <a href="https://aws.amazon.com/blogs/mt/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/">post</a> on the management tools blog and learn how to simplify your AWS CodeDeploy workflows by using Parameter Store to store and reference a configuration secret.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Introducing Amazon CloudWatch Logs Integration for AWS OpsWorks Stacks</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Kai Rubarth</span></span> | on 
-<time property="datePublished" datetime="2017-04-10T11:59:44+00:00">10 APR 2017</time> | 
-<a href="https://aws.amazon.com/blogs/devops/introducing-amazon-cloudwatch-logs-integration-for-aws-opsworks-stacks/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="http://aws.amazon.com/opsworks">AWS OpsWorks Stacks</a> now supports <a href="http://aws.amazon.com/cloudwatch">Amazon CloudWatch Logs</a>. This benefits all users who want to stream their log files from OpsWorks instances to CloudWatch. This enables you to take advantage of CloudWatch Logs features such as centralized log archival, real-time monitoring of log data, or generating CloudWatch alarms. Until now, OpsWorks customers had to manually install and configure the CloudWatch Logs agent on every instance they wanted to ship log data from. Now, with the built-in CloudWatch Logs integration these features are made available with just a few clicks across all instances in a layer.</p> 
-<p><span id="more-852"></span></p> 
-<p>The OpsWorks CloudWatch logs integration is compatible with all Chef 11 and Chef 12 Linux stacks. To get started, simply click the new <strong>CloudWatch Logs</strong> tab in your layer settings screen. OpsWorks agent command logs, which include Chef recipe output, are enabled by default; to enable logging for custom log files, simply input an absolute path or file pattern for every log file you want shipped.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/07/OpsWorks-CloudWatchLogs.png" /></p> 
-<p>It’s that simple. OpsWorks creates log groups and log streams for you, and starts streaming your system and application logs within a few minutes.</p> 
-<p>For more information, see <a href="http://docs.aws.amazon.com/opsworks/latest/userguide/monitoring-cloudwatch-logs.html">Using Amazon CloudWatch Logs with AWS OpsWorks Stacks</a> in the <em>AWS OpsWorks User Guide</em>.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
