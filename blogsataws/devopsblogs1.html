@@ -190,6 +190,314 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/29/codestar-featured_image.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Performing Unit Testing in an AWS CodeStar Project</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Jerry Mathen Jacob</span></span> | on 
+<time property="datePublished" datetime="2018-03-29T12:53:13+00:00">29 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codestar/" title="View all posts in AWS CodeStar*"><span property="articleSection">AWS CodeStar*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/performing-unit-testing-in-an-aws-codestar-project/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In this blog post, I will show how you can perform unit testing as a part of your <a href="https://console.aws.amazon.com/codestar">AWS CodeStar</a> project. AWS CodeStar helps you quickly develop, build, and deploy applications on AWS. With AWS CodeStar, you can set up your continuous delivery (CD) toolchain and manage your software development from one place.</p> 
+<p>Because unit testing tests individual units of application code, it is helpful for quickly identifying and isolating issues. As a part of an automated CI/CD process, it can also be used to prevent bad code from being deployed into production.</p> 
+<p>Many of the AWS CodeStar project templates come preconfigured with a unit testing framework so that you can start deploying your code with more confidence. The unit testing is configured to run in the provided build stage so that, if the unit tests do not pass, the code is not deployed. For a list of AWS CodeStar project templates that include unit testing, see <a href="https://docs.aws.amazon.com/codestar/latest/userguide/templates.html">AWS CodeStar Project Templates</a> in the AWS CodeStar User Guide.</p> 
+<b>The scenario</b> 
+<p>As a big fan of superhero movies, I decided to list my favorites and ask my friends to vote on theirs by using a WebService endpoint I created. The example I use is a Python web service running on <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> with <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a> as the code repository. CodeCommit is a fully managed source control system that hosts Git repositories and works with all Git-based tools.</p> 
+<p>Here’s how you can create the WebService endpoint:</p> 
+<p>Sign in to the <a href="https://console.aws.amazon.com/codestar">AWS CodeStar console</a>. Choose <strong>Start a project</strong>, which will take you to the list of project templates.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/01_create_project_new.gif" /></p> 
+<p>For code edits I will choose <a href="https://aws.amazon.com/cloud9/">AWS Cloud9</a>, which is a cloud-based integrated development environment (IDE) that you use to write, run, and debug code.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/02_choose_cloud9.gif" /></p> 
+<p>Here are the other tasks required by my scenario:</p> 
+<li>Create a database table where the votes can be stored and retrieved as needed.</li> 
+<li>Update the logic in the Lambda function that was created for posting and getting the votes.</li> 
+<li>Update the unit tests (of course!) to verify that the logic works as expected.</li> 
+<p>For a database table, I’ve chosen <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a>, which offers a fast and flexible NoSQL database.</p> 
+<h3>Getting set up on AWS Cloud9</h3> 
+<p>From the AWS CodeStar console, go to the AWS Cloud9 console, which should take you to your project code. I will open up a terminal at the top-level folder under which I will set up my environment and required libraries.</p> 
+<p>Use the following command to set the PYTHONPATH environment variable on the terminal.</p> 
+<code class="lang-powershell">export PYTHONPATH=/home/ec2-user/environment/vote-your-movie</code> 
+<p>You should now be able to use the following command to execute the unit tests in your project.</p> 
+<code class="lang-powershell">python -m unittest discover vote-your-movie/tests</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/03_cloud9_init_setup.gif" /></p> 
+<h3>Start coding</h3> 
+<p>Now that you have set up your local environment and have a copy of your code, add a DynamoDB table to the project by defining it through a template file. Open template.yml, which is the Serverless Application Model (SAM) template file. This template extends <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a> to provide a simplified way of defining the <a href="https://aws.amazon.com/api-gateway/">Amazon API Gateway</a> APIs, AWS Lambda functions, and Amazon DynamoDB tables required by your serverless application.</p> 
+<code class="lang-yaml">AWSTemplateFormatVersion: 2010-09-09
+Transform:
+- AWS::Serverless-2016-10-31
+- AWS::CodeStar
+Parameters:
+ProjectId:
+Type: String
+Description: CodeStar projectId used to associate new resources to team members
+Resources:
+# The DB table to store the votes.
+MovieVoteTable:
+Type: AWS::Serverless::SimpleTable
+Properties:
+PrimaryKey:
+# Name of the &quot;Candidate&quot; is the partition key of the table.
+Name: Candidate
+Type: String
+# Creating a new lambda function for retrieving and storing votes.
+MovieVoteLambda:
+Type: AWS::Serverless::Function
+Properties:
+Handler: index.handler
+Runtime: python3.6
+Environment:
+# Setting environment variables for your lambda function.
+Variables:
+TABLE_NAME: !Ref &quot;MovieVoteTable&quot;
+TABLE_REGION: !Ref &quot;AWS::Region&quot;
+Role:
+Fn::ImportValue:
+!Join ['-', [!Ref 'ProjectId', !Ref 'AWS::Region', 'LambdaTrustRole']]
+Events:
+GetEvent:
+Type: Api
+Properties:
+Path: /
+Method: get
+PostEvent:
+Type: Api
+Properties:
+Path: /
+Method: post
+</code> 
+<p>We’ll use Python’s boto3 library to connect to AWS services. And we’ll use Python’s mock library to mock AWS service calls for our unit tests.<br /> Use the following command to install these libraries:</p> 
+<code class="lang-powershell">pip install --upgrade boto3 mock -t .</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/04_cloud9_install_deps.gif" /></p> 
+<p>Add these libraries to the buildspec.yml, which is the YAML file that is required for CodeBuild to execute.</p> 
+<code class="lang-yaml">version: 0.2
+phases:
+install:
+commands:
+# Upgrade AWS CLI to the latest version
+- pip install --upgrade awscli boto3 mock
+pre_build:
+commands:
+# Discover and run unit tests in the 'tests' directory. For more information, see &lt;https://docs.python.org/3/library/unittest.html#test-discovery&gt;
+- python -m unittest discover tests
+build:
+commands:
+# Use AWS SAM to package the application by using AWS CloudFormation
+- aws cloudformation package --template template.yml --s3-bucket $S3_BUCKET --output-template template-export.yml
+artifacts:
+type: zip
+files:
+- template-export.yml</code> 
+<p>Open the index.py where we can write the simple voting logic for our Lambda function.</p> 
+<code class="lang-python">import json
+import datetime
+import boto3
+import os
+table_name = os.environ['TABLE_NAME']
+table_region = os.environ['TABLE_REGION']
+VOTES_TABLE = boto3.resource('dynamodb', region_name=table_region).Table(table_name)
+CANDIDATES = {&quot;A&quot;: &quot;Black Panther&quot;, &quot;B&quot;: &quot;Captain America: Civil War&quot;, &quot;C&quot;: &quot;Guardians of the Galaxy&quot;, &quot;D&quot;: &quot;Thor: Ragnarok&quot;}
+def handler(event, context):
+if event['httpMethod'] == 'GET':
+resp = VOTES_TABLE.scan()
+return {'statusCode': 200,
+'body': json.dumps({item['Candidate']: int(item['Votes']) for item in resp['Items']}),
+'headers': {'Content-Type': 'application/json'}}
+elif event['httpMethod'] == 'POST':
+try:
+body = json.loads(event['body'])
+except:
+return {'statusCode': 400,
+'body': 'Invalid input! Expecting a JSON.',
+'headers': {'Content-Type': 'application/json'}}
+if 'candidate' not in body:
+return {'statusCode': 400,
+'body': 'Missing &quot;candidate&quot; in request.',
+'headers': {'Content-Type': 'application/json'}}
+if body['candidate'] not in CANDIDATES.keys():
+return {'statusCode': 400,
+'body': 'You must vote for one of the following candidates - {}.'.format(get_allowed_candidates()),
+'headers': {'Content-Type': 'application/json'}}
+resp = VOTES_TABLE.update_item(
+Key={'Candidate': CANDIDATES.get(body['candidate'])},
+UpdateExpression='ADD Votes :incr',
+ExpressionAttributeValues={':incr': 1},
+ReturnValues='ALL_NEW'
+)
+return {'statusCode': 200,
+'body': &quot;{} now has {} votes&quot;.format(CANDIDATES.get(body['candidate']), resp['Attributes']['Votes']),
+'headers': {'Content-Type': 'application/json'}}
+def get_allowed_candidates():
+l = []
+for key in CANDIDATES:
+l.append(&quot;'{}' for '{}'&quot;.format(key, CANDIDATES.get(key)))
+return &quot;, &quot;.join(l)
+</code> 
+<p>What our code basically does is take in the HTTPS request call as an event. If it is an HTTP GET request, it gets the votes result from the table. If it is an HTTP POST request, it sets a vote for the candidate of choice. We also validate the inputs in the POST request to filter out requests that seem malicious. That way, only valid calls are stored in the table.</p> 
+<p>In the example code provided, we use a CANDIDATES variable to store our candidates, but you can store the candidates in a JSON file and use Python’s json library instead.</p> 
+<p>Let’s update the tests now. Under the tests folder, open the test_handler.py and modify it to verify the logic.</p> 
+<p><code class="lang-python"></code></p> 
+<code class="lang-python">import os
+# Some mock environment variables that would be used by the mock for DynamoDB
+os.environ['TABLE_NAME'] = &quot;MockHelloWorldTable&quot;
+os.environ['TABLE_REGION'] = &quot;us-east-1&quot;
+# The library containing our logic.
+import index
+# Boto3's core library
+import botocore
+# For handling JSON.
+import json
+# Unit test library
+import unittest
+## Getting StringIO based on your setup.
+try:
+from StringIO import StringIO
+except ImportError:
+from io import StringIO
+## Python mock library
+from mock import patch, call
+from decimal import Decimal
+@patch('botocore.client.BaseClient._make_api_call')
+class TestCandidateVotes(unittest.TestCase):
+## Test the HTTP GET request flow. 
+## We expect to get back a successful response with results of votes from the table (mocked).
+def test_get_votes(self, boto_mock):
+# Input event to our method to test.
+expected_event = {'httpMethod': 'GET'}
+# The mocked values in our DynamoDB table.
+items_in_db = [{'Candidate': 'Black Panther', 'Votes': Decimal('3')},
+{'Candidate': 'Captain America: Civil War', 'Votes': Decimal('8')},
+{'Candidate': 'Guardians of the Galaxy', 'Votes': Decimal('8')},
+{'Candidate': &quot;Thor: Ragnarok&quot;, 'Votes': Decimal('1')}
+]
+# The mocked DynamoDB response.
+expected_ddb_response = {'Items': items_in_db}
+# The mocked response we expect back by calling DynamoDB through boto.
+response_body = botocore.response.StreamingBody(StringIO(str(expected_ddb_response)),
+len(str(expected_ddb_response)))
+# Setting the expected value in the mock.
+boto_mock.side_effect = [expected_ddb_response]
+# Expecting that there would be a call to DynamoDB Scan function during execution with these parameters.
+expected_calls = [call('Scan', {'TableName': os.environ['TABLE_NAME']})]
+# Call the function to test.
+result = index.handler(expected_event, {})
+# Run unit test assertions to verify the expected calls to mock have occurred and verify the response.
+assert result.get('headers').get('Content-Type') == 'application/json'
+assert result.get('statusCode') == 200
+result_body = json.loads(result.get('body'))
+# Verifying that the results match to that from the table.
+assert len(result_body) == len(items_in_db)
+for i in range(len(result_body)):
+assert result_body.get(items_in_db[i].get(&quot;Candidate&quot;)) == int(items_in_db[i].get(&quot;Votes&quot;))
+assert boto_mock.call_count == 1
+boto_mock.assert_has_calls(expected_calls)
+## Test the HTTP POST request flow that places a vote for a selected candidate.
+## We expect to get back a successful response with a confirmation message.
+def test_place_valid_candidate_vote(self, boto_mock):
+# Input event to our method to test.
+expected_event = {'httpMethod': 'POST', 'body': &quot;{\&quot;candidate\&quot;: \&quot;D\&quot;}&quot;}
+# The mocked response in our DynamoDB table.
+expected_ddb_response = {'Attributes': {'Candidate': &quot;Thor: Ragnarok&quot;, 'Votes': Decimal('2')}}
+# The mocked response we expect back by calling DynamoDB through boto.
+response_body = botocore.response.StreamingBody(StringIO(str(expected_ddb_response)),
+len(str(expected_ddb_response)))
+# Setting the expected value in the mock.
+boto_mock.side_effect = [expected_ddb_response]
+# Expecting that there would be a call to DynamoDB UpdateItem function during execution with these parameters.
+expected_calls = [call('UpdateItem', {
+'TableName': os.environ['TABLE_NAME'], 
+'Key': {'Candidate': 'Thor: Ragnarok'},
+'UpdateExpression': 'ADD Votes :incr',
+'ExpressionAttributeValues': {':incr': 1},
+'ReturnValues': 'ALL_NEW'
+})]
+# Call the function to test.
+result = index.handler(expected_event, {})
+# Run unit test assertions to verify the expected calls to mock have occurred and verify the response.
+assert result.get('headers').get('Content-Type') == 'application/json'
+assert result.get('statusCode') == 200
+assert result.get('body') == &quot;{} now has {} votes&quot;.format(
+expected_ddb_response['Attributes']['Candidate'], 
+expected_ddb_response['Attributes']['Votes'])
+assert boto_mock.call_count == 1
+boto_mock.assert_has_calls(expected_calls)
+## Test the HTTP POST request flow that places a vote for an non-existant candidate.
+## We expect to get back a successful response with a confirmation message.
+def test_place_invalid_candidate_vote(self, boto_mock):
+# Input event to our method to test.
+# The valid IDs for the candidates are A, B, C, and D
+expected_event = {'httpMethod': 'POST', 'body': &quot;{\&quot;candidate\&quot;: \&quot;E\&quot;}&quot;}
+# Call the function to test.
+result = index.handler(expected_event, {})
+# Run unit test assertions to verify the expected calls to mock have occurred and verify the response.
+assert result.get('headers').get('Content-Type') == 'application/json'
+assert result.get('statusCode') == 400
+assert result.get('body') == 'You must vote for one of the following candidates - {}.'.format(index.get_allowed_candidates())
+## Test the HTTP POST request flow that places a vote for a selected candidate but associated with an invalid key in the POST body.
+## We expect to get back a failed (400) response with an appropriate error message.
+def test_place_invalid_data_vote(self, boto_mock):
+# Input event to our method to test.
+# &quot;name&quot; is not the expected input key.
+expected_event = {'httpMethod': 'POST', 'body': &quot;{\&quot;name\&quot;: \&quot;D\&quot;}&quot;}
+# Call the function to test.
+result = index.handler(expected_event, {})
+# Run unit test assertions to verify the expected calls to mock have occurred and verify the response.
+assert result.get('headers').get('Content-Type') == 'application/json'
+assert result.get('statusCode') == 400
+assert result.get('body') == 'Missing &quot;candidate&quot; in request.'
+## Test the HTTP POST request flow that places a vote for a selected candidate but not as a JSON string which the body of the request expects.
+## We expect to get back a failed (400) response with an appropriate error message.
+def test_place_malformed_json_vote(self, boto_mock):
+# Input event to our method to test.
+# &quot;body&quot; receives a string rather than a JSON string.
+expected_event = {'httpMethod': 'POST', 'body': &quot;Thor: Ragnarok&quot;}
+# Call the function to test.
+result = index.handler(expected_event, {})
+# Run unit test assertions to verify the expected calls to mock have occurred and verify the response.
+assert result.get('headers').get('Content-Type') == 'application/json'
+assert result.get('statusCode') == 400
+assert result.get('body') == 'Invalid input! Expecting a JSON.'
+if __name__ == '__main__':
+unittest.main()
+</code> 
+<p>I am keeping the code samples well commented so that it’s clear what each unit test accomplishes. It tests the success conditions and the failure paths that are handled in the logic.</p> 
+<p>In my unit tests I use the patch decorator (@patch) in the mock library. @patch helps mock the function you want to call (in this case, the botocore library’s <strong>_make_api_call</strong> function in the <strong>BaseClient</strong> class).<br /> Before we commit our changes, let’s run the tests locally. On the terminal, run the tests again. If all the unit tests pass, you should expect to see a result like this:</p> 
+<code class="lang-powershell">You:~/environment $ python -m unittest discover vote-your-movie/tests
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.003s
+OK
+You:~/environment $</code> 
+<b>Upload to AWS</b> 
+<p>Now that the tests have passed, it’s time to commit and push the code to source repository!</p> 
+<h3>Add your changes</h3> 
+<p>From the terminal, go to the project’s folder and use the following command to verify the changes you are about to push.</p> 
+<code class="lang-powershell">git status</code> 
+<p class="unlimited-height-code">To add the modified files only, use the following command:</p> 
+<code class="lang-powershell">git add -u</code> 
+<h3>Commit your changes</h3> 
+<p>To commit the changes (with a message), use the following command:</p> 
+<code class="lang-powershell">git commit -m &quot;Logic and tests for the voting webservice.&quot;</code> 
+<h3>Push your changes to AWS CodeCommit</h3> 
+<p>To push your committed changes to CodeCommit, use the following command:</p> 
+<code class="lang-powershell">git push</code> 
+<p>In the AWS CodeStar console, you can see your changes flowing through the pipeline and being deployed. There are also links in the AWS CodeStar console that take you to this project’s build runs so you can see your tests running on AWS CodeBuild. The latest link under the Build Runs table takes you to the logs.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/06_unit_tests_at_codebuild_new.gif" /></p> 
+<p>After the deployment is complete, AWS CodeStar should now display the AWS Lambda function and DynamoDB table created and synced with this project. The Project link in the AWS CodeStar project’s navigation bar displays the AWS resources linked to this project.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/07_codestar_ddb_resource.gif" /></p> 
+<p>Because this is a new database table, there should be no data in it. So, let’s put in some votes. You can download <a href="https://www.getpostman.com/apps">Postman</a> to test your application endpoint for POST and GET calls. The endpoint you want to test is the URL displayed under <strong>Application endpoints</strong> in the AWS CodeStar console.</p> 
+<p>Now let’s open Postman and look at the results.&nbsp;Let’s create some votes through POST requests. Based on this example, a valid vote has a value of <strong>A</strong>, <strong>B</strong>, <strong>C</strong>, or <strong>D</strong>.<br /> Here’s what a successful POST request looks like:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/post_success.png" /></p> 
+<p>Here’s what it looks like if I use some value other than <strong>A</strong>, <strong>B</strong>, <strong>C</strong>, or <strong>D</strong>:</p> 
+<p>&nbsp;</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/post_fail.png" /></p> 
+<p>Now I am going to use a GET request to fetch the results of the votes from the database.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/23/get_success.png" /></p> 
+<p>And that’s it! You have now created a simple voting web service using AWS Lambda, Amazon API Gateway, and DynamoDB and used unit tests to verify your logic so that you ship good code.<br /> Happy coding!</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/21/CodeDeploy-migration-arch-overview.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Migrating from an In-House Deployment Agent to AWS CodeDeploy and AWS CodePipeline</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1205,92 +1513,6 @@ file.setExecutable(true);
 <p><a href="https://blackboard.github.io/lambda-selenium/">https://blackboard.github.io/lambda-selenium/</a></p> 
 <h4>Conclusion</h4> 
 <p>One year ago, one of our UI test suites took hours to run. Last month, it took 16 minutes. Today, it takes <strong>39 seconds</strong>. Thanks to AWS Lambda, we can reduce our build times and perform automated UI testing at scale!</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/01/02/CodeBuild-social.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">How to Enable Caching for AWS CodeBuild</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Karthik Thirugnanasambandam</span></span> | on 
-<time property="datePublished" datetime="2017-11-21T11:35:36+00:00">21 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/how-to-enable-caching-for-aws-codebuild/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> is a fully managed build service. There are no servers to provision and scale, or software to install, configure, and operate. You just specify the location of your source code, choose your build settings, and CodeBuild runs build scripts for compiling, testing, and packaging your code.</p> 
-<p>A typical application build process includes phases like preparing the environment, updating the configuration, downloading dependencies, running unit tests, and finally, packaging the built artifact.</p> 
-<p>Downloading dependencies is a critical phase in the build process.&nbsp;These dependent files can range in size from a few KBs to multiple MBs. Because most of the dependent files do not change frequently between builds, you can noticeably reduce your build time by caching dependencies.</p> 
-<p>In this post, I will show you how to enable caching for AWS CodeBuild.</p> 
-<b>Requirements</b> 
-<li>Create an <a href="http://docs.aws.amazon.com/AmazonS3/latest/gsg/CreatingABucket.html">Amazon S3</a> bucket&nbsp;for storing cache archives (You can use existing s3 bucket as well).</li> 
-<li>Create a <a href="https://github.com/">GitHub account</a>&nbsp;(if you don’t have one).</li> 
-<b>Create a sample build project:</b> 
-<p>1. Open the AWS CodeBuild console at&nbsp;<a href="https://console.aws.amazon.com/codebuild/">https://console.aws.amazon.com/codebuild/</a>.</p> 
-<p>2. If a welcome page is displayed, choose&nbsp;<strong>Get started</strong>.</p> 
-<p>If a welcome page is not displayed, on the navigation pane, choose&nbsp;<strong>Build projects</strong>, and then choose&nbsp;<strong>Create project</strong>.</p> 
-<p>3. On the&nbsp;<strong>Configure your project</strong>&nbsp;page, for&nbsp;<strong>Project name</strong>, type a name for this build project. Build project names must be unique across each AWS account.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/project.png" /></p> 
-<p>4. <strong>In&nbsp;Source</strong>: <strong>What to build</strong>, for&nbsp;<strong>Source provider</strong>, choose <strong>GitHub</strong>.</p> 
-<li><strong>For Repository</strong>,&nbsp;select <strong>Use a public repository</strong></li> 
-<li>For&nbsp;<strong>Repository URL</strong>, type <a href="https://github.com/jenkinsci/aws-codebuild-plugin">https://github.com/jenkinsci/aws-codebuild-plugin</a></li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/Screen-Shot-2017-11-18-at-12.12.01-PM.png" /></p> 
-<p>5. <strong>In&nbsp;Environment</strong>: <strong>How to build</strong>, for&nbsp;<strong>Environment image</strong>, select <strong>Use an image managed by AWS CodeBuild</strong>.</p> 
-<li>For <strong>Operating system</strong>, choose <strong>Ubuntu</strong>.</li> 
-<li>For <strong>Runtime</strong>, choose <strong>Java</strong>.</li> 
-<li>For <strong>Version</strong>, &nbsp;choose <strong>aws/codebuild/java:openjdk-8</strong>.</li> 
-<li>For <strong>Build specification</strong>, select <strong>Insert build commands</strong>.</li> 
-<p><strong>Note:</strong> The&nbsp;build specification file (<strong>buildspec.yml</strong>) can be configured in two ways. You can package it along with your source root directory, or you can override it by using a project environment configuration. In this example, I will use the override option and will use the console editor to specify the build specification.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/environment.png" /></p> 
-<p>6. Under <strong>Build commands</strong>, click <strong>Switch to editor</strong> to enter the build specification.</p> 
-<p>Copy the following text.</p> 
-<code class="lang-yaml">version: 0.2
-phases:
-build:
-commands:
-- mvn install
-cache:
-paths:
-- '/root/.m2/**/*'</code> 
-<p><strong>Note:</strong> The cache section in the build specification instructs AWS CodeBuild about the paths to be cached. Like the&nbsp;artifacts section, the cache paths are relative to&nbsp;$CODEBUILD_SRC_DIR and specify the directories to be cached. In this example, Maven stores the downloaded dependencies to the /root/.m2/ folder, but other tools use different folders. For example, pip uses the /root/.cache/pip folder, and Gradle uses the /root/.gradle/caches folder. You might need to configure the cache paths based on your language platform.</p> 
-<p>7. <strong>In Artifacts:&nbsp;</strong>Where to put the artifacts from this build project:</p> 
-<li>For <strong>Type</strong>, choose <strong>No artifacts</strong>.</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/Screen-Shot-2017-11-18-at-12.08.08-PM.png" /></p> 
-<p>8. In <strong>Cache</strong>:</p> 
-<li>For <strong>Type</strong>, choose <strong>Amazon S3</strong>.</li> 
-<li>For <strong>Bucket</strong>, choose your S3 bucket.</li> 
-<li>For <strong>Path prefix</strong>, type cache/archives/</li> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/cache.png" /></p> 
-<p>9. In&nbsp;<strong>Service role</strong>, the <strong>Create a service role in your account option</strong> will display a default role name. &nbsp;You can accept the default name or type your own.</p> 
-<p>If you already have an AWS CodeBuild service role, choose&nbsp;<strong>Choose an existing service role from your account</strong>.</p> 
-<p>10. Choose&nbsp;<strong>Continue</strong>.</p> 
-<p>11. On the&nbsp;<strong>Review</strong>&nbsp;page, to run a build, choose&nbsp;<strong>Save and build</strong>.</p> 
-<code class="lang-yaml"></code> 
-<b>Review build and cache behavior:</b> 
-<p>Let us review our first build for the project.</p> 
-<p>In the first run, where no cache exists, overall build time would look something like&nbsp;below (notice the time for <strong>DOWNLOAD_SOURCE</strong>, <strong>BUILD</strong> and <strong>POST_BUILD</strong>):</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/pre-build-img.png" /></p> 
-<p>If you check the build logs, you will see log entries for dependency downloads. The dependencies are downloaded directly from&nbsp;configured&nbsp;external repositories. At the end of the log, you will see an entry for the cache uploaded to your S3 bucket.</p> 
-<p>Let’s review the S3 bucket for the cached archive. You’ll see the cache from our first successful build is uploaded to the configured S3 path.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/s3-preview.png" /></p> 
-<p>Let’s try another build with the same CodeBuild project. This time the build should pick up the dependencies from the cache.</p> 
-<p>In the second run, there was a cache hit (cache was generated from the first run):</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/18/post-build-img.png" /></p> 
-<p>You’ll notice a few things:</p> 
-<ol> 
-<li><strong>DOWNLOAD_SOURCE</strong> took slightly longer. Because, in addition to the source code, this time the build also downloaded the cache from user’s s3 bucket.</li> 
-<li><strong>BUILD</strong> time was faster. As the dependencies didn’t need to get downloaded, but were reused from cache.</li> 
-<li><strong>POST_BUILD</strong> took slightly longer, but was relatively the same.</li> 
-</ol> 
-<p>Overall, build duration was improved with cache.</p> 
-<b>Best practices for cache</b> 
-<li style="text-align: left">By default, the cache archive is encrypted on the server side with the customer’s artifact <a href="https://aws.amazon.com/kms/">KMS</a> key.</li> 
-<li style="text-align: left">You can expire the cache by manually removing the cache archive from S3. Alternatively, you can expire the cache by using an <a href="http://docs.aws.amazon.com/AmazonS3/latest/user-guide/create-lifecycle.html">S3 lifecycle policy</a>.</li> 
-<li style="text-align: left">You can override cache behavior by updating the project. You can use the AWS CodeBuild <a href="https://aws.amazon.com/Users/allysona/AppData/Local/Temp/docs.aws.amazon.com/codebuild/latest/userguide/change-project.html">the AWS CodeBuild console, AWS CLI, or AWS SDKs</a> to update the project. You can also invalidate cache setting by using the new <strong>InvalidateProjectCache</strong> API. This API forces a new InvalidationKey to be generated, ensuring that future builds receive an empty cache. This API does&nbsp;not&nbsp;remove the existing cache, because this could cause inconsistencies with builds currently in flight.</li> 
-<li style="text-align: left">The cache can be enabled for any folders in the build environment, but we recommend you only cache dependencies/files that will not change frequently between builds. Also, to avoid unexpected application behavior, don’t cache configuration and sensitive information.</li> 
-<b>Conclusion</b> 
-<p>In this blog post, I showed you how to enable and configure cache setting for AWS CodeBuild. As you see, this can save considerable build time. It also improves resiliency by avoiding external network connections to an artifact repository.</p> 
-<p>I hope you found this post useful. Feel free to leave your feedback or suggestions in the comments.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

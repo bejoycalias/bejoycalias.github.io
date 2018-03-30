@@ -190,6 +190,234 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Managing Cross-Account Serverless Microservices</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2018-03-29T07:38:26+00:00">29 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/management-tools/aws-cloudformation/" title="View all posts in AWS CloudFormation*"><span property="articleSection">AWS CloudFormation*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/serverless/" title="View all posts in Serverless*"><span property="articleSection">Serverless*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/managing-cross-account-serverless-microservices/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3929" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3929&amp;disqus_title=Managing+Cross-Account+Serverless+Microservices&amp;disqus_url=https://aws.amazon.com/blogs/compute/managing-cross-account-serverless-microservices/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3929');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of Michael Edge,&nbsp;Sr. Cloud Architect – AWS Professional Services</em></p> 
+<p>Applications built using a microservices architecture typically result in a number of independent, loosely coupled microservices communicating with each other, synchronously via their APIs and asynchronously via events. These microservices are often owned by different product teams, and these teams may segregate their resources into different AWS accounts for reasons that include security, billing, and resource isolation. This can sometimes result in the following challenges:</p> 
+<li><strong>Cross-account deployment:</strong> A single pipeline must deploy a microservice into multiple accounts; for example, a microservice must be deployed to environments such as DEV, QA, and PROD, all in separate accounts.</li> 
+<li><strong>Cross-account lookup:</strong> During deployment, a resource deployed into one AWS account may need to refer to a resource deployed in another AWS account.</li> 
+<li><strong>Cross-account communication:</strong> Microservices executing in one AWS account may need to communicate with microservices executing in another AWS account.</li> 
+<p>In this post, I look at ways to address these challenges using a sample application composed of a web application supported by two serverless microservices. The microservices are owned by different product teams and deployed into different accounts using <a href="https://aws.amazon.com/codepipeline/">AWS CodePipeline</a>, <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation</a>, and the <a href="https://github.com/awslabs/serverless-application-model">Serverless Application Model</a> (SAM). At runtime, the microservices communicate using an event-driven architecture that requires asynchronous, cross-account communication via an <a href="https://aws.amazon.com/sns/">Amazon Simple Notification Service</a> (Amazon SNS) topic.</p> 
+<h3>Sample application</h3> 
+<p>First, look at the sample application I use to demonstrate these concepts. In the following overview diagram, you can see the following:</p> 
+<li>The entire application consists of three main services: 
+<li>A Booking microservice, owned by the Booking account.</li> 
+<li>An Airmiles microservice, owned by the Airmiles account.</li> 
+<li>A web application that uses the services exposed by both microservices, owned by the Web Channel account.</li> 
+</ul> </li> 
+<li>The Booking microservice creates flight bookings and publishes booking events to an SNS topic.</li> 
+<li>The Airmiles microservice consumes booking events from the SNS topic and uses the booking event to calculate the airmiles associated with the flight booking. It also supports querying airmiles for a specific flight booking.</li> 
+<li>The web application allows an end user to make flight bookings, view flights bookings, and view the airmiles associated with a flight booking.</li> 
+<li>In the sample application, the Booking and Airmiles microservices are implemented using <a href="https://aws.amazon.com/lambda/">AWS Lambda</a>. Together with <a href="https://aws.amazon.com/api-gateway/">Amazon API Gateway</a>, <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a>, and SNS, the sample application is completely serverless.</li> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/13/microservices-cross-account01.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/13/microservices-cross-account01.png" /></a> 
+<p class="wp-caption-text">Sample Serverless microservices application</p> 
+<p>The typical booking flow would be triggered by an end user making a flight booking using the web application, which invokes the Booking microservice via its REST API. The Booking microservice persists the flight booking and publishes the booking event to an SNS topic to enable sharing of the booking with other interested consumers. In this sample application, the Airmiles microservice subscribes to the SNS topic and consumes the booking event, using the booking information to calculate the airmiles. In line with microservices best practices, both the Booking and Airmiles microservices store their information in their own DynamoDB tables, and expose an API (via API Gateway) that is used by the web application.</p> 
+<h3>Setup</h3> 
+<p>Before you delve into the details of the sample application, get the source code and deploy it.</p> 
+<p>Cross-account deployment of Lambda functions using CodePipeline has been previously discussed by my colleague Anuj Sharma in his post, <a href="https://aws.amazon.com/blogs/devops/aws-building-a-secure-cross-account-continuous-delivery-pipeline/">Building a Secure Cross-Account Continuous Delivery Pipeline</a>. This sample application builds upon the solution proposed by Anuj, using some of the same scripts and a similar account structure. To make it feasible for you to deploy the sample application, I’ve reduced the number of accounts needed down to three accounts by consolidating some of the services. In the following diagram, you can see the services used by the sample application require three accounts:</p> 
+<li><strong>Tools:</strong> A central location for the continuous delivery/deployment services such as CodePipeline and <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a>. To reduce the number of accounts required by the sample application, also deploy the <a href="https://aws.amazon.com/codecommit/">AWS CodeCommit</a> repositories here, though typically they may belong in a separate Dev account.</li> 
+<li><strong>Booking:</strong> Account for the Booking microservice.</li> 
+<li><strong>Airmiles:</strong> Account for the Airmiles microservice.</li> 
+<p>Without consolidation, the sample application may require up to 10 accounts: one for Tools, and three accounts each for Booking, Airmiles and Web Application (to support the DEV, QA, and PROD environments).</p> 
+<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/13/account-structure01.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/13/account-structure01.png" /></a> 
+<p class="wp-caption-text">Account structure for sample application</p> 
+<p>To follow the rest of this post, clone the repository in step 1 below. To deploy the application on AWS, follow steps 2 and 3:</p> 
+<li>Clone this repository. It contains the <a href="https://aws.amazon.com/cloudformation/">AWS CloudFormation templates</a> to use in this walkthrough. <code>git clone <a href="https://github.com/aws-samples/aws-cross-account-serverless-microservices.git">https://github.com/aws-samples/aws-cross-account-serverless-microservices.git</a></code> </li> 
+<li>Install the <a href="https://docs.aws.amazon.com/cli/latest/userguide/installing.html">AWS CLI</a>. To prepare your access keys or a role to make calls to AWS, <a href="http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html">configure the AWS CLI settings</a>.</li> 
+<li>Follow the instructions in the repository README to build the CodePipeline pipelines and deploy the microservices and web application.</li> 
+<b>Challenge 1: Cross-account deployment using CodePipeline</b> 
+<p>Though the Booking pipeline executes in the Tools account, it deploys the Booking Lambda functions into the Booking account.</p> 
+<ol> 
+<li>In the sample application code repository, open the ToolsAcct/code-pipeline.yaml CloudFormation template.</li> 
+<li>Scroll down to the Pipeline resource and look for the DeployToTest pipeline stage (shown below). There are two <a href="https://aws.amazon.com/iam/">AWS Identity and Access Management</a> (IAM) service roles used in this stage that allow cross-account activity. Both of these roles exist in the Booking account: 
+<li>Under Actions.RoleArn, find the service role assumed by CodePipeline to execute this pipeline stage in the Booking account. The role referred to by the parameter NonProdCodePipelineActionServiceRole allows access to the CodePipeline artifacts in the S3 bucket in the Tools account, and also access to the <a href="https://aws.amazon.com/kms/">AWS KMS</a> key needed to encrypt/decrypt the artifacts.</li> 
+<li>Under Actions.Configuration.RoleArn, find the service role assumed by CloudFormation when it carries out the CHANGE_SET_REPLACE action in the Booking account.</li> 
+</ul> </li> 
+</ol> 
+<p>These roles are created in the CloudFormation template NonProdAccount/toolsacct-codepipeline-cloudformation-deployer.yaml.</p> 
+<code class="lang-yaml">- Name: DeployToTest
+Actions:
+- Name: CreateChangeSetTest
+ActionTypeId:
+Category: Deploy
+Owner: AWS
+Version: 1
+Provider: CloudFormation
+Configuration:
+ChangeSetName: !Join ['-',[!Ref ProjectName, 'lambda', 'CS']]
+ActionMode: CHANGE_SET_REPLACE
+StackName: !Join ['-',[!Ref ProjectName, 'lambda']]
+Capabilities: CAPABILITY_NAMED_IAM
+TemplatePath: BuildOutput::output-sam-template.yml
+TemplateConfiguration: BuildOutput::sam-config.json
+RoleArn: !Ref NonProdCloudFormationServiceRole
+InputArtifacts:
+- Name: BuildOutput
+RunOrder: 1
+RoleArn: !Ref NonProdCodePipelineActionServiceRole
+- Name: DeployChangeSetTest
+ActionTypeId:
+Category: Deploy
+Owner: AWS
+Version: 1
+Provider: CloudFormation
+Configuration:
+ChangeSetName: !Join ['-',[!Ref ProjectName, 'lambda', 'CS']]
+ActionMode: CHANGE_SET_EXECUTE
+StackName: !Join ['-',[!Ref ProjectName, 'lambda']]
+InputArtifacts:
+- Name: BuildOutput
+RunOrder: 2
+RoleArn: !Ref NonProdCodePipelineActionServiceRole</code> 
+<b>Challenge 2: Cross-account stack lookup using custom resources</b> 
+<p>Asynchronous communication is a fairly common pattern in microservices architectures. A publishing microservice publishes an event that consumers may be interested in, without any concern for who those consumers may be.</p> 
+<p>In the case of the sample application, the publisher is the Booking microservice, publishing a flight booking event onto an SNS topic that exists in the Booking account. The consumer is the Airmiles microservice in the Airmiles account. To enable the two microservices to communicate, the Airmiles microservice must look up the ARN of the Booking SNS topic at deployment time in order to set up a subscription to it.</p> 
+<p>To enable CloudFormation templates to be reused, you are not <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-name.html">hardcoding</a> resource names in the templates. Because you allow CloudFormation to generate a resource name for the Booking SNS topic, the Airmiles microservice CloudFormation template must look up the SNS topic name at stack creation time. It’s not possible to use <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/walkthrough-crossstackref.html">cross-stack references</a>, as these can’t be used across different accounts.</p> 
+<p>However, you can use a CloudFormation <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources.html">custom resource</a> to achieve the same outcome. This is discussed in the next section. Using a custom resource to look up stack exports in another stack does not create a dependency between the two stacks, unlike cross-stack references. A stack dependency would prevent one stack being deleted if another stack depended upon it. For more information, see <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html">Fn::ImportValue</a>.</p> 
+<h3>Using a Lambda function as a custom resource to look up the booking SNS topic</h3> 
+<p>The sample application uses a Lambda function as a custom resource. This approach is discussed in <a href="http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-custom-resources-lambda.html">AWS Lambda-backed Custom Resources</a>.<br /> Walk through the sample application and see how the custom resource is used to list the stack export variables in another account and return these values to the calling AWS CloudFormation stack. Examine each of the following aspects of the custom resource:</p> 
+<ol> 
+<li>Deploying the custom resource.</li> 
+<li>Custom resource IAM role.</li> 
+<li>A calling CloudFormation stack uses the custom resource.</li> 
+<li>The custom resource assumes a role in another account.</li> 
+<li>The custom resource obtains the stack exports from all stacks in the other account.</li> 
+<li>The custom resource returns the stack exports to the calling CloudFormation stack.</li> 
+<li>The custom resource handles all the event types sent by the calling CloudFormation stack.</li> 
+</ol> 
+<h3>Step1: Deploying the custom resource</h3> 
+<p>The custom Lambda function is deployed using SAM, as are the Lambda functions for the Booking and Airmiles microservices. See the CustomLookupExports resource in Custom/custom-lookup-exports.yml.</p> 
+<h3>Step2: Custom resource IAM role</h3> 
+<p>The CustomLookupExports resource in Custom/custom-lookup-exports.yml executes using the CustomLookupLambdaRole IAM role. This role allows the custom Lambda function to assume a cross account role that is created along with the other cross account roles in the NonProdAccount/toolsacct-codepipeline-cloudformation-deployer.yml. See the resource CustomCrossAccountServiceRole.</p> 
+<h3>Step3: The CloudFormation stack uses the custom resource</h3> 
+<p>The Airmiles microservice is created by the Airmiles CloudFormation template Airmiles/sam-airmile.yml, a SAM template that uses the custom Lambda resource to look up the ARN of the Booking SNS topic. The custom resource is specified by the <strong>CUSTOMLOOKUP</strong> resource, and the <strong>PostAirmileFunction</strong> resource uses the custom resource to look up the ARN of the SNS topic and create a subscription to it.</p> 
+<p>Because the Airmiles Lambda function is going to subscribe to an SNS topic in another account, it must grant the SNS topic in the Booking account permissions to invoke the Airmiles Lambda function in the Airmiles account whenever a new event is published. Permissions are granted by the <strong>LambdaResourcePolicy</strong> resource.</p> 
+<h3>Step4: The custom resource assumes a role in another account</h3> 
+<p>When the Lambda custom resource is invoked by the Airmiles CloudFormation template, it must assume a role in the Booking account (see Step 2) in order to query the stack exports in that account.</p> 
+<p>This can be seen in Custom/custom-lookup-exports.py, where the <a href="http://docs.aws.amazon.com/STS/latest/APIReference/Welcome.html">AWS Simple Token Service</a> (AWS STS) is used to obtain a temporary access key to allow access to resources in the account referred to by the environment variable: ‘CUSTOM_CROSS_ACCOUNT_ROLE_ARN’. This environment variable is defined in the Custom/custom-lookup-exports.yml CloudFormation template, and refers to the role created in Step 2.</p> 
+<code class="lang-python">sts = boto3.client('sts')
+assumedRole = sts.assume_role(
+RoleArn=os.environ['CUSTOM_CROSS_ACCOUNT_ROLE_ARN'],
+RoleSessionName='LambdaCloudFormationSession'
+)
+credentials = assumedRole['Credentials']
+accessKey = credentials['AccessKeyId']
+secretAccessKey = credentials['SecretAccessKey']
+sessionToken = credentials['SessionToken']
+cfn = boto3.client('cloudformation',  
+region_name=os.environ['AWS_DEFAULT_REGION'], 
+aws_access_key_id=accessKey,
+aws_secret_access_key=secretAccessKey, 
+aws_session_token=sessionToken)</code> 
+<h3>Step5: The custom resource obtains the stack exports from all stacks in the other account</h3> 
+<p>The function get_exports() in Custom/custom-lookup-exports.py uses the AWS SDK to list all the stack exports in the Booking account.</p> 
+<h3>Step 6: The custom resource returns the stack exports to the calling CloudFormation stack</h3> 
+<p>The calling CloudFormation template, Airmiles/sam-airmile.yml, uses the custom resource to look up a stack export with the name of booking-lambda-BookingTopicArn. This is exported by the CloudFormation template Booking/sam-booking.yml.</p> 
+<code class="lang-yaml">PostAirmileFunction:
+Type: AWS::Serverless::Function
+Properties:
+Handler: post-airmiles-lambda.handler
+Runtime: python2.7
+Policies: AmazonDynamoDBFullAccess
+Events:
+SubmitBooking:
+Type: SNS
+Properties:
+Topic:
+!GetAtt CUSTOMLOOKUP.booking-lambda-BookingTopicArn</code> 
+<h3>Step7: The custom resource handles all the event types sent by the calling CloudFormation stack</h3> 
+<p>Custom resources used in a stack are called whenever the stack is created, updated, or deleted. They must therefore handle CREATE, UPDATE, and DELETE stack events. If your custom resource fails to send a SUCCESS or FAILED notification for each of these stack events, your stack may become stuck in a state such as <em>CREATE_IN_PROGRESS</em> or <em>UPDATE_ROLLBACK_IN_PROGRESS</em>. To handle this cleanly, use the <a href="https://github.com/awslabs/aws-cloudformation-templates/tree/master/community/custom_resources/python_custom_resource_helper">crhelper</a> custom resource helper. This strongly encourages you to handle the CREATE, UPDATE, and DELETE CloudFormation stack events.</p> 
+<b>Challenge 3: Cross-account SNS subscription</b> 
+<p>The SNS topic is specified as a resource in the Booking/sam-booking.yml CloudFormation template. To allow an event published to this topic to trigger the Airmiles Lambda function, permissions must be granted on both the Booking SNS topic and the Airmiles Lambda function. This is discussed in the next section.</p> 
+<h3>Permissions on booking SNS topic</h3> 
+<p>SNS topics support resource-based policies, which allow a policy to be attached directly to a resource specifying who can access the resource. This policy can specify which accounts can access a resource, and what actions those accounts are allowed to perform. This is the same approach as used by a small number of AWS services, such as <a href="https://aws.amazon.com/s3/">Amazon S3</a>, KMS, <a href="https://aws.amazon.com/sqs/">Amazon SQS</a>, and Lambda. In Booking/sam-booking.yml, the SNS topic policy allows resources in the Airmiles account (referenced by the parameter <em>NonProdAccount</em> in the following snippet) to subscribe to the Booking SNS topic:</p> 
+<code class="lang-yaml">BookingTopicPolicy:
+Type: AWS::SNS::TopicPolicy
+Properties:
+PolicyDocument:
+Id: BookingTopicPolicy
+Version: '2012-10-17'
+Statement:
+- Sid: BookingTopicPolicy-stmt1
+Effect: Allow
+Principal:
+AWS:
+- !Sub arn:aws:iam::${AWS::AccountId}:root
+Action:
+- sns:Publish
+- sns:RemovePermission
+- sns:SetTopicAttributes
+- sns:DeleteTopic
+- sns:ListSubscriptionsByTopic
+- sns:GetTopicAttributes
+- sns:Receive
+- sns:AddPermission
+- sns:Subscribe
+Resource: !Ref BookingTopic
+- Sid: BookingTopicPolicy-stmt2
+Effect: Allow
+Principal:
+AWS:
+- !Sub arn:aws:iam::${NonProdAccount}:root
+Action:
+- sns:Subscribe
+- sns:ListSubscriptionsByTopic
+Resource: !Ref BookingTopic
+Topics:
+- !Ref BookingTopic</code> 
+<h3>Permissions on the Airmiles Lambda function</h3> 
+<p>The Airmiles microservice is created by the Airmiles/sam-airmile.yml CloudFormation template. The template uses SAM to specify the Lambda functions together with their associated API Gateway configurations. SAM hides much of the complexity of deploying Lambda functions from you.</p> 
+<p>For instance, by adding an ‘Events’ resource to the PostAirmileFunction in the CloudFormation template, the Airmiles Lambda function is triggered by an event published to the Booking SNS topic. SAM creates the SNS subscription, as well as the permissions necessary for the SNS subscription to trigger the Lambda function.</p> 
+<code class="lang-yaml">PostAirmileFunction:
+Type: AWS::Serverless::Function
+Properties:
+Handler: post-airmiles-lambda.handler
+Runtime: python2.7
+Policies: AmazonDynamoDBFullAccess
+Events:
+SubmitBooking:
+Type: SNS
+Properties:
+Topic:
+!GetAtt CUSTOMLOOKUP.booking-lambda-BookingTopicArn
+Environment:
+Variables: 
+TABLE_NAME: !Ref AirmileDBTable</code> 
+<p>However, the Lambda permissions generated automatically by SAM are not sufficient for cross-account SNS subscription, which means you must specify an additional Lambda permissions resource in the CloudFormation template. LambdaResourcePolicy, in the following snippet, specifies that the Booking SNS topic is allowed to invoke the Lambda function PostAirmileFunction in the Airmiles account.</p> 
+<code class="lang-yaml">LambdaResourcePolicy:
+Type: AWS::Lambda::Permission
+Properties:
+FunctionName: !GetAtt PostAirmileFunction.Arn
+Principal: sns.amazonaws.com
+Action: lambda:InvokeFunction
+SourceArn : !GetAtt CUSTOMLOOKUP.booking-lambda-BookingTopicArn</code> 
+<b>Summary</b> 
+<p>In this post, I showed you how product teams can use CodePipeline to deploy microservices into different AWS accounts and different environments such as DEV, QA, and PROD. I also showed how, at runtime, microservices in different accounts can communicate securely with each other using an asynchronous, event-driven architecture. This allows product teams to maintain their own AWS accounts for billing and security purposes, while still supporting communication with microservices in other accounts owned by other product teams.</p> 
+<b>Acknowledgments</b> 
+<p>Thanks are due to the following people for their help in preparing this post:</p> 
+<li>Kevin Yung for the great web application used in the sample application</li> 
+<li>Jay McConnell for <a href="https://github.com/awslabs/aws-cloudformation-templates/tree/master/community/custom_resources/python_custom_resource_helper">crhelper</a>, the custom resource helper used with the CloudFormation custom resources</li> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3929');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/03/12/Pricing.png" /> 
 <b class="lb-b blog-post-title" property="name headline">New Amazon EC2 Spot pricing model: Simplified purchasing without bidding and fewer interruptions</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1784,121 +2012,6 @@ localhost/127.0.0.1:<em>&lt;some_port_number&gt;</em>
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3817');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/reference_diagram-1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Invoking AWS Lambda from Amazon MQ</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
-<time property="datePublished" datetime="2018-01-29T19:36:27+00:00">29 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-mq/" title="View all posts in Amazon MQ*"><span property="articleSection">Amazon MQ*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-integration/" title="View all posts in Application Integration"><span property="articleSection">Application Integration</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/" title="View all posts in Application Services*"><span property="articleSection">Application Services*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/enterprise-strategy/" title="View all posts in Enterprise Strategy*"><span property="articleSection">Enterprise Strategy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/migration/" title="View all posts in Migration*"><span property="articleSection">Migration*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/serverless/" title="View all posts in Serverless*"><span property="articleSection">Serverless*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/invoking-aws-lambda-from-amazon-mq/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3765" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3765&amp;disqus_title=Invoking+AWS+Lambda+from+Amazon+MQ&amp;disqus_url=https://aws.amazon.com/blogs/compute/invoking-aws-lambda-from-amazon-mq/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3765');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<h5>This post courtesy of Josh Kahn, AWS Solutions Architect</h5> 
-<p>Message brokers can be used to solve a number of needs in enterprise architectures, including managing workload queues and broadcasting messages to a number of subscribers. <a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> is a managed message broker service for Apache ActiveMQ that makes it easy to set up and operate message brokers in the cloud.</p> 
-<p>In this post, I discuss one approach to invoking <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> from queues and topics managed by Amazon MQ brokers. This and other similar patterns can be useful in integrating legacy systems with serverless architectures. You could also integrate systems already migrated to the cloud that use common APIs such as JMS.</p> 
-<p>For example, imagine that you work for a company that produces training videos and which recently migrated its video management system to AWS. The on-premises system used to publish a message to an ActiveMQ broker when a video was ready for processing by an on-premises transcoder. However, on AWS, your company uses <a href="https://aws.amazon.com/elastictranscoder/">Amazon Elastic Transcoder</a>. Instead of modifying the management system, Lambda polls the broker for new messages and starts a new Elastic Transcoder job. This approach avoids changes to the existing application while refactoring the workload to leverage cloud-native components.</p> 
-<p>This solution uses <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> to trigger a Lambda function that polls the Amazon MQ broker for messages. Instead of starting an Elastic Transcoder job, the sample writes the received message to an <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> table with a time stamp indicating the time received.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/30/reference_diagram_resized.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/30/reference_diagram_resized.png" /></a></p> 
-<b>Getting started</b> 
-<p>To start, navigate to the <a href="https://console.aws.amazon.com/amazon-mq/home">Amazon MQ console</a>. Next, launch a new Amazon MQ instance, selecting <strong>Single-instance Broker</strong> and supplying a broker name, user name, and password. Be sure to document the user name and password for later.</p> 
-<p>For the purposes of this sample, choose the default options in the <strong>Advanced settings</strong> section. Your new broker is deployed to the default VPC in the selected AWS Region with the default security group. For this post, you update the security group to allow access for your sample Lambda function. In a production scenario, I recommend deploying both the Lambda function and your Amazon MQ broker in your own VPC.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture1-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture1-1.png" /></a></p> 
-<p>After several minutes, your instance changes status from “Creation Pending” to “Available.” You can then visit the Details page of your broker to retrieve connection information, including a link to the ActiveMQ web console where you can monitor the status of your broker, publish test messages, and so on. In this example, use the Stomp protocol to connect to your broker. Be sure to capture the broker host name, for example:</p> 
-<p>&lt;BROKER_ID&gt;.mq.us-east-1.amazonaws.com</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture2-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture2-1.png" /></a></p> 
-<p>You should also modify the Security Group for the broker by clicking on its Security Group ID. Click the<strong> Edit</strong> button and then click <strong>Add Rule</strong> to allow inbound traffic on port 8162 for your IP address.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture3-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture3-1.png" /></a></p> 
-<b>Deploying and scheduling the Lambda function</b> 
-<p>To simplify the deployment of this example, I’ve provided an <a href="https://github.com/awslabs/serverless-application-model">AWS Serverless Application Model (SAM)</a> template that deploys the sample function and DynamoDB table, and schedules the function to be invoked every five minutes. Detailed instructions can be found with sample code on GitHub in the <a href="https://github.com/aws-samples/amazonmq-invoke-aws-lambda">amazonmq-invoke-aws-lambda repository</a>, with sample code. I discuss a few key aspects in this post.</p> 
-<p>First, SAM makes it easy to deploy and schedule invocation of our function:</p> 
-<code class="lang-yaml"></code> 
-<code class="lang-yaml">SubscriberFunction:
-Type: AWS::Serverless::Function
-Properties:
-CodeUri: subscriber/
-Handler: index.handler
-Runtime: nodejs6.10
-Role: !GetAtt SubscriberFunctionRole.Arn
-Timeout: 15
-Environment:
-Variables:
-HOST: !Ref AmazonMQHost
-LOGIN: !Ref AmazonMQLogin
-PASSWORD: !Ref AmazonMQPassword
-QUEUE_NAME: !Ref AmazonMQQueueName
-WORKER_FUNCTIOn: !Ref WorkerFunction
-Events:
-Timer:
-Type: Schedule
-Properties:
-Schedule: rate(5 minutes)
-WorkerFunction:
-Type: AWS::Serverless::Function
-Properties:
-CodeUri: worker/
-Handler: index.handler
-Runtime: nodejs6.10
-Role: !GetAtt WorkerFunctionRole.Arn
-Environment:
-Variables:
-TABLE_NAME: !Ref MessagesTable</code> 
-<p>In the code, you include the URI, user name, and password for your newly created Amazon MQ broker. These allow the function to poll the broker for new messages on the sample queue.</p> 
-<p>The sample Lambda function is written in Node.js, but <a href="http://activemq.apache.org/cross-language-clients.html">clients exist for a number of programming languages</a>.</p> 
-<code class="lang-js">stomp.connect(options, (error, client) =&gt; {
-if (error) { /* do something */ }
-let headers = {
-destination: ‘/queue/SAMPLE_QUEUE’,
-ack: ‘auto’
-}
-client.subscribe(headers, (error, message) =&gt; {
-if (error) { /* do something */ }
-message.readString(‘utf-8’, (error, body) =&gt; {
-if (error) { /* do something */ }
-let params = {
-FunctionName: MyWorkerFunction,
-Payload: JSON.stringify({
-message: body,
-timestamp: Date.now()
-})
-}
-let lambda = new AWS.Lambda()
-lambda.invoke(params, (error, data) =&gt; {
-if (error) { /* do something */ }
-})
-}
-})
-})</code> 
-<code class="lang- node.js"></code> 
-<b>Sending a sample message</b> 
-<p>For the purpose of this example, use the Amazon MQ console to send a test message. Navigate to the details page for your broker.</p> 
-<p>About midway down the page, choose <strong>ActiveMQ Web Console</strong>. Next, choose <strong>Manage ActiveMQ Broker</strong> to launch the admin console. When you are prompted for a user name and password, use the credentials created earlier.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture4-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture4-1.png" /></a></p> 
-<p>At the top of the page, choose <strong>Send</strong>. From here, you can send a sample message from the broker to subscribers. For this example, this is how you generate traffic to test the end-to-end system. Be sure to set the <strong>Destination</strong> value to “SAMPLE_QUEUE.” The message body can contain any text. Choose <strong>Send</strong>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture5-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture5-1.png" /></a></p> 
-<p>You now have a Lambda function polling for messages on the broker. To verify that your function is working, you can confirm in the <a href="https://console.aws.amazon.com/dynamodb/home">DynamoDB console</a> that the message was successfully received and processed by the sample Lambda function.</p> 
-<p>First, choose <strong>Tables</strong> on the left and select the table name “amazonmq-messages” in the middle section. With the table detail in view, choose <strong>Items</strong>. If the function was successful, you’ll find a new entry similar to the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/DynamoDB_Table2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/DynamoDB_Table2-1024x77.png" /></a></p> 
-<p>If there is no message in DynamoDB, check again in a few minutes or review the CloudWatch Logs group for Lambda functions that contain debug messages.</p> 
-<b>Alternative approaches</b> 
-<p>Beyond the approach described here, you may consider other approaches as well. For example, you could use an intermediary system such as Apache Flume to pass messages from the broker to Lambda or deploy <a href="http://camel.apache.org/http.html">Apache Camel to trigger Lambda via a POST to API Gateway</a>. There are trade-offs to each of these approaches. My goal in using CloudWatch Events was to introduce an easily repeatable pattern familiar to many Lambda developers.</p> 
-<b>Summary</b> 
-<p>I hope that you have found this example of how to integrate AWS Lambda with Amazon MQ useful. If you have expertise or legacy systems that leverage APIs such as JMS, you may find this useful as you incorporate serverless concepts in your enterprise architectures.</p> 
-<p>To learn more, see the <a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> website and <a href="https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/welcome.html">Developer Guide</a>. You can try <a href="https://console.aws.amazon.com/amazon-mq/home">Amazon MQ for free</a> with the AWS Free Tier, which includes up to 750 hours of a single-instance mq.t2.micro broker and up to 1 GB of storage per month for one year.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3765');
 });
 </script> 
 </article> 

@@ -190,6 +190,416 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Create Multiple Builds from the Same Source Using Different AWS CodeBuild Build Specification Files</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Prakash Palanisamy</span></span> | on 
+<time property="datePublished" datetime="2017-08-01T14:25:49+00:00">01 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/developer-tools/" title="View all posts in Developer Tools*"><span property="articleSection">Developer Tools*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/create-multiple-builds-from-the-same-source-using-different-aws-codebuild-build-specification-files/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>In June 2017, <a href="https://forums.aws.amazon.com/ann.jspa?annID=4762" target="_blank" rel="noopener noreferrer">AWS CodeBuild announced</a> you can now specify an alternate build specification file name or location in an AWS CodeBuild project.</p> 
+<p>In this post, I’ll show you how to use different build specification files in the same repository to create different builds. You’ll find the source code for this post in our&nbsp;<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec" target="_blank" rel="noopener noreferrer">GitHub repo</a>.</p> 
+<h3>Requirements</h3> 
+<p>The <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS CLI</a> must be installed and configured.</p> 
+<h3>Solution Overview</h3> 
+<p>I have created a C program (cbsamplelib.c) that will be used to create a shared library and another utility program (cbsampleutil.c) to use that library. I’ll use a Makefile to compile these files.</p> 
+<p>I need to put this sample application in RPM and DEB packages so end users can easily deploy them. I have created a build specification file for RPM. It will use make to compile this code and the RPM specification file (cbsample.rpmspec) configured in the build specification to create the RPM package. Similarly, I have created a build specification file for DEB. It will create the DEB package based on the control specification file (cbsample.control) configured in this build specification.</p> 
+<p><span id="more-1464"></span></p> 
+<h4>RPM Build Project:</h4> 
+<p>The following build specification file (<a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-rpm.yml</a>) uses build specification version 0.2. As described in <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html#build-spec-ref-versions" target="_blank" rel="noopener noreferrer">the documentation</a>, this version has different syntax for environment variables. This build specification includes multiple phases:</p> 
+<li>As part of the install phase, the required packages is installed using yum.</li> 
+<li>During the pre_build phase, the required directories are created and the required files, including the RPM build specification file, are copied to the appropriate location.</li> 
+<li>During the build phase, the code is compiled, and then the RPM package is created based on the RPM specification.</li> 
+<p>As defined in the artifact section, the RPM file will be uploaded as a build artifact.</p> 
+<code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
+&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-$build_version&quot;
+&nbsp; &nbsp; &nbsp; - echo $filename
+&nbsp; &nbsp; &nbsp; - mkdir -p $filename
+&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
+&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
+&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
+&nbsp; &nbsp; &nbsp; - cp cbsample.rpmspec ./SPECS/
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
+&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample.rpmspec
+&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - RPMS/x86_64/cbsample*.rpm
+&nbsp; discard-paths: yes
+</code> 
+<p>Using cb-centos-project.json as a reference, create the input JSON file for the CLI command. This project uses an AWS CodeCommit repository named codebuild-multispec and a file named buildspec-rpm.yml as the build specification file. To create the RPM package, we need to specify a custom image name. I’m using the latest CentOS 7 image available in the Docker Hub. I’m using a role named CodeBuildServiceRole. It contains permissions similar to those defined in CodeBuildServiceRole.json. (You need to change the resource fields in the policy, as appropriate.)</p> 
+<code class="lang-json">{
+&nbsp; &nbsp; &quot;name&quot;: &quot;rpm-build-project&quot;,
+&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build RPM from the source.&quot;,
+&nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
+&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
+&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
+&nbsp; &nbsp; &quot;tags&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;RPM Demo Build&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}
+</code> 
+<p>After the <code class="lang-bash">cli-input-json</code> file is ready, execute the following command to create the build project.</p> 
+<code class="lang-json">$ aws codebuild create-project --name CodeBuild-RPM-Demo --cli-input-json file://cb-centos-project.json
+{
+&quot;project&quot;: {
+&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;, 
+&quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;, 
+&quot;tags&quot;: [
+{
+&quot;value&quot;: &quot;RPM Demo Build&quot;, 
+&quot;key&quot;: &quot;Name&quot;
+}
+], 
+&quot;artifacts&quot;: {
+&quot;namespaceType&quot;: &quot;NONE&quot;, 
+&quot;packaging&quot;: &quot;NONE&quot;, 
+&quot;type&quot;: &quot;S3&quot;, 
+&quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;, 
+&quot;name&quot;: &quot;CodeBuild-RPM-Demo&quot;
+}, 
+&quot;lastModified&quot;: 1500559811.13, 
+&quot;timeoutInMinutes&quot;: 15, 
+&quot;created&quot;: 1500559811.13, 
+&quot;environment&quot;: {
+&quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;, 
+&quot;privilegedMode&quot;: false, 
+&quot;image&quot;: &quot;centos:7&quot;, 
+&quot;type&quot;: &quot;LINUX_CONTAINER&quot;, 
+&quot;environmentVariables&quot;: []
+}, 
+&quot;source&quot;: {
+&quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;, 
+&quot;type&quot;: &quot;CODECOMMIT&quot;, 
+&quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+}, 
+&quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;, 
+&quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:project/CodeBuild-RPM-Demo&quot;, 
+&quot;description&quot;: &quot;Project which will build RPM from the source.&quot;
+}
+}</code> 
+<p>When the project is created, run the following command to start the build. After the build has started, get the build ID. You can use the build ID to get the status of the build.</p> 
+<code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo
+{
+&nbsp; &nbsp; &quot;build&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1: 012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; }
+}
+$ aws codebuild list-builds-for-project --project-name CodeBuild-RPM-Demo
+{
+&nbsp; &nbsp; &quot;ids&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; ]
+}
+$ aws codebuild batch-get-builds --ids CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc
+{
+&nbsp; &nbsp; &quot;buildsNotFound&quot;: [],&nbsp;
+&nbsp; &nbsp; &quot;builds&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: true,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phases&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560157.164,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PROVISIONING&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 24,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560157.164,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560182.066
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;DOWNLOAD_SOURCE&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560182.066,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560197.906
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;INSTALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 19,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560197.906,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.515
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;PRE_BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.515,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.662
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.662,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560217.995
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;POST_BUILD&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560217.995,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.074
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;UPLOAD_ARTIFACTS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 0,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.074,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560218.542
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;contexts&quot;: [],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;FINALIZING&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;durationInSeconds&quot;: 4,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560218.542,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;phaseType&quot;: &quot;COMPLETED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560223.128
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ],&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;logs&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;groupName&quot;: &quot;/aws/codebuild/CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;deepLink&quot;: &quot;https://console.aws.amazon.com/cloudwatch/home?region=eu-west-1#logEvent:group=/aws/codebuild/CodeBuild-RPM-Demo;stream=57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;streamName&quot;: &quot;57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;SUCCEEDED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;COMPLETED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500560156.761,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;endTime&quot;: 1500560223.128,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:57a36755-4d37-4b08-9c11-1468e1682abc&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}</code> 
+<h4>DEB Build Project:</h4> 
+<p>In this project, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-deb.yml" target="_blank" rel="noopener noreferrer">buildspec-deb.yml</a>. Like the RPM build project, this specification includes multiple phases. Here I use a Debian control file to create the package in DEB format. After a successful build, the DEB package will be uploaded as build artifact.</p> 
+<code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - apt-get install gcc make -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/DEBIAN
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/lib
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/include
+&nbsp; &nbsp; &nbsp; - mkdir -p ./cbsample-$build_version/usr/bin
+&nbsp; &nbsp; &nbsp; - cp -f cbsample.control ./cbsample-$build_version/DEBIAN/control
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Building the application&quot;
+&nbsp; &nbsp; &nbsp; - make
+&nbsp; &nbsp; &nbsp; - cp libcbsamplelib.so ./cbsample-$build_version/usr/lib
+&nbsp; &nbsp; &nbsp; - cp cbsamplelib.h ./cbsample-$build_version/usr/include
+&nbsp; &nbsp; &nbsp; - cp cbsampleutil ./cbsample-$build_version/usr/bin
+&nbsp; &nbsp; &nbsp; - chmod +x ./cbsample-$build_version/usr/bin/cbsampleutil
+&nbsp; &nbsp; &nbsp; - dpkg-deb --build ./cbsample-$build_version
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - cbsample-*.deb</code> 
+<p>Here we use cb-ubuntu-project.json as a reference to create the CLI input JSON file. This project uses the same AWS CodeCommit repository (codebuild-multispec) but a different buildspec file in the same repository (buildspec-deb.yml). We use the default CodeBuild image to create the DEB package. We use the same IAM role (CodeBuildServiceRole).</p> 
+<code class="lang-json">{
+&nbsp; &nbsp; &quot;name&quot;: &quot;deb-build-project&quot;,
+&nbsp; &nbsp; &quot;description&quot;: &quot;Project which will build DEB from the source.&quot;,
+&nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-deb.yml&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;S3&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;codebuild-demo-artifact-repository&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;aws/codebuild/ubuntu-base:14.04&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;
+&nbsp; &nbsp; },
+&nbsp; &nbsp; &quot;serviceRole&quot;: &quot;arn:aws:iam::012345678912:role/service-role/CodeBuildServiceRole&quot;,
+&nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,
+&nbsp; &nbsp; &quot;encryptionKey&quot;: &quot;arn:aws:kms:eu-west-1:012345678912:alias/aws/s3&quot;,
+&nbsp; &nbsp; &quot;tags&quot;: [
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;key&quot;: &quot;Name&quot;,
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;value&quot;: &quot;Debian Demo Build&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; ]
+}</code> 
+<p>Using the CLI input JSON file, create the project, start the build, and check the status of the project.</p> 
+<code class="lang-bash">$ aws codebuild create-project --name CodeBuild-DEB-Demo --cli-input-json file://cb-ubuntu-project.json
+$ aws codebuild list-builds-for-project --project-name CodeBuild-DEB-Demo
+$ aws codebuild batch-get-builds --ids CodeBuild-DEB-Demo:e535c4b0-7067-4fbe-8060-9bb9de203789</code> 
+<p>After successful completion of the RPM and DEB builds, check the S3 bucket configured in the artifacts section for the build packages. Build projects will create a directory in the name of the build project and copy the artifacts inside it.</p> 
+<code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
+2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
+$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-DEB-Demo/
+2017-07-20 16:37:22 &nbsp; &nbsp; &nbsp; 5420 cbsample-0.1.deb</code> 
+<h4>Override Buildspec During Build Start:</h4> 
+<p>It’s also possible to override the build specification file of an existing project when starting a build. If we want to create the libs RPM package instead of the whole RPM, we will use the build specification file named <a href="https://github.com/awslabs/aws-codebuild-multiple-buildspec/blob/master/buildspec-libs-rpm.yml" target="_blank" rel="noopener noreferrer">buildspec-libs-rpm.yml</a>. This build specification file is similar to the earlier RPM build. The only difference is that it uses a different RPM specification file to create libs RPM.</p> 
+<code class="lang-yaml">version: 0.2
+env:
+&nbsp; variables:
+&nbsp; &nbsp; build_version: &quot;0.1&quot;
+phases:
+&nbsp; install:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - yum install rpm-build make gcc glibc -y
+&nbsp; pre_build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - curr_working_dir=`pwd`
+&nbsp; &nbsp; &nbsp; - mkdir -p ./{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+&nbsp; &nbsp; &nbsp; - filename=&quot;cbsample-libs-$build_version&quot;
+&nbsp; &nbsp; &nbsp; - echo $filename
+&nbsp; &nbsp; &nbsp; - mkdir -p $filename
+&nbsp; &nbsp; &nbsp; - cp ./*.c ./*.h Makefile $filename
+&nbsp; &nbsp; &nbsp; - tar -zcvf /root/$filename.tar.gz $filename
+&nbsp; &nbsp; &nbsp; - cp /root/$filename.tar.gz ./SOURCES/
+&nbsp; &nbsp; &nbsp; - cp cbsample-libs.rpmspec ./SPECS/
+&nbsp; build:
+&nbsp; &nbsp; commands:
+&nbsp; &nbsp; &nbsp; - echo &quot;Triggering RPM build&quot;
+&nbsp; &nbsp; &nbsp; - rpmbuild --define &quot;_topdir `pwd`&quot; -ba SPECS/cbsample-libs.rpmspec
+&nbsp; &nbsp; &nbsp; - cd $curr_working_dir
+artifacts:
+&nbsp; files:
+&nbsp; &nbsp; - RPMS/x86_64/cbsample-libs*.rpm
+&nbsp; discard-paths: yes</code> 
+<p>Using the same RPM build project that we created earlier, start a new build and set the value of the `–buildspec-override` parameter to buildspec-libs-rpm.yml .</p> 
+<code class="lang-json">$ aws codebuild start-build --project-name CodeBuild-RPM-Demo --buildspec-override buildspec-libs-rpm.yml
+{
+&nbsp; &nbsp; &quot;build&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildComplete&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;initiator&quot;: &quot;prakash&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;artifacts&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;arn:aws:s3:::codebuild-demo-artifact-repository/CodeBuild-RPM-Demo&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;projectName&quot;: &quot;CodeBuild-RPM-Demo&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;timeoutInMinutes&quot;: 15,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;buildStatus&quot;: &quot;IN_PROGRESS&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;environment&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;computeType&quot;: &quot;BUILD_GENERAL1_SMALL&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;privilegedMode&quot;: false,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;image&quot;: &quot;centos:7&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;LINUX_CONTAINER&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;environmentVariables&quot;: []
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;source&quot;: {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;buildspec&quot;: &quot;buildspec-libs-rpm.yml&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;type&quot;: &quot;CODECOMMIT&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &quot;location&quot;: &quot;https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/codebuild-multispec&quot;
+&nbsp; &nbsp; &nbsp; &nbsp; },&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;currentPhase&quot;: &quot;SUBMITTED&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;startTime&quot;: 1500562366.239,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;id&quot;: &quot;CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;,&nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &quot;arn&quot;: &quot;arn:aws:codebuild:eu-west-1:012345678912:build/CodeBuild-RPM-Demo:82d05f8a-b161-401c-82f0-83cb41eba567&quot;
+&nbsp; &nbsp; }
+}</code> 
+<p>After the build is completed successfully, check to see if the package appears in the artifact S3 bucket under the CodeBuild-RPM-Demo build project folder.</p> 
+<code class="lang-bash">$ aws s3 ls s3://codebuild-demo-artifact-repository/CodeBuild-RPM-Demo/
+2017-07-20 16:16:59 &nbsp; &nbsp; &nbsp; 8108 cbsample-0.1-1.el7.centos.x86_64.rpm
+2017-07-20 16:53:54 &nbsp; &nbsp; &nbsp; 5320 cbsample-libs-0.1-1.el7.centos.x86_64.rpm</code> 
+<h3>Conclusion</h3> 
+<p>In this post, I have shown you how multiple buildspec files in the same source repository can be used to run multiple AWS CodeBuild build projects. I have also shown you how to provide a different buildspec file when starting the build.</p> 
+<p>For more information about AWS CodeBuild, see the&nbsp;<a href="https://aws.amazon.com/documentation/codebuild/" target="_blank" rel="noopener noreferrer">AWS CodeBuild documentation</a>. You can&nbsp;get started&nbsp;with AWS CodeBuild by using <a href="http://docs.aws.amazon.com/codebuild/latest/userguide/getting-started.html" target="_blank" rel="noopener noreferrer">this step by step guide</a>.</p> 
+<hr /> 
+<h3>About the author</h3> 
+<p><strong><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/06/07/PP1-150x150.jpg" />Prakash Palanisamy</strong> is a Solutions Architect for Amazon Web Services. When he is not working on Serverless, DevOps or Alexa, he will be solving problems in Project Euler. He also enjoys watching educational documentaries.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Validating AWS CloudFormation Templates</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1679,19 +2089,6 @@ by
 <p><strong>Conclusion</strong></p> 
 <p>AWS CodeDeploy enables developers to automate code deployments to Amazon EC2 and on-premises instances. The blue/green deployment option enables release managers to create a new production environment and makes it easier to roll back to the previous environment if problems arise. For more information about AWS CodeDeploy, see the <a href="https://aws.amazon.com/documentation/codedeploy/">AWS CodeDeploy documentation</a>. You can get started in just a few clicks.</p> 
 <p>Enjoy life in the blue/green world!</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Use Parameter Store to Securely Access Secrets and Config Data in AWS CodeDeploy</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chirag Dhull</span></span> | on 
-<time property="datePublished" datetime="2017-04-11T10:57:28+00:00">11 APR 2017</time> | 
-<a href="https://aws.amazon.com/blogs/devops/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>AWS CodeDeploy is a service that automates code deployments to any instance, including Amazon EC2 instances and instances running on-premises. Many customers use AWS CodeDeploy to automate application deployment because it provides a uniform method for:<br /> • Updating applications across development, staging, and production environments.<br /> • Handling the complexity of updating applications and avoiding service downtime.</p> 
-<p>&nbsp;<br /> Visit this <a href="https://aws.amazon.com/blogs/mt/use-parameter-store-to-securely-access-secrets-and-config-data-in-aws-codedeploy/">post</a> on the management tools blog and learn how to simplify your AWS CodeDeploy workflows by using Parameter Store to store and reference a configuration secret.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

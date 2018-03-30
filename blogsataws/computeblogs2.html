@@ -190,6 +190,121 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/reference_diagram-1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Invoking AWS Lambda from Amazon MQ</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
+<time property="datePublished" datetime="2018-01-29T19:36:27+00:00">29 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-mq/" title="View all posts in Amazon MQ*"><span property="articleSection">Amazon MQ*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-integration/" title="View all posts in Application Integration"><span property="articleSection">Application Integration</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/" title="View all posts in Application Services*"><span property="articleSection">Application Services*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/enterprise-strategy/" title="View all posts in Enterprise Strategy*"><span property="articleSection">Enterprise Strategy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/migration/" title="View all posts in Migration*"><span property="articleSection">Migration*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/serverless/" title="View all posts in Serverless*"><span property="articleSection">Serverless*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/invoking-aws-lambda-from-amazon-mq/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3765" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3765&amp;disqus_title=Invoking+AWS+Lambda+from+Amazon+MQ&amp;disqus_url=https://aws.amazon.com/blogs/compute/invoking-aws-lambda-from-amazon-mq/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3765');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<h5>This post courtesy of Josh Kahn, AWS Solutions Architect</h5> 
+<p>Message brokers can be used to solve a number of needs in enterprise architectures, including managing workload queues and broadcasting messages to a number of subscribers. <a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> is a managed message broker service for Apache ActiveMQ that makes it easy to set up and operate message brokers in the cloud.</p> 
+<p>In this post, I discuss one approach to invoking <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> from queues and topics managed by Amazon MQ brokers. This and other similar patterns can be useful in integrating legacy systems with serverless architectures. You could also integrate systems already migrated to the cloud that use common APIs such as JMS.</p> 
+<p>For example, imagine that you work for a company that produces training videos and which recently migrated its video management system to AWS. The on-premises system used to publish a message to an ActiveMQ broker when a video was ready for processing by an on-premises transcoder. However, on AWS, your company uses <a href="https://aws.amazon.com/elastictranscoder/">Amazon Elastic Transcoder</a>. Instead of modifying the management system, Lambda polls the broker for new messages and starts a new Elastic Transcoder job. This approach avoids changes to the existing application while refactoring the workload to leverage cloud-native components.</p> 
+<p>This solution uses <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> to trigger a Lambda function that polls the Amazon MQ broker for messages. Instead of starting an Elastic Transcoder job, the sample writes the received message to an <a href="https://aws.amazon.com/dynamodb/">Amazon DynamoDB</a> table with a time stamp indicating the time received.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/30/reference_diagram_resized.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/30/reference_diagram_resized.png" /></a></p> 
+<b>Getting started</b> 
+<p>To start, navigate to the <a href="https://console.aws.amazon.com/amazon-mq/home">Amazon MQ console</a>. Next, launch a new Amazon MQ instance, selecting <strong>Single-instance Broker</strong> and supplying a broker name, user name, and password. Be sure to document the user name and password for later.</p> 
+<p>For the purposes of this sample, choose the default options in the <strong>Advanced settings</strong> section. Your new broker is deployed to the default VPC in the selected AWS Region with the default security group. For this post, you update the security group to allow access for your sample Lambda function. In a production scenario, I recommend deploying both the Lambda function and your Amazon MQ broker in your own VPC.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture1-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture1-1.png" /></a></p> 
+<p>After several minutes, your instance changes status from “Creation Pending” to “Available.” You can then visit the Details page of your broker to retrieve connection information, including a link to the ActiveMQ web console where you can monitor the status of your broker, publish test messages, and so on. In this example, use the Stomp protocol to connect to your broker. Be sure to capture the broker host name, for example:</p> 
+<p>&lt;BROKER_ID&gt;.mq.us-east-1.amazonaws.com</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture2-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture2-1.png" /></a></p> 
+<p>You should also modify the Security Group for the broker by clicking on its Security Group ID. Click the<strong> Edit</strong> button and then click <strong>Add Rule</strong> to allow inbound traffic on port 8162 for your IP address.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture3-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture3-1.png" /></a></p> 
+<b>Deploying and scheduling the Lambda function</b> 
+<p>To simplify the deployment of this example, I’ve provided an <a href="https://github.com/awslabs/serverless-application-model">AWS Serverless Application Model (SAM)</a> template that deploys the sample function and DynamoDB table, and schedules the function to be invoked every five minutes. Detailed instructions can be found with sample code on GitHub in the <a href="https://github.com/aws-samples/amazonmq-invoke-aws-lambda">amazonmq-invoke-aws-lambda repository</a>, with sample code. I discuss a few key aspects in this post.</p> 
+<p>First, SAM makes it easy to deploy and schedule invocation of our function:</p> 
+<code class="lang-yaml"></code> 
+<code class="lang-yaml">SubscriberFunction:
+Type: AWS::Serverless::Function
+Properties:
+CodeUri: subscriber/
+Handler: index.handler
+Runtime: nodejs6.10
+Role: !GetAtt SubscriberFunctionRole.Arn
+Timeout: 15
+Environment:
+Variables:
+HOST: !Ref AmazonMQHost
+LOGIN: !Ref AmazonMQLogin
+PASSWORD: !Ref AmazonMQPassword
+QUEUE_NAME: !Ref AmazonMQQueueName
+WORKER_FUNCTIOn: !Ref WorkerFunction
+Events:
+Timer:
+Type: Schedule
+Properties:
+Schedule: rate(5 minutes)
+WorkerFunction:
+Type: AWS::Serverless::Function
+Properties:
+CodeUri: worker/
+Handler: index.handler
+Runtime: nodejs6.10
+Role: !GetAtt WorkerFunctionRole.Arn
+Environment:
+Variables:
+TABLE_NAME: !Ref MessagesTable</code> 
+<p>In the code, you include the URI, user name, and password for your newly created Amazon MQ broker. These allow the function to poll the broker for new messages on the sample queue.</p> 
+<p>The sample Lambda function is written in Node.js, but <a href="http://activemq.apache.org/cross-language-clients.html">clients exist for a number of programming languages</a>.</p> 
+<code class="lang-js">stomp.connect(options, (error, client) =&gt; {
+if (error) { /* do something */ }
+let headers = {
+destination: ‘/queue/SAMPLE_QUEUE’,
+ack: ‘auto’
+}
+client.subscribe(headers, (error, message) =&gt; {
+if (error) { /* do something */ }
+message.readString(‘utf-8’, (error, body) =&gt; {
+if (error) { /* do something */ }
+let params = {
+FunctionName: MyWorkerFunction,
+Payload: JSON.stringify({
+message: body,
+timestamp: Date.now()
+})
+}
+let lambda = new AWS.Lambda()
+lambda.invoke(params, (error, data) =&gt; {
+if (error) { /* do something */ }
+})
+}
+})
+})</code> 
+<code class="lang- node.js"></code> 
+<b>Sending a sample message</b> 
+<p>For the purpose of this example, use the Amazon MQ console to send a test message. Navigate to the details page for your broker.</p> 
+<p>About midway down the page, choose <strong>ActiveMQ Web Console</strong>. Next, choose <strong>Manage ActiveMQ Broker</strong> to launch the admin console. When you are prompted for a user name and password, use the credentials created earlier.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture4-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture4-1.png" /></a></p> 
+<p>At the top of the page, choose <strong>Send</strong>. From here, you can send a sample message from the broker to subscribers. For this example, this is how you generate traffic to test the end-to-end system. Be sure to set the <strong>Destination</strong> value to “SAMPLE_QUEUE.” The message body can contain any text. Choose <strong>Send</strong>.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture5-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/Picture5-1.png" /></a></p> 
+<p>You now have a Lambda function polling for messages on the broker. To verify that your function is working, you can confirm in the <a href="https://console.aws.amazon.com/dynamodb/home">DynamoDB console</a> that the message was successfully received and processed by the sample Lambda function.</p> 
+<p>First, choose <strong>Tables</strong> on the left and select the table name “amazonmq-messages” in the middle section. With the table detail in view, choose <strong>Items</strong>. If the function was successful, you’ll find a new entry similar to the following:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/DynamoDB_Table2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/29/DynamoDB_Table2-1024x77.png" /></a></p> 
+<p>If there is no message in DynamoDB, check again in a few minutes or review the CloudWatch Logs group for Lambda functions that contain debug messages.</p> 
+<b>Alternative approaches</b> 
+<p>Beyond the approach described here, you may consider other approaches as well. For example, you could use an intermediary system such as Apache Flume to pass messages from the broker to Lambda or deploy <a href="http://camel.apache.org/http.html">Apache Camel to trigger Lambda via a POST to API Gateway</a>. There are trade-offs to each of these approaches. My goal in using CloudWatch Events was to introduce an easily repeatable pattern familiar to many Lambda developers.</p> 
+<b>Summary</b> 
+<p>I hope that you have found this example of how to integrate AWS Lambda with Amazon MQ useful. If you have expertise or legacy systems that leverage APIs such as JMS, you may find this useful as you incorporate serverless concepts in your enterprise architectures.</p> 
+<p>To learn more, see the <a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> website and <a href="https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/welcome.html">Developer Guide</a>. You can try <a href="https://console.aws.amazon.com/amazon-mq/home">Amazon MQ for free</a> with the AWS Free Tier, which includes up to 750 hours of a single-instance mq.t2.micro broker and up to 1 GB of storage per month for one year.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3765');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/26/Slide6-1169x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Task Networking in AWS Fargate</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1072,262 +1187,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3513');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3513');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Managing AWS Lambda Function Concurrency</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
-<time property="datePublished" datetime="2017-12-11T10:50:02+00:00">11 DEC 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/managing-aws-lambda-function-concurrency/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3483" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3483&amp;disqus_title=Managing+AWS+Lambda+Function+Concurrency&amp;disqus_url=https://aws.amazon.com/blogs/compute/managing-aws-lambda-function-concurrency/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3483');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>One of the key benefits of <a href="https://aws.amazon.com/serverless/">serverless applications</a> is the ease in which they can scale to meet traffic demands or requests, with little to no need for capacity planning. In <a href="https://aws.amazon.com/lambda">AWS Lambda</a>, which is the core of the serverless platform at AWS, the unit of scale is a <a href="https://docs.aws.amazon.com/lambda/latest/dg/concurrent-executions.html">concurrent execution</a>. This refers to the number of executions of your function code that are happening at any given time.</p> 
-<p>Thinking about concurrent executions as a unit of scale is a fairly unique concept. In this post, I dive deeper into this and talk about how you can make use of per function concurrency limits in Lambda.<br /> <span id="more-3483"></span></p> 
-<b>Understanding concurrency in Lambda</b> 
-<p>Instead of diving right into the guts of how Lambda works, here’s an appetizing analogy: <strong>a magical pizza</strong>.<br /> Yes, a magical pizza!</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/pizza.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/pizza-300x300.png" /></a></p> 
-<p>This magical pizza has some unique properties:</p> 
-<li>It has a fixed maximum number of slices, such as 8.</li> 
-<li>Slices automatically re-appear after they are consumed.</li> 
-<li>When you take a slice from the pizza, it does not re-appear until it has been completely consumed.</li> 
-<li>One person can take multiple slices at a time.</li> 
-<li>You can easily ask to have the number of slices increased, but they remain fixed at any point in time otherwise.</li> 
-<p>Now that the magical pizza’s properties are defined, here’s a hypothetical situation of some friends sharing this pizza.</p> 
-<p>Shawn, Kate, Daniela, Chuck, Ian and Avleen get together every Friday to share a pizza and catch up on their week. As there is just six of them, they can easily all enjoy a slice of pizza at a time. As they finish each slice, it re-appears in the pizza&nbsp;pan&nbsp;and they can take another slice again. Given the magical properties of their pizza, they can continue to eat all they want, but with two very important constraints:</p> 
-<li>If any of them take too many slices at once, the others may not get as much as they want.</li> 
-<li>If they take too many slices, they might also eat too much and get sick.</li> 
-<p>One particular week, some of the friends are hungrier than the rest, taking two slices at a time instead of just one. If more than two of them try to take two pieces at a time, this can cause contention for pizza slices. Some of them would wait hungry for the slices to re-appear. They could ask for a pizza with more slices, but then run the same risk again later if more hungry friends join than planned for.</p> 
-<p>What can they do?</p> 
-<p>If the friends agreed to accept a limit for the maximum number of slices they each eat concurrently, both of these issues are avoided. Some could have a maximum of 2 of the 8 slices, or other concurrency limits that were more or less. Just so long as they kept it at or under eight total slices to be eaten at one time. This would keep any from going hungry or eating too much. The six friends can happily enjoy their magical pizza without worry!</p> 
-<b>Concurrency in Lambda</b> 
-<p>Concurrency in Lambda actually works similarly to the magical pizza model. Each AWS Account has an overall <a href="https://docs.aws.amazon.com/lambda/latest/dg/API_GetAccountSettings.html">AccountLimit</a> value that is fixed at any point in time, but can be easily increased as needed, just like the count of slices in the pizza. <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/aws-lambda-raises-default-concurrent-execution-limit/">As of May 2017</a>, the default limit is 1000 “slices” of concurrency per AWS Region.</p> 
-<p>Also like the magical pizza, each concurrency “slice” can only be consumed individually one at a time. After consumption, it becomes available to be consumed again. Services invoking Lambda functions can consume multiple slices of concurrency at the same time, just like the group of friends can take multiple slices of the pizza.</p> 
-<p>Let’s take our example of the six friends and bring it back to AWS services that commonly invoke Lambda:</p> 
-<li>Amazon S3</li> 
-<li>Amazon Kinesis</li> 
-<li>Amazon DynamoDB</li> 
-<li>Amazon Cognito</li> 
-<p>In a single account with the default concurrency limit of 1000 concurrent executions, any of these four services could invoke enough functions to consume the entire limit or some part of it. Just like with the pizza example, there is the possibility for two issues to pop up:</p> 
-<li>One or more of these services could invoke enough functions to consume a majority of the available concurrency capacity. This could cause others to be starved for it, causing failed invocations.</li> 
-<li>A service could consume too much concurrent capacity and cause a downstream service or database to be overwhelmed, which could cause failed executions.</li> 
-<p>For Lambda functions that are launched in a VPC, you have the potential to consume the available IP addresses in a subnet or the maximum number of elastic network interfaces to which your account has access. For more information, see <a href="https://docs.aws.amazon.com/lambda/latest/dg/vpc.html">Configuring a Lambda Function to Access Resources in an Amazon VPC</a>. For information about elastic network interface limits, see <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Appendix_Limits.html#vpc-limits-enis">Network Interfaces</a> section in the Amazon VPC Limits topic.</p> 
-<p>One way to solve both of these problems is applying a concurrency limit to the Lambda functions in an account.</p> 
-<b>Configuring per function concurrency limits</b> 
-<p>You can now set a concurrency limit on individual Lambda functions in an account. The concurrency limit that you set reserves a portion of your account level concurrency for a given function. All of your functions’ concurrent executions count against this account-level limit by default.</p> 
-<p>If you set a concurrency limit for a specific function, then that function’s concurrency limit allocation is deducted from the shared pool and assigned to that specific function. AWS also reserves 100 units of concurrency for all functions that don’t have a specified concurrency limit set. This helps to make sure that future functions have capacity to be consumed.</p> 
-<p>Going back to the example of the consuming services, you could set throttles for the functions as follows:</p> 
-<p>Amazon S3 function = 350<br /> Amazon Kinesis function = 200<br /> Amazon DynamoDB function = 200<br /> Amazon Cognito function = 150<br /> Total = 900</p> 
-<p>With the 100 reserved for all non-concurrency reserved functions, this totals the account limit of 1000.</p> 
-<p>Here’s how this works. To start, create a basic Lambda function that is invoked via <a href="https://aws.amazon.com/api-gateway">Amazon API Gateway</a>. This Lambda function returns a single “Hello World” statement with an added sleep time between 2 and 5 seconds. The sleep time simulates an API providing some sort of capability that can take a varied amount of time. The goal here is to show how an API that is underloaded can reach its concurrency limit, and what happens when it does.<br /> <strong>To create the example function</strong></p> 
-<ol> 
-<li>Open the <a href="https://console.aws.amazon.com/lambda/home">Lambda console</a>.</li> 
-<li>Choose <strong>Create Function</strong>.</li> 
-<li>For <strong>Author from scratch</strong>, enter the following values: 
-<ol> 
-<li>For <strong>Name</strong>, enter a value (such as concurrencyBlog01).</li> 
-<li>For <strong>Runtime</strong>, choose <strong>Python 3.6</strong>.</li> 
-<li>For <strong>Role</strong>, choose <strong>Create new role from template</strong> and enter a name aligned with this function, such as concurrencyBlogRole.</li> 
-</ol> </li> 
-<li>Choose <strong>Create function</strong>.</li> 
-<li>The function is created with some basic example code. Replace that code with the following:</li> 
-</ol> 
-<code class="lang-python">
-import time
-from random import randint
-seconds = randint(2, 5)
-def lambda_handler(event, context):
-time.sleep(seconds)
-return {&quot;statusCode&quot;: 200,
-&quot;body&quot;: (&quot;Hello world, slept &quot; + str(seconds) + &quot; seconds&quot;),
-&quot;headers&quot;:
-{
-&quot;Access-Control-Allow-Headers&quot;: &quot;Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token&quot;,
-&quot;Access-Control-Allow-Methods&quot;: &quot;GET,OPTIONS&quot;,
-}}
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/code-editor.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/code-editor.png" /></a>
-</code> 
-<ol start="6"> 
-<li>Under <strong>Basic settings</strong>, set <strong>Timeout</strong> to 10 seconds. While this function should only ever take up to 5-6 seconds (with the 5-second max sleep), this gives you a little bit of room if it takes longer.</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/basic-settings.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/basic-settings.png" /></a></p> 
-<ol start="7"> 
-<li>Choose <strong>Save</strong> at the top right.</li> 
-</ol> 
-<p>At this point, your function is configured for this example. Test it and confirm this in the console:</p> 
-<ol> 
-<li>Choose <strong>Test</strong>.</li> 
-<li>Enter a name (it doesn’t matter for this example).</li> 
-<li>Choose <strong>Create</strong>.</li> 
-<li>In the console, choose <strong>Test</strong> again.</li> 
-<li>You should see output similar to the following:</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/test-success.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/test-success.png" /></a></p> 
-<p>Now configure API Gateway so that you have an HTTPS endpoint to test against.</p> 
-<ol> 
-<li>In the Lambda console, choose <strong>Configuration</strong>.</li> 
-<li>Under <strong>Triggers</strong>, choose <strong>API Gateway</strong>.</li> 
-<li>Open the API Gateway icon now shown as attached to your Lambda function:</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/triggers.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/triggers.png" /></a></p> 
-<ol start="4"> 
-<li>Under <strong>Configure triggers</strong>, leave the default values for <strong>API Name</strong> and <strong>Deployment stage</strong>. For <strong>Security</strong>, choose <strong>Open</strong>.</li> 
-<li>Choose <strong>Add, Save</strong>.</li> 
-</ol> 
-<p>API Gateway is now configured to invoke Lambda at the Invoke URL shown under its configuration. You can take this URL and test it in any browser or command line, using tools such as “curl”:</p> 
-<code class="lang-bash">
-$ curl https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
-Hello world, slept 2 seconds
-</code> 
-<h3>Throwing load at the function</h3> 
-<p>Now start throwing some load against your API Gateway + Lambda function combo. Right now, your function is only limited by the total amount of concurrency available in an account. For this example account, you might have 850 unreserved concurrency out of a full account limit of 1000 due to having configured a few concurrency limits already (also the 100 concurrency saved for all functions without configured limits). You can find all of this information on the main <strong>Dashboard</strong> page of the Lambda console:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/lambda-dash.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/lambda-dash.png" /></a></p> 
-<p>For generating load in this example, use an open source tool called “hey” (<a href="https://github.com/rakyll/hey">https://github.com/rakyll/hey</a>), which works similarly to ApacheBench (<a href="https://httpd.apache.org/docs/2.4/programs/ab.html">ab</a>). You test from an Amazon EC2 instance running the default Amazon Linux AMI from the EC2 console. For more help with configuring an EC2 instance, follow the steps in the <a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:">Launch Instance Wizard</a>.</p> 
-<p>After the EC2 instance is running, SSH into the host and run the following:</p> 
-<code class="lang-bash">
-sudo yum install go
-go get -u github.com/rakyll/hey
-</code> 
-<p>“hey” is easy to use. For these tests, specify a total number of tests (5,000) and a concurrency of 50 against the API Gateway URL as follows(replace the URL here with your own):</p> 
-<code class="lang-bash">
-$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
-</code> 
-<p>The output from “hey” tells you interesting bits of information:</p> 
-<code class="lang-bash">
-$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
-Summary:
-Total: 381.9978 secs
-Slowest: 9.4765 secs
-Fastest: 0.0438 secs
-Average: 3.2153 secs
-Requests/sec: 13.0891
-Total data: 140024 bytes
-Size/request: 28 bytes
-Response time histogram:
-0.044 [1] |
-0.987 [2] |
-1.930 [0] |
-2.874 [1803] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-3.817 [1518] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-4.760 [719] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-5.703 [917] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-6.647 [13] |
-7.590 [14] |
-8.533 [9] |
-9.477 [4] |
-Latency distribution:
-10% in 2.0224 secs
-25% in 2.0267 secs
-50% in 3.0251 secs
-75% in 4.0269 secs
-90% in 5.0279 secs
-95% in 5.0414 secs
-99% in 5.1871 secs
-Details (average, fastest, slowest):
-DNS+dialup: 0.0003 secs, 0.0000 secs, 0.0332 secs
-DNS-lookup: 0.0000 secs, 0.0000 secs, 0.0046 secs
-req write: 0.0000 secs, 0.0000 secs, 0.0005 secs
-resp wait: 3.2149 secs, 0.0438 secs, 9.4472 secs
-resp read: 0.0000 secs, 0.0000 secs, 0.0004 secs
-Status code distribution:
-[200] 4997 responses
-[502] 3 responses
-</code> 
-<p>You can see a helpful histogram and latency distribution. Remember that this Lambda function has a random sleep period in it and so isn’t entirely representational of a real-life workload. Those three 502s warrant digging deeper, but could be due to Lambda cold-start timing and the “second” variable being the maximum of 5, causing the Lambda functions to time out. AWS X-Ray and the Amazon CloudWatch logs generated by both API Gateway and Lambda could help you troubleshoot this.</p> 
-<h3>Configuring a concurrency reservation</h3> 
-<p>Now that you’ve established that you can generate this load against the function, I show you how to limit it and protect a backend resource from being overloaded by all of these requests.</p> 
-<ol> 
-<li>In the console, choose <strong>Configure</strong>.</li> 
-<li>Under <strong>Concurrency</strong>, for <strong>Reserve concurrency</strong>, enter 25.</li> 
-</ol> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/concurrency.png" /></a></p> 
-<ol start="3"> 
-<li>Click on <strong>Save</strong> in the top right corner.</li> 
-</ol> 
-<p>You could also set this with the AWS CLI using the Lambda&nbsp;<a href="https://docs.aws.amazon.com/cli/latest/reference/lambda/put-function-concurrency.html">put-function-concurrency</a> command or see your current concurrency configuration via Lambda get-function. Here’s an example command:</p> 
-<code class="lang-bash">
-$ aws lambda get-function --function-name concurrencyBlog01 --output json --query Concurrency
-{
-&quot;ReservedConcurrentExecutions&quot;: 25
-}
-</code> 
-<p>Either way, you’ve set the Concurrency Reservation to 25 for this function. This acts as both a limit and a reservation in terms of making sure that you can execute 25 concurrent functions at all times. Going above this results in the throttling of the Lambda function. Depending on the invoking service, throttling can result in a number of different outcomes, as shown in the documentation on <a href="https://docs.aws.amazon.com/lambda/latest/dg/concurrent-executions.html">Throttling Behavior</a>. This change has also reduced your unreserved account concurrency for other functions by 25.</p> 
-<p>Rerun the same load generation as before and see what happens. Previously, you tested at 50 concurrency, which worked just fine. By limiting the Lambda functions to 25 concurrency, you should see rate limiting kick in. Run the same test again:</p> 
-<code class="lang-bash">
-$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
-</code> 
-<p>While this test runs, refresh the <strong>Monitoring</strong> tab on your function detail page. You see the following warning message:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/warning.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/11/warning.png" /></a></p> 
-<p>This is great! It means that your throttle is working as configured and you are now protecting your downstream resources from too much load from your Lambda function.</p> 
-<p>Here is the output from a new “hey” command:</p> 
-<code class="lang-bash">
-$ ./go/bin/hey -n 5000 -c 50 https://ofixul557l.execute-api.us-east-1.amazonaws.com/prod/concurrencyBlog01
-Summary:
-Total: 379.9922 secs
-Slowest: 7.1486 secs
-Fastest: 0.0102 secs
-Average: 1.1897 secs
-Requests/sec: 13.1582
-Total data: 164608 bytes
-Size/request: 32 bytes
-Response time histogram:
-0.010 [1] |
-0.724 [3075] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-1.438 [0] |
-2.152 [811] |∎∎∎∎∎∎∎∎∎∎∎
-2.866 [11] |
-3.579 [566] |∎∎∎∎∎∎∎
-4.293 [214] |∎∎∎
-5.007 [1] |
-5.721 [315] |∎∎∎∎
-6.435 [4] |
-7.149 [2] |
-Latency distribution:
-10% in 0.0130 secs
-25% in 0.0147 secs
-50% in 0.0205 secs
-75% in 2.0344 secs
-90% in 4.0229 secs
-95% in 5.0248 secs
-99% in 5.0629 secs
-Details (average, fastest, slowest):
-DNS+dialup: 0.0004 secs, 0.0000 secs, 0.0537 secs
-DNS-lookup: 0.0002 secs, 0.0000 secs, 0.0184 secs
-req write: 0.0000 secs, 0.0000 secs, 0.0016 secs
-resp wait: 1.1892 secs, 0.0101 secs, 7.1038 secs
-resp read: 0.0000 secs, 0.0000 secs, 0.0005 secs
-Status code distribution:
-[502] 3076 responses
-[200] 1924 responses
-</code> 
-<p>This looks fairly different from the last load test run. A large percentage of these requests failed fast due to the concurrency throttle failing them (those with the 0.724 seconds line). The timing shown here in the histogram represents the entire time it took to get a response between the EC2 instance and API Gateway calling Lambda and being rejected. It’s also important to note that this example was configured with an <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-api-migration.html">edge-optimized endpoint</a> in API Gateway. You see under <strong>Status code distribution</strong> that 3076 of the 5000 requests failed with a 502, showing that the backend service from API Gateway and Lambda failed the request.</p> 
-<b>Other uses</b> 
-<p>Managing function concurrency can be useful in a few other ways beyond just limiting the impact on downstream services and providing a reservation of concurrency capacity. Here are two other uses:</p> 
-<li>Emergency kill switch</li> 
-<li>Cost controls</li> 
-<h3>Emergency kill switch</h3> 
-<p>On occasion, due to issues with applications I’ve managed in the past, I’ve had a need to disable a certain function or capability of an application. By setting the concurrency reservation and limit of a Lambda function to zero, you can do just that.</p> 
-<p>With the reservation set to zero every invocation of a Lambda function results in being throttled. You could then work on the related parts of the infrastructure or application that aren’t working, and then reconfigure the concurrency limit to allow invocations again.</p> 
-<h3>Cost controls</h3> 
-<p>While I mentioned how you might want to use concurrency limits to control the downstream impact to services or databases that your Lambda function might call, another resource that you might be cautious about is money. Setting the concurrency throttle is another way to help control costs during development and testing of your application.</p> 
-<p>You might want to prevent against a function performing a recursive action too quickly or a development workload generating too high of a concurrency. You might also want to protect development resources connected to this function from generating too much cost, such as APIs that your Lambda function calls.</p> 
-<b>Conclusion</b> 
-<p>Concurrent executions as a unit of scale are a fairly unique characteristic about Lambda functions. Placing limits on how many concurrency “slices” that your function can consume can prevent a single function from consuming all of the available concurrency in an account. Limits can also prevent a function from overwhelming a backend resource that isn’t as scalable.</p> 
-<p>Unlike monolithic applications or even microservices where there are mixed capabilities in a single service, Lambda functions encourage a sort of “nano-service” of <a href="https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html">small business logic</a> directly related to the integration model connected to the function. I hope you’ve enjoyed this post and configure your concurrency limits today!</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3483');
 });
 </script> 
 </article> 
