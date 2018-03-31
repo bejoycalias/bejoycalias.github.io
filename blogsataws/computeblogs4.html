@@ -190,6 +190,352 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Resume AWS Step Functions from Any State</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Andy Katz</span></span> | on 
+<time property="datePublished" datetime="2017-11-16T15:31:27+00:00">16 NOV 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-services/aws-step-functions/" title="View all posts in AWS Step Functions*"><span property="articleSection">AWS Step Functions*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/resume-aws-step-functions-from-any-state/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3166" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3166&amp;disqus_title=Resume+AWS+Step+Functions+from+Any+State&amp;disqus_url=https://aws.amazon.com/blogs/compute/resume-aws-step-functions-from-any-state/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3166');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/10/Yash.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/10/Yash.jpeg" /></a><br /> <strong>Yash Pant, Solutions Architect, AWS</strong></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/10/Aaron.jpeg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/10/Aaron.jpeg" /></a><br /> <strong>Aaron Friedman, Partner Solutions Architect, AWS</strong></p> 
+<p>When we discuss how to build applications with customers, we often align to the <a href="https://d0.awsstatic.com/whitepapers/architecture/AWS_Well-Architected_Framework.pdf">Well Architected Framework</a> pillars of security, reliability, performance efficiency, cost optimization, and operational excellence. Designing for failure is an essential component to developing well architected applications that are resilient to spurious errors that may occur.</p> 
+<p>There are many ways you can use AWS services to achieve high availability and resiliency of your applications. For example, you can couple Elastic Load Balancing with Auto Scaling and Amazon EC2 instances to build highly available applications. Or use Amazon API Gateway and AWS Lambda to rapidly scale out a microservices-based architecture. Many AWS services have built in solutions to help with the appropriate error handling, such as <a href="http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html">Dead Letter Queues (DLQ)</a> for Amazon SQS or <a href="http://docs.aws.amazon.com/batch/latest/userguide/job_retries.html">retries in AWS Batch</a>.</p> 
+<p><a href="https://aws.amazon.com/step-functions/">AWS Step Functions</a> is an AWS service that makes it easy for you to coordinate the components of distributed applications and microservices. Step Functions allows you to easily design for failure, by incorporating features such as <a href="https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-errors.html#amazon-states-language-retrying-after-error">error retries</a> and <a href="https://docs.aws.amazon.com/step-functions/latest/dg/tutorial-handling-error-conditions.html">custom error handling</a> from AWS Lambda exceptions. These features allow you to programmatically handle many common error modes and build robust, reliable applications.</p> 
+<p>In some rare cases, however, your application may fail in an unexpected manner. In these situations, you might not want to duplicate in a repeat execution those portions of your state machine that have already run. This is especially true when orchestrating long-running jobs or executing a complex state machine as part of a microservice. Here, you need to know the last successful state in your state machine from which to resume, so that you don't duplicate previous work. In this post, we present a solution to enable you to resume from any given state in your state machine in the case of an unexpected failure.</p> 
+<b id="toc_1">Resuming from a given state</b> 
+<p>To resume a failed state machine execution from the state at which it failed, you first run a script that dynamically creates a new state machine. When the new state machine is executed, it resumes the failed execution from the point of failure. The script contains the following two primary steps:</p> 
+<ol> 
+<li>Parse the execution history of the failed execution to find the name of the state at which it failed, as well as the JSON input to that state.</li> 
+<li>Create a new state machine, which adds an additional state to failed state machine, called &quot;GoToState&quot;. &quot;GoToState&quot; is a <em>choice</em> state at the beginning of the state machine that branches execution directly to the failed state, allowing you to skip states that had succeeded in the previous execution.</li> 
+</ol> 
+<p>The full script along with a CloudFormation template that creates a demo of this is available in the <a href="https://github.com/awslabs/aws-sfn-resume-from-any-state">aws-sfn-resume-from-any-state</a> GitHub repo.</p> 
+<b id="toc_2">Diving into the script</b> 
+<p>In this section, we walk you through the script and highlight the core components of its functionality. The script contains a main function, which adds a command line parameter for the <em>failedExecutionArn</em> so that you can easily call the script from the command line:</p> 
+<code class="language-bash">python gotostate.py --failedExecutionArn '&lt;Failed_Execution_Arn&gt;'</code> 
+<b id="toc_3">Identifying the failed state in your execution</b> 
+<p>First, the script extracts the name of the failed state along with the input to that state. It does so by using the failed state machine execution history, which is identified by the Amazon Resource Name (ARN) of the execution. The failed state is marked in the execution history, along with the input to that state (which is also the output of the preceding successful state). The script is able to parse these values from the log.</p> 
+<p>The script loops through the execution history of the failed state machine, and traces it backwards until it finds the failed state. If the state machine failed in a parallel state, then it must restart from the beginning of the parallel state. The script is able to capture the name of the parallel state that failed, rather than any substate within the parallel state that may have caused the failure. The following code is the Python function that does this.</p> 
+<code class="language-python">
+def parseFailureHistory(failedExecutionArn):
+'''
+Parses the execution history of a failed state machine to get the name of failed state and the input to the failed state:
+Input failedExecutionArn = A string containing the execution ARN of a failed state machine y
+Output = A list with two elements: [name of failed state, input to failed state]
+'''
+failedAtParallelState = False
+try:
+#Get the execution history
+response = client.get\_execution\_history(
+executionArn=failedExecutionArn,
+reverseOrder=True
+)
+failedEvents = response['events']
+except Exception as ex:
+raise ex
+#Confirm that the execution actually failed, raise exception if it didn't fail.
+try:
+failedEvents[0]['executionFailedEventDetails']
+except:
+raise('Execution did not fail')
+'''
+If you have a 'States.Runtime' error (for example, if a task state in your state machine attempts to execute a Lambda function in a different region than the state machine), get the ID of the failed state, and use it to determine the failed state name and input.
+'''
+if failedEvents[0]['executionFailedEventDetails']['error'] == 'States.Runtime':
+failedId = int(filter(str.isdigit, str(failedEvents[0]['executionFailedEventDetails']['cause'].split()[13])))
+failedState = failedEvents[-1 \* failedId]['stateEnteredEventDetails']['name']
+failedInput = failedEvents[-1 \* failedId]['stateEnteredEventDetails']['input']
+return (failedState, failedInput)
+'''
+You need to loop through the execution history, tracing back the executed steps.
+The first state you encounter is the failed state. If you failed on a parallel state, you need the name of the parallel state rather than the name of a state within a parallel state that it failed on. This is because you can only attach goToState to the parallel state, but not a substate within the parallel state.
+This loop starts with the ID of the latest event and uses the previous event IDs to trace back the execution to the beginning (id 0). However, it returns as soon it finds the name of the failed state.
+'''
+currentEventId = failedEvents[0]['id']
+while currentEventId != 0:
+#multiply event ID by -1 for indexing because you're looking at the reversed history
+currentEvent = failedEvents[-1 \* currentEventId]
+'''
+You can determine if the failed state was a parallel state because it and an event with 'type'='ParallelStateFailed' appears in the execution history before the name of the failed state
+'''
+if currentEvent['type'] == 'ParallelStateFailed':
+failedAtParallelState = True
+'''
+If the failed state is not a parallel state, then the name of failed state to return is the name of the state in the first 'TaskStateEntered' event type you run into when tracing back the execution history
+'''
+if currentEvent['type'] == 'TaskStateEntered' and failedAtParallelState == False:
+failedState = currentEvent['stateEnteredEventDetails']['name']
+failedInput = currentEvent['stateEnteredEventDetails']['input']
+return (failedState, failedInput)
+'''
+If the failed state was a parallel state, then you need to trace execution back to the first event with 'type'='ParallelStateEntered', and return the name of the state
+'''
+if currentEvent['type'] == 'ParallelStateEntered' and failedAtParallelState:
+failedState = failedState = currentEvent['stateEnteredEventDetails']['name']
+failedInput = currentEvent['stateEnteredEventDetails']['input']
+return (failedState, failedInput)
+#Update the ID for the next execution of the loop
+currentEventId = currentEvent['previousEventId']
+</code> 
+<b id="toc_4">Create the new state machine</b> 
+<p>The script uses the name of the failed state to create the new state machine, with &quot;GoToState&quot; branching execution directly to the failed state.</p> 
+<p>To do this, the script requires the <a href="http://docs.aws.amazon.com/step-functions/latest/dg/concepts-amazon-states-language.html">Amazon States Language (ASL)</a> definition of the failed state machine. It modifies the definition to append &quot;GoToState&quot;, and create a new state machine from it.</p> 
+<p>The script gets the ARN of the failed state machine from the execution ARN of the failed state machine. This ARN allows it to get the ASL definition of the failed state machine by calling the <a href="http://docs.aws.amazon.com/step-functions/latest/apireference/API_DescribeStateMachine.html">DesribeStateMachine</a> API action. It creates a new state machine with &quot;GoToState&quot;.</p> 
+<p>When the script creates the new state machine, it also adds an additional input variable called &quot;resuming&quot;. When you execute this new state machine, you specify this resuming variable as <em>true</em> in the input JSON. This tells &quot;GoToState&quot; to branch execution to the state that had previously failed. Here's the function that does this:</p> 
+<code class="language-python">def attachGoToState(failedStateName, stateMachineArn):
+'''
+Given a state machine ARN and the name of a state in that state machine, create a new state machine that starts at a new choice state called 'GoToState'. &quot;GoToState&quot; branches to the named state, and sends the input of the state machine to that state, when a variable called &quot;resuming&quot; is set to True.
+Input failedStateName = A string with the name of the failed state
+stateMachineArn = A string with the ARN of the state machine
+Output response from the create_state_machine call, which is the API call that creates a new state machine
+'''
+try:
+response = client.describe\_state\_machine(
+stateMachineArn=stateMachineArn
+)
+except:
+raise('Could not get ASL definition of state machine')
+roleArn = response['roleArn']
+stateMachine = json.loads(response['definition'])
+#Create a name for the new state machine
+newName = response['name'] + '-with-GoToState'
+#Get the StartAt state for the original state machine, because you point the 'GoToState' to this state
+originalStartAt = stateMachine['StartAt']
+'''
+Create the GoToState with the variable $.resuming.
+If new state machine is executed with $.resuming = True, then the state machine skips to the failed state.
+Otherwise, it executes the state machine from the original start state.
+'''
+goToState = {'Type':'Choice', 'Choices':[{'Variable':'$.resuming', 'BooleanEquals':False, 'Next':originalStartAt}], 'Default':failedStateName}
+#Add GoToState to the set of states in the new state machine
+stateMachine['States']['GoToState'] = goToState
+#Add StartAt
+stateMachine['StartAt'] = 'GoToState'
+#Create new state machine
+try:
+response = client.create_state_machine(
+name=newName,
+definition=json.dumps(stateMachine),
+roleArn=roleArn
+)
+except:
+raise('Failed to create new state machine with GoToState')
+return response
+</code> 
+<b id="toc_5">Testing the script</b> 
+<p>Now that you understand how the script works, you can test it out.</p> 
+<p>The following screenshot shows an example state machine that has failed, called &quot;TestMachine&quot;. This state machine successfully completed &quot;FirstState&quot; and &quot;ChoiceState&quot;, but when it branched to &quot;FirstMatchState&quot;, it failed.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_1.png" /></a></p> 
+<p>Use the script to create a new state machine that allows you to rerun this state machine, but skip the &quot;FirstState&quot; and the &quot;ChoiceState&quot; steps that already succeeded. You can do this by calling the script as follows:</p> 
+<code class="language-bash">python gotostate.py --failedExecutionArn 'arn:aws:states:us-west-2:&lt;AWS_ACCOUNT_ID&gt;:execution:TestMachine-with-GoToState:b2578403-f41d-a2c7-e70c-7500045288595</code> 
+<p>This creates a new state machine called &quot;TestMachine-with-GoToState&quot;, and returns its ARN, along with the input that had been sent to &quot;FirstMatchState&quot;. You can then inspect the input to determine what caused the error. In this case, you notice that the input to &quot;FirstMachState&quot; was the following:</p> 
+<code class="language-json">{
+&quot;foo&quot;: 1,
+&quot;Message&quot;: true
+}</code> 
+<p>However, this state machine expects the &quot;Message&quot; field of the JSON to be a string rather than a Boolean. Execute the new &quot;TestMachine-with-GoToState&quot; state machine, change the input to be a string, and add the &quot;resuming&quot; variable that &quot;GoToState&quot; requires:</p> 
+<code class="language-json">{
+&quot;foo&quot;: 1,
+&quot;Message&quot;: &quot;Hello!&quot;,
+&quot;resuming&quot;:true
+}</code> 
+<p>When you execute the new state machine, it skips &quot;FirstState&quot; and &quot;ChoiceState&quot;, and goes directly to &quot;FirstMatchState&quot;, which was the state that failed:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_2.png" /></a></p> 
+<p>Look at what happens when you have a state machine with multiple parallel steps. This example is included in the <a href="https://github.com/awslabs/aws-sfn-resume-from-any-state">GitHub repository</a> associated with this post. The repo contains a CloudFormation template that sets up this state machine and provides instructions to replicate this solution.</p> 
+<p>The following state machine, &quot;ParallelStateMachine&quot;, takes an input through two subsequent parallel states before doing some final processing and exiting, along with the JSON with the ASL definition of the state machine.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_3.png" /></a></p> 
+<code class="language-json">{
+&quot;Comment&quot;: &quot;An example of the Amazon States Language using a parallel state to execute two branches at the same time.&quot;,
+&quot;StartAt&quot;: &quot;Parallel&quot;,
+&quot;States&quot;: {
+&quot;Parallel&quot;: {
+&quot;Type&quot;: &quot;Parallel&quot;,
+&quot;ResultPath&quot;:&quot;$.output&quot;,
+&quot;Next&quot;: &quot;Parallel 2&quot;,
+&quot;Branches&quot;: [
+{
+&quot;StartAt&quot;: &quot;Parallel Step 1, Process 1&quot;,
+&quot;States&quot;: {
+&quot;Parallel Step 1, Process 1&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaA&quot;,
+&quot;End&quot;: true
+}
+}
+},
+{
+&quot;StartAt&quot;: &quot;Parallel Step 1, Process 2&quot;,
+&quot;States&quot;: {
+&quot;Parallel Step 1, Process 2&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaA&quot;,
+&quot;End&quot;: true
+}
+}
+}
+]
+},
+&quot;Parallel 2&quot;: {
+&quot;Type&quot;: &quot;Parallel&quot;,
+&quot;Next&quot;: &quot;Final Processing&quot;,
+&quot;Branches&quot;: [
+{
+&quot;StartAt&quot;: &quot;Parallel Step 2, Process 1&quot;,
+&quot;States&quot;: {
+&quot;Parallel Step 2, Process 1&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXXX:function:LambdaB&quot;,
+&quot;End&quot;: true
+}
+}
+},
+{
+&quot;StartAt&quot;: &quot;Parallel Step 2, Process 2&quot;,
+&quot;States&quot;: {
+&quot;Parallel Step 2, Process 2&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaB&quot;,
+&quot;End&quot;: true
+}
+}
+}
+]
+},
+&quot;Final Processing&quot;: {
+&quot;Type&quot;: &quot;Task&quot;,
+&quot;Resource&quot;: &quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaC&quot;,
+&quot;End&quot;: true
+}
+}
+}</code> 
+<p>First, use an input that initially fails:</p> 
+<code class="language-json">{
+&quot;Message&quot;: &quot;Hello!&quot;
+}</code> 
+<p>This fails because the state machine expects you to have a variable in the input JSON called &quot;foo&quot; in the second parallel state to run &quot;Parallel Step 2, Process 1&quot; and &quot;Parallel Step 2, Process 2&quot;. Instead, the original input gets processed by the first parallel state and produces the following output to pass to the second parallel state:</p> 
+<code class="language-json">{
+&quot;output&quot;: [
+{
+&quot;Message&quot;: &quot;Hello!&quot;
+},
+{
+&quot;Message&quot;: &quot;Hello!&quot;
+}
+],
+}</code> 
+<p>Run the script on the failed state machine to create a new state machine that allows it to resume directly at the second parallel state instead of having to redo the first parallel state. This creates a new state machine called &quot;ParallelStateMachine-with-GoToState&quot;. The following JSON was created by the script to define the new state machine in ASL. It contains the &quot;GoToState&quot; value that was attached by the script.</p> 
+<code class="language-json">{
+&quot;Comment&quot;:&quot;An example of the Amazon States Language using a parallel state to execute two branches at the same time.&quot;,
+&quot;States&quot;:{
+&quot;Final Processing&quot;:{
+&quot;Resource&quot;:&quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaC&quot;,
+&quot;End&quot;:true,
+&quot;Type&quot;:&quot;Task&quot;
+},
+&quot;GoToState&quot;:{
+&quot;Default&quot;:&quot;Parallel 2&quot;,
+&quot;Type&quot;:&quot;Choice&quot;,
+&quot;Choices&quot;:[
+{
+&quot;Variable&quot;:&quot;$.resuming&quot;,
+&quot;BooleanEquals&quot;:false,
+&quot;Next&quot;:&quot;Parallel&quot;
+}
+]
+},
+&quot;Parallel&quot;:{
+&quot;Branches&quot;:[
+{
+&quot;States&quot;:{
+&quot;Parallel Step 1, Process 1&quot;:{
+&quot;Resource&quot;:&quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaA&quot;,
+&quot;End&quot;:true,
+&quot;Type&quot;:&quot;Task&quot;
+}
+},
+&quot;StartAt&quot;:&quot;Parallel Step 1, Process 1&quot;
+},
+{
+&quot;States&quot;:{
+&quot;Parallel Step 1, Process 2&quot;:{
+&quot;Resource&quot;:&quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:LambdaA&quot;,
+&quot;End&quot;:true,
+&quot;Type&quot;:&quot;Task&quot;
+}
+},
+&quot;StartAt&quot;:&quot;Parallel Step 1, Process 2&quot;
+}
+],
+&quot;ResultPath&quot;:&quot;$.output&quot;,
+&quot;Type&quot;:&quot;Parallel&quot;,
+&quot;Next&quot;:&quot;Parallel 2&quot;
+},
+&quot;Parallel 2&quot;:{
+&quot;Branches&quot;:[
+{
+&quot;States&quot;:{
+&quot;Parallel Step 2, Process 1&quot;:{
+&quot;Resource&quot;:&quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaB&quot;,
+&quot;End&quot;:true,
+&quot;Type&quot;:&quot;Task&quot;
+}
+},
+&quot;StartAt&quot;:&quot;Parallel Step 2, Process 1&quot;
+},
+{
+&quot;States&quot;:{
+&quot;Parallel Step 2, Process 2&quot;:{
+&quot;Resource&quot;:&quot;arn:aws:lambda:us-west-2:XXXXXXXXXXXX:function:LambdaB&quot;,
+&quot;End&quot;:true,
+&quot;Type&quot;:&quot;Task&quot;
+}
+},
+&quot;StartAt&quot;:&quot;Parallel Step 2, Process 2&quot;
+}
+],
+&quot;Type&quot;:&quot;Parallel&quot;,
+&quot;Next&quot;:&quot;Final Processing&quot;
+}
+},
+&quot;StartAt&quot;:&quot;GoToState&quot;
+}</code> 
+<p>You can then execute this state machine with the correct input by adding the &quot;foo&quot; and &quot;resuming&quot; variables:</p> 
+<code class="language-json">{
+&quot;foo&quot;: 1,
+&quot;output&quot;: [
+{
+&quot;Message&quot;: &quot;Hello!&quot;
+},
+{
+&quot;Message&quot;: &quot;Hello!&quot;
+}
+],
+&quot;resuming&quot;: true
+}</code> 
+<p>This yields the following result. Notice that this time, the state machine executed successfully to completion, and skipped the steps that had previously failed.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/15/Blog_Pic_4.png" /></a></p> 
+<hr /> 
+<b id="toc_6">Conclusion</b> 
+<p>When you're building out complex workflows, it's important to be prepared for failure. You can do this by taking advantage of features such as automatic error retries in Step Functions and custom error handling of Lambda exceptions.</p> 
+<p>Nevertheless, state machines still have the possibility of failing. With the methodology and script presented in this post, you can resume a failed state machine from its point of failure. This allows you to skip the execution of steps in the workflow that had already succeeded, and recover the process from the point of failure.</p> 
+<p>To see more examples, please visit the <a href="https://aws.amazon.com/step-functions/getting-started/" target="_blank" rel="noopener noreferrer">Step Functions Getting Started</a> page.</p> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3166');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Event-Driven Computing with Amazon SNS and AWS Compute, Storage, Database, and Networking Services</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1717,291 +2063,6 @@ AWS.Blog.commenting('#aws-comment-trigger-2861');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-2861');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger-626x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Implementing Default Directory Indexes in Amazon S3-backed Amazon CloudFront Origins Using Lambda@Edge</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Ronnie Eichler</span></span> | on 
-<time property="datePublished" datetime="2017-10-18T07:35:23+00:00">18 OCT 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/networking-content-delivery/amazon-cloudfront/" title="View all posts in Amazon CloudFront*"><span property="articleSection">Amazon CloudFront*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/storage/amazon-simple-storage-services-s3/" title="View all posts in Amazon Simple Storage Services (S3)*"><span property="articleSection">Amazon Simple Storage Services (S3)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-2895" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=2895&amp;disqus_title=Implementing+Default+Directory+Indexes+in+Amazon+S3-backed+Amazon+CloudFront+Origins+Using+Lambda%40Edge&amp;disqus_url=https://aws.amazon.com/blogs/compute/implementing-default-directory-indexes-in-amazon-s3-backed-amazon-cloudfront-origins-using-lambdaedge/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2895');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>With the recent launch of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, it’s now possible for you to provide even more robust functionality to your static websites. <a href="https://aws.amazon.com/cloudfront">Amazon CloudFront</a> is a content distribution network service. In this post, I show how you can use Lambda@Edge along with the CloudFront origin access identity (OAI) for Amazon S3 and still provide simple URLs (such as www.example.com/about/ instead of www.example.com/about/index.html).<span id="more-2895"></span></p> 
-<h3>Background</h3> 
-<p>Amazon S3 is a great platform for <a href="http://docs.aws.amazon.com/AmazonS3/latest/dev/WebsiteHosting.html">hosting a static website</a>. You don’t need to worry about managing servers or underlying infrastructure—you just publish your static to content to an S3 bucket. S3 provides a DNS name such as &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com. Use this name for your website by creating a CNAME record in your domain’s DNS environment (or Amazon Route 53) as follows:</p> 
-<blockquote> 
-<p>www.example.com -&gt; &lt;<strong>bucket-name</strong>&gt;.s3-website-&lt;<strong>AWS-region</strong>&gt;.amazonaws.com</p> 
-</blockquote> 
-<p>You can also put CloudFront in front of S3 to further scale the performance of your site and cache the content closer to your users. CloudFront can enable HTTPS-hosted sites, by either using a custom Secure Sockets Layer (SSL) certificate or a managed certificate from <a href="https://aws.amazon.com/blogs/aws/new-aws-certificate-manager-deploy-ssltls-based-apps-on-aws/">AWS Certificate Manager</a>. In addition, CloudFront also offers integration with <a href="https://aws.amazon.com/waf/">AWS WAF</a>, a web application firewall. As you can see, it’s possible to achieve some robust functionality by using S3, CloudFront, and other managed services and not have to worry about maintaining underlying infrastructure.</p> 
-<p>One of the key concerns that you might have when implementing any type of WAF or CDN is that you want to force your users to go through the CDN. If you implement CloudFront in front of S3, you can achieve this by using an <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html">OAI</a>. However, in order to do this, you cannot use the HTTP endpoint that is exposed by S3’s static website hosting feature. Instead, CloudFront must use the S3 REST endpoint to fetch content from your origin so that the request can be authenticated using the OAI. This presents some challenges in that the REST endpoint does not support redirection to a default index page.</p> 
-<p>CloudFront does allow you to specify a default root object (index.html), but it only works on the root of the website (such as http://www.example.com &gt; http://www.example.com/index.html). It does not work on any subdirectory (such as http://www.example.com/about/). If you were to attempt to request this URL through CloudFront, CloudFront would do a S3 GetObject API call against a key that does not exist.</p> 
-<p>Of course, it is a bad user experience to expect users to always type index.html at the end of every URL (or even know that it should be there). Until now, there has not been an easy way to provide these simpler URLs (equivalent to the DirectoryIndex Directive in an Apache Web Server configuration) to users through CloudFront. Not if you still want to be able to restrict access to the S3 origin using an OAI. However, with the release of <a href="https://aws.amazon.com/lambda/edge/">Lambda@Edge</a>, you can use a JavaScript function running on the CloudFront edge nodes to look for these patterns and request the appropriate object key from the S3 origin.</p> 
-<h3>Solution</h3> 
-<p>In this example, you use the compute power at the CloudFront edge to inspect the request as it’s coming in from the client. Then re-write the request so that CloudFront requests a default index object (index.html in this case) for any request URI that ends in ‘/’.</p> 
-<p>When a request is made against a web server, the client specifies the object to obtain in the request. You can use this URI and apply a regular expression to it so that these URIs get resolved to a default index object before CloudFront requests the object from the origin. Use the following code:</p> 
-<code class="lang-js">'use strict';
-exports.handler = (event, context, callback) =&gt; {
-// Extract the request from the CloudFront event that is sent to Lambda@Edge 
-var request = event.Records[0].cf.request;
-// Extract the URI from the request
-var olduri = request.uri;
-// Match any '/' that occurs at the end of a URI. Replace it with a default index
-var newuri = olduri.replace(/\/$/, '\/index.html');
-// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
-console.log(&quot;Old URI: &quot; + olduri);
-console.log(&quot;New URI: &quot; + newuri);
-// Replace the received URI with the URI that includes the index page
-request.uri = newuri;
-// Return to CloudFront
-return callback(null, request);
-};
-</code> 
-<p>To get started, create an S3 bucket to be the origin for CloudFront:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/17/Picture1-1-921x1024.png" /></a></p> 
-<p>On the other screens, you can just accept the defaults for the purposes of this walkthrough. If this were a production implementation, I would recommend enabling bucket logging and specifying an existing S3 bucket as the destination for access logs. These logs can be useful if you need to troubleshoot issues with your S3 access.</p> 
-<p>Now, put some content into your S3 bucket. For this walkthrough, create two simple webpages to demonstrate the functionality: &nbsp;A page that resides at the website root, and another that is in a subdirectory.</p> 
-<p><strong>&lt;s3bucketname&gt;/index.html</strong></p> 
-<code class="lang-html">&lt;!doctype html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;title&gt;Root home page&lt;/title&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-</code> 
-<p><strong>&lt;s3bucketname&gt;/subdirectory/index.html</strong></p> 
-<code class="lang-html">&lt;!doctype html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;title&gt;Subdirectory home page&lt;/title&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-</code> 
-<p>When uploading the files into S3, you can accept the defaults. You add a bucket policy as part of the CloudFront distribution creation that allows CloudFront to access the S3 origin. You should now have an S3 bucket that looks like the following:</p> 
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3root.png" /></a> 
-<p class="wp-caption-text">Root of bucket</p> 
-<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/S3subdirectory.png" /></a> 
-<p class="wp-caption-text">Subdirectory in bucket</p> 
-<p>Next, create a CloudFront distribution that your users will use to access the content. Open the CloudFront console, and choose <strong>Create Distribution</strong>. For <strong>Select a delivery method for your content</strong>, under <strong>Web</strong>, choose <strong>Get Started</strong>.</p> 
-<p>On the next screen, you set up the distribution. Below are the options to configure:</p> 
-<li><strong>Origin Domain Name</strong>: &nbsp;Select the S3 bucket that you created earlier.</li> 
-<li><strong>Restrict Bucket Access:&nbsp;</strong>Choose&nbsp;<strong>Yes</strong>.</li> 
-<li><strong>Origin Access Identity:&nbsp;</strong>Create a new identity.</li> 
-<li><strong>Grant Read Permissions on Bucket</strong>: Choose&nbsp;<strong>Yes, Update Bucket Policy</strong>.</li> 
-<li><strong>Object Caching</strong>: Choose&nbsp;<strong>Customize</strong> (I am changing the behavior to avoid having CloudFront cache objects, as this could affect your ability to troubleshoot while implementing the Lambda code). 
-<li><strong>Minimum TTL</strong>: 0</li> 
-<li><strong>Maximum TTL</strong>: 0</li> 
-<li><strong>Default TTL</strong>: 0</li> 
-</ul> </li> 
-<p>You can accept all of the other defaults. Again, this is a proof-of-concept exercise. After you are comfortable that the CloudFront distribution is working properly with the origin and Lambda code, you can re-visit the preceding values and make changes before implementing it in production.</p> 
-<p>CloudFront distributions can take several minutes to deploy (because the changes have to propagate out to all of the edge locations). After that’s done, test the functionality of the S3-backed static website. Looking at the distribution, you can see that CloudFront assigns a domain name:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/CfDistribution-1.png" /></a></p> 
-<p>Try to access the website using a combination of various URLs:</p> 
-<p>http://&lt;domainname&gt;/: &nbsp;<strong>Works</strong></p> 
-<code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/
-*   Trying 54.192.192.214...
-* TCP_NODELAY set
-* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
-&gt; GET / HTTP/1.1
-&gt; Host: d3gt20ea1hllb.cloudfront.net
-&gt; User-Agent: curl/7.51.0
-&gt; Accept: */*
-&gt;
-&lt; HTTP/1.1 200 OK
-&lt; ETag: &quot;cb7e2634fe66c1fd395cf868087dd3b9&quot;
-&lt; Accept-Ranges: bytes
-&lt; Server: AmazonS3
-&lt; X-Cache: Miss from cloudfront
-&lt; X-Amz-Cf-Id: -D2FSRwzfcwyKZKFZr6DqYFkIf4t7HdGw2MkUF5sE6YFDxRJgi0R1g==
-&lt; Content-Length: 209
-&lt; Content-Type: text/html
-&lt; Last-Modified: Wed, 19 Jul 2017 19:21:16 GMT
-&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
-&lt; Connection: keep-alive
-&lt;
-&lt;!doctype html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;title&gt;Root home page&lt;/title&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;p&gt;Hello, this page resides in the root directory.&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-* Curl_http_done: called premature == 0
-* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
-</code> 
-<p>This is because CloudFront is configured to request a default root object (index.html) from the origin.</p> 
-<p>http://&lt;domainname&gt;/subdirectory/: &nbsp;<strong>Doesn’t work</strong></p> 
-<code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
-*   Trying 54.192.192.214...
-* TCP_NODELAY set
-* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.214) port 80 (#0)
-&gt; GET /subdirectory/ HTTP/1.1
-&gt; Host: d3gt20ea1hllb.cloudfront.net
-&gt; User-Agent: curl/7.51.0
-&gt; Accept: */*
-&gt;
-&lt; HTTP/1.1 200 OK
-&lt; ETag: &quot;d41d8cd98f00b204e9800998ecf8427e&quot;
-&lt; x-amz-server-side-encryption: AES256
-&lt; Accept-Ranges: bytes
-&lt; Server: AmazonS3
-&lt; X-Cache: Miss from cloudfront
-&lt; X-Amz-Cf-Id: Iqf0Gy8hJLiW-9tOAdSFPkL7vCWBrgm3-1ly5tBeY_izU82ftipodA==
-&lt; Content-Length: 0
-&lt; Content-Type: application/x-directory
-&lt; Last-Modified: Wed, 19 Jul 2017 19:21:24 GMT
-&lt; Via: 1.1 6419ba8f3bd94b651d416054d9416f1e.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
-&lt; Connection: keep-alive
-&lt;
-* Curl_http_done: called premature == 0
-* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
-</code> 
-<p>If you use a tool such like cURL to test this, you notice that CloudFront and S3 are returning a blank response. The reason for this is that the subdirectory does exist, but it does not resolve to an S3 object. Keep in mind that S3 is an object store, so there are no real directories. User interfaces such as the S3 console present a hierarchical view of a bucket with folders based on the presence of forward slashes, but behind the scenes the bucket is just a collection of keys that represent stored objects.</p> 
-<p>http://&lt;domainname&gt;/subdirectory/index.html: &nbsp;<strong>Works</strong></p> 
-<code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/index.html
-*   Trying 54.192.192.130...
-* TCP_NODELAY set
-* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.130) port 80 (#0)
-&gt; GET /subdirectory/index.html HTTP/1.1
-&gt; Host: d3gt20ea1hllb.cloudfront.net
-&gt; User-Agent: curl/7.51.0
-&gt; Accept: */*
-&gt;
-&lt; HTTP/1.1 200 OK
-&lt; Date: Thu, 20 Jul 2017 20:35:15 GMT
-&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
-&lt; Accept-Ranges: bytes
-&lt; Server: AmazonS3
-&lt; X-Cache: RefreshHit from cloudfront
-&lt; X-Amz-Cf-Id: bkh6opXdpw8pUomqG3Qr3UcjnZL8axxOH82Lh0OOcx48uJKc_Dc3Cg==
-&lt; Content-Length: 227
-&lt; Content-Type: text/html
-&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
-&lt; Via: 1.1 3f2788d309d30f41de96da6f931d4ede.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
-&lt; Connection: keep-alive
-&lt;
-&lt;!doctype html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;title&gt;Subdirectory home page&lt;/title&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-* Curl_http_done: called premature == 0
-* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
-</code> 
-<p>This request works as expected because you are referencing the object directly. Now, you implement the Lambda@Edge function to return the default index.html page for any subdirectory. Looking at the example JavaScript code, here’s where the magic happens:</p> 
-<code class="lang-js">var newuri = olduri.replace(/\/$/, '\/index.html');
-</code> 
-<p>You are going to use a JavaScript regular expression to match any ‘/’ that occurs at the end of the URI and replace it with ‘/index.html’. This is the equivalent to what S3 does on its own with static website hosting. However, as I mentioned earlier, you can’t rely on this if you want to use a policy on the bucket to restrict it so that users must access the bucket through CloudFront. That way, all requests to the S3 bucket must be authenticated using the S3 REST API. Because of this, you implement a Lambda@Edge function that takes any client request ending in ‘/’ and append a default ‘index.html’ to the request before requesting the object from the origin.</p> 
-<p>In the Lambda console, choose <strong>Create function</strong>. On the next screen, skip the blueprint selection and choose <strong>Author from scratch</strong>, as you’ll use the sample code provided.</p> 
-<p>Next, configure the trigger. Choosing the empty box shows a list of available triggers. Choose <strong>CloudFront</strong> and select your CloudFront distribution ID (created earlier). For this example, leave <strong>Cache Behavior</strong> as <strong>*</strong> and <strong>CloudFront Event</strong> as <strong>Origin Request</strong>. Select the <strong>Enable trigger and replicate box</strong> and choose <strong>Next</strong>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/09/20/LambdaTrigger.png" /></a></p> 
-<p>Next, give the function a name and a description. Then, copy and paste the following code:</p> 
-<code class="lang-js">'use strict';
-exports.handler = (event, context, callback) =&gt; {
-// Extract the request from the CloudFront event that is sent to Lambda@Edge 
-var request = event.Records[0].cf.request;
-// Extract the URI from the request
-var olduri = request.uri;
-// Match any '/' that occurs at the end of a URI. Replace it with a default index
-var newuri = olduri.replace(/\/$/, '\/index.html');
-// Log the URI as received by CloudFront and the new URI to be used to fetch from origin
-console.log(&quot;Old URI: &quot; + olduri);
-console.log(&quot;New URI: &quot; + newuri);
-// Replace the received URI with the URI that includes the index page
-request.uri = newuri;
-// Return to CloudFront
-return callback(null, request);
-};
-</code> 
-<p>Next, define a role that grants permissions to the Lambda function. For this example, choose <strong>Create new role from template</strong>, <strong>Basic Edge Lambda permissions</strong>. This creates a new IAM role for the Lambda function and grants the following permissions:</p> 
-<code class="lang-json">{
-&quot;Version&quot;: &quot;2012-10-17&quot;,
-&quot;Statement&quot;: [
-{
-&quot;Effect&quot;: &quot;Allow&quot;,
-&quot;Action&quot;: [
-&quot;logs:CreateLogGroup&quot;,
-&quot;logs:CreateLogStream&quot;,
-&quot;logs:PutLogEvents&quot;
-],
-&quot;Resource&quot;: [
-&quot;arn:aws:logs:*:*:*&quot;
-]
-}
-]
-}
-</code> 
-<p>In a nutshell, these are the permissions that the function needs to create the necessary CloudWatch log group and log stream, and to put the log events so that the function is able to write logs when it executes.</p> 
-<p>After the function has been created, you can go back to the browser (or cURL) and re-run the test for the subdirectory request that failed previously:</p> 
-<code class="lang-xml">› curl -v http://d3gt20ea1hllb.cloudfront.net/subdirectory/
-*   Trying 54.192.192.202...
-* TCP_NODELAY set
-* Connected to d3gt20ea1hllb.cloudfront.net (54.192.192.202) port 80 (#0)
-&gt; GET /subdirectory/ HTTP/1.1
-&gt; Host: d3gt20ea1hllb.cloudfront.net
-&gt; User-Agent: curl/7.51.0
-&gt; Accept: */*
-&gt;
-&lt; HTTP/1.1 200 OK
-&lt; Date: Thu, 20 Jul 2017 21:18:44 GMT
-&lt; ETag: &quot;ddf87c487acf7cef9d50418f0f8f8dae&quot;
-&lt; Accept-Ranges: bytes
-&lt; Server: AmazonS3
-&lt; X-Cache: Miss from cloudfront
-&lt; X-Amz-Cf-Id: rwFN7yHE70bT9xckBpceTsAPcmaadqWB9omPBv2P6WkIfQqdjTk_4w==
-&lt; Content-Length: 227
-&lt; Content-Type: text/html
-&lt; Last-Modified: Wed, 19 Jul 2017 19:21:45 GMT
-&lt; Via: 1.1 3572de112011f1b625bb77410b0c5cca.cloudfront.net (CloudFront), 1.1 iad6-proxy-3.amazon.com:80 (Cisco-WSA/9.1.2-010)
-&lt; Connection: keep-alive
-&lt;
-&lt;!doctype html&gt;
-&lt;html&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;title&gt;Subdirectory home page&lt;/title&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;p&gt;Hello, this page resides in the /subdirectory/ directory.&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-* Curl_http_done: called premature == 0
-* Connection #0 to host d3gt20ea1hllb.cloudfront.net left intact
-</code> 
-<p>You have now configured a way for CloudFront to return a default index page for subdirectories in S3!</p> 
-<h3>Summary</h3> 
-<p>In this post, you used <a href="http://docs.aws.amazon.com/lambda/latest/dg/lambda-edge.html">Lambda@Edge</a> to be able to use CloudFront with an S3 origin access identity and serve a default root object on subdirectory URLs. To find out some more about this use-case, see <a href="http://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-the-edge.html">Lambda@Edge integration with CloudFront</a>&nbsp;in&nbsp;our documentation.</p> 
-<p>If you have questions or suggestions, feel free to comment below. For troubleshooting or implementation help, check out the Lambda <a href="https://forums.aws.amazon.com/forum.jspa?forumID=186">forum</a>.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-2895');
 });
 </script> 
 </article> 
