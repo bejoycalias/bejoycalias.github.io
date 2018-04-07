@@ -190,490 +190,520 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="blogsataws1.html">Page 1</a>|<a href="blogsataws2.html">Page 2</a>|<a href="blogsataws3.html">Page 3</a>|<a href="blogsataws4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/08/chime_splash.png" /> 
-<b class="lb-b blog-post-title" property="name headline">New – Usage-Based Pricing for Amazon Chime</b> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/28/ECS-Service-Discovery-746x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Amazon ECS Service Discovery</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<a href="https://aws.amazon.com/blogs/aws/author/randhunt/" title="Posts by Randall Hunt">Randall Hunt</a> | on 
+<time property="datePublished" datetime="2018-03-28T11:10:00+00:00">28 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2-container-service/" title="View all posts in Amazon EC2 Container Service*"><span property="articleSection">Amazon EC2 Container Service*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/networking-content-delivery/amazon-route-53/" title="View all posts in Amazon Route 53*"><span property="articleSection">Amazon Route 53*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/amazon-ecs-service-discovery/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23236" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23236&amp;disqus_title=Amazon+ECS+Service+Discovery&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-ecs-service-discovery/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23236');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a href="https://aws.amazon.com/ecs/" title="">Amazon ECS</a> now includes integrated service discovery. This makes it possible for an ECS service to automatically register itself with a predictable and friendly DNS name in <a href="https://aws.amazon.com/route53/" title="">Amazon Route 53</a>. As your services scale up or down in response to load or container health, the Route 53 hosted zone is kept up to date, allowing other services to lookup where they need to make connections based on the state of each service. You can see a demo of service discovery in an imaginary social networking app over at: <a href="https://servicediscovery.ranman.com/">https://servicediscovery.ranman.com/</a>.</p> 
+<h3>Service Discovery</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/28/ECS-Service-Discovery-1024x865.png" /><br /> Part of the transition to microservices and modern architectures involves having dynamic, autoscaling, and robust services that can respond quickly to failures and changing loads. Your services probably have complex dependency graphs of services they rely on and services they provide. A modern architectural best practice is to loosely couple these services by allowing them to specify their own dependencies, but this can be complicated in dynamic environments as your individual services are forced to find their own connection points.</p> 
+<p>Traditional approaches to service discovery like consul, etcd, or zookeeper all solve this problem well, but they require provisioning and maintaining additional infrastructure or installation of agents in your containers or on your instances. Previously, to ensure that services were able to discover and connect with each other, you had to configure and run your own service discovery system or connect every service to a load balancer. Now, you can enable service discovery for your containerized services in the ECS console, AWS CLI, or using the ECS API.</p> 
+<h3>Introducing Amazon Route 53 Service Registry and Auto Naming APIs</h3> 
+<p>Amazon ECS Service Discovery works by communicating with the Amazon Route 53 Service Registry and Auto Naming APIs. Since we haven’t talked about it before on this blog, I want to briefly outline how these Route 53 APIs work. First, some vocabulary:</p> 
+<li><b>Namespaces</b> – A namespace specifies a domain name you want to route traffic to (e.g. internal, local, corp). You can think of it as a logical boundary between which services should be able to discover each other. You can create a namespace with a call to the <code>aws servicediscovery create-private-dns-namespace</code> command or in the ECS console. Namespaces are roughly equivalent to hosted zones in Route 53. A namespace contains services, our next vocabulary word.</li> 
+<li><b>Service</b> – A service is a specific application or set of applications in your namespace like “auth”, “timeline”, or “worker”. A service contains service instances.</li> 
+<li><b>Service Instance</b> – A service instance contains information about how Route 53 should respond to DNS queries for a resource.</li> 
+<p>Route 53 provides APIs to create: namespaces, <code>A</code> records per task IP, and <code>SRV</code> records per task IP + port.</p> 
+<p>When we ask Route 53 for something like: <code>worker.corp</code> we should get back a set of possible IPs that could fulfill that request. If the application we’re connecting to exposes dynamic ports then the calling application can easily query the <code>SRV</code> record to get more information.</p> 
+<p>ECS service discovery is built on top of the Route 53 APIs and manages all of the underlying API calls for you. Now that we understand how the service registry, works lets take a look at the ECS side to see service discovery in action.</p> 
+<h3>Amazon ECS Service Discovery</h3> 
+<p>Let’s launch an application with service discovery! First, I’ll create two task definitions: “flask-backend” and “flask-worker”. Both are simple <a href="https://aws.amazon.com/fargate/" title="AWS Fargate">AWS Fargate</a> tasks with a single container serving HTTP requests. I’ll have flask-backend ask <code>worker.corp</code> to do some work and I’ll return the response as well as the address Route 53 returned for <code>worker</code>. Something like the code below:</p> 
+<code>@app.route(&quot;/&quot;)
+namespace = os.getenv(&quot;namespace&quot;)
+worker_host = &quot;worker&quot; + namespace
+def backend():
+r = requests.get(&quot;http://&quot;+worker_host)
+worker = socket.gethostbyname(worker_host)
+return &quot;Worker Message: {]\nFrom: {}&quot;.format(r.content, worker)
+</code> 
+<p>&nbsp;</p> 
+<p>Now, with my containers and task definitions in place, I’ll create a service in the console.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-28-34-1-1024x727.png" /></p> 
+<p>As I move to step two in the service wizard I’ll&nbsp;fill out the service discovery section and have ECS create a new namespace for me.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-30-58.png" /></p> 
+<p>I’ll also tell ECS to monitor the health of the tasks in my service and add or remove them from Route 53 as needed. Then I’ll set a TTL of 10 seconds on the A records we’ll use.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-31-16.png" /></p> 
+<p>I’ll repeat those same steps for my “worker” service and after a minute or so most of my tasks should be up and running.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_06-35-08-1024x471.png" /></p> 
+<p>Over in the Route 53 console I can see all the records for my tasks!<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/26/2018-03-26_07-00-09-1024x460.png" /></p> 
+<p>We can use the Route 53 service discovery APIs to list all of our available services and tasks and programmatically reach out to each one. We could easily extend to any number of services past just backend and worker. I’ve created a simple demo of an imaginary social network with services like “auth”, “feed”, “timeline”, “worker”, “user” and more here: <a href="https://servicediscovery.ranman.com/">https://servicediscovery.ranman.com/</a>. You can see the code used to run that page on <a href="https://github.com/ranman/ecs-service-discovery-demo">github</a>.</p> 
+<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> Amazon ECS service discovery is available now in <span title="">US East (N. Virginia)</span>, <span title="">US East (Ohio)</span>, <span title="">US West (Oregon)</span>, and <span title="">EU (Ireland)</span>. AWS Fargate is currently only available in <span title="">US East (N. Virginia)</span>. When you use ECS service discovery, you pay for the Route 53 resources that you consume, including each namespace that you create, and for the lookup queries your services make. Container level health checks are provided at no cost. For more information on pricing check out the <a href="http://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html#service-discovery-pricing">documentation</a>.</p> 
+<p>Please let us know what you’ll be building or refactoring with service discovery either in the comments or on Twitter!</p> 
+<p>– <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<p>&nbsp;</p> 
+<p>P.S. Every blog post I write is made with a tremendous amount of help from numerous AWS colleagues. To everyone that helped build service discovery across all of our teams – thank you :)!</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23236');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_4-792x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">New – Amazon DynamoDB Continuous Backups and Point-In-Time Recovery (PITR)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2018-03-26T17:13:44+00:00">26 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/database/amazon-dynamodb/" title="View all posts in Amazon DynamoDB*"><span property="articleSection">Amazon DynamoDB*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/new-amazon-dynamodb-continuous-backups-and-point-in-time-recovery-pitr/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23322" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23322&amp;disqus_title=New+%26%238211%3B+Amazon+DynamoDB+Continuous+Backups+and+Point-In-Time+Recovery+%28PITR%29&amp;disqus_url=https://aws.amazon.com/blogs/aws/new-amazon-dynamodb-continuous-backups-and-point-in-time-recovery-pitr/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23322');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>The <a href="https://aws.amazon.com/dynamodb/" title="">Amazon DynamoDB</a> team is back with another useful feature hot on the heels of <a href="https://aws.amazon.com/blogs/aws/new-encryption-at-rest-for-dynamodb/">encryption at rest</a>. At <a href="https://reinvent.awsevents.com/" title="">AWS re:Invent</a> 2017 we launched <a href="https://aws.amazon.com/blogs/aws/new-for-amazon-dynamodb-global-tables-and-on-demand-backup/">global tables and on-demand backup and restore</a> of your DynamoDB tables and today we’re launching continuous backups with point-in-time recovery (PITR).</p> 
+<p>You can enable continuous backups with a single click in the <a href="https://console.aws.amazon.com" title="">AWS Management Console</a>, a simple API call, or with the <a href="https://aws.amazon.com/cli/" title="">AWS Command Line Interface (CLI)</a>. DynamoDB can back up your data with per-second granularity and restore to any single second from the time PITR was enabled up to the prior 35 days. We built this feature to protect against accidental writes or deletes.&nbsp;If a developer runs a script against production instead of staging or if someone fat-fingers a DeleteItem call, PITR has you covered. We also built it for the scenarios you can’t normally predict. You can still keep your on-demand backups for as long as needed for archival purposes but PITR works as additional insurance against accidental loss of data. Let’s see how this works.</p> 
+<h3>Continuous Backup</h3> 
+<p>To enable this feature in the console we navigate to our table and select the <b>Backups</b> tab. From there simply click <b>Enable</b> to turn on the feature. I could also&nbsp;turn on continuous backups&nbsp;via the UpdateContinuousBackups API call.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_3.png" /></p> 
+<p>Let’s imagine a scenario where I have a lot of old user profiles that I want to delete.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_2-1-1024x575.png" /></p> 
+<p>I really only want to send service updates to our active users based on their <code>last_update</code> date. I decided to write a quick Python script to delete all the users that haven’t used my service in a while.</p> 
+<code class="lang-python">import boto3
+table = boto3.resource(&quot;dynamodb&quot;).Table(&quot;VerySuperImportantTable&quot;)
+items = table.scan(
+FilterExpression=&quot;last_update &gt;= :date&quot;,
+ExpressionAttributeValues={&quot;:date&quot;: &quot;2014-01-01T00:00:00&quot;},
+ProjectionExpression=&quot;ImportantId&quot;
+)['Items']
+print(&quot;Deleting {} Items! Dangerous.&quot;.format(len(items)))
+with table.batch_writer() as batch:
+for item in items:
+batch.delete_item(Key=item)</code> 
+<p>Great! This should delete all those pesky non-users of my service that haven’t logged in since 2013. So,— CTRL+C CTRL+C CTRL+C CTRL+C (interrupt the currently executing command).</p> 
+<p>Yikes! Do you see where I went wrong? I’ve just deleted my most important users! Oh, no! Where I had a greater-than sign, I meant to put a less-than! Quick, before Jeff Barr can see, I’m going to restore the table. (I probably could have prevented that typo with Boto 3’s handy <a href="http://boto3.readthedocs.io/en/latest/reference/customizations/dynamodb.html#dynamodb-conditions">DynamoDB conditions</a>: <code class="lang-python">Attr(&quot;last_update&quot;).lt(&quot;2014-01-01T00:00:00&quot;)</code>)</p> 
+<h3>Restoring</h3> 
+<p>Luckily for me, restoring a table is easy. In the console I’ll navigate to the <b>Backups</b> tab for my table and click <b>Restore to point-in-time</b>.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/23/ddb-1024x387.png" /></p> 
+<p>I’ll specify the time (a few seconds before I started my deleting spree) and a name for the table I’m restoring to.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_4.png" /></p> 
+<p>For a relatively small and evenly distributed table like mine, the restore is quite fast.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/ddb_5.png" /></p> 
+<p>The time it takes to restore a table varies based on multiple factors and restore times are not neccesarily coordinated with the size of the table. If your dataset is evenly distributed across your primary keys you’ll be able to take advanatage of parallelization which will speed up your restores.</p> 
+<p><span style="text-decoration: underline"><strong>Learn More &amp; Try It Yourself</strong></span><br /> There’s plenty more to learn about this new feature in the <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery.html">documentation here</a>.</p> 
+<p>Pricing for continuous backups is detailed on the <a href="https://aws.amazon.com/dynamodb/pricing/#Continuous_backup_and_point-in-time_recovery">DynamoDB Pricing Pages</a>. Pricing varies by region and is based on the current size of the table and indexes. For example, in <span title="">US East (N. Virginia)</span> you pay $0.20 per GB based on the size of the data and all local secondary indexes.</p> 
+<p>A few things to note:</p> 
+<li>PITR works with encrypted tables.</li> 
+<li>If you disable PITR and later reenable it, you reset the start time from which you can recover.</li> 
+<li>Just like on-demand backups, there are no performance or availability impacts to enabling this feature.</li> 
+<li>Stream settings, Time To Live settings, PITR settings, tags, <a href="https://aws.amazon.com/cloudwatch/" title="">Amazon CloudWatch</a> alarms, and auto scaling policies are not copied to the restored table.</li> 
+<li>Jeff, it turns out, knew I restored the table all along because every PITR API call is recorded in <a href="https://aws.amazon.com/cloudtrail/" title="">AWS CloudTrail</a>.</li> 
+<p>PITR is available in the US East (N. Virginia), US East (Ohio), US West (N. California), US West (Oregon), Asia Pacific (Tokyo), Asia Pacific (Seoul), Asia Pacific (Mumbai), Asia Pacific (Singapore), Asia Pacific (Sydney), Canada (Central), EU (Frankfurt), EU (Ireland), EU (London), and South America (Sao Paulo) Regions starting today.</p> 
+<p>Let us know how you’re going to use continuous backups and PITR on Twitter and in the comments.<br /> – <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23322');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/march_madness.png" /> 
+<b class="lb-b blog-post-title" property="name headline">March Machine Learning Madness!</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2018-03-26T10:01:10+00:00">26 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/sagemaker/" title="View all posts in SageMaker"><span property="articleSection">SageMaker</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/march-machine-learning-madness/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23608" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23608&amp;disqus_title=March+Machine+Learning+Madness%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/march-machine-learning-madness/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23608');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Mid-march in the USA means millions of people watching, and betting on, college basketball (I live here but I didn’t make the rules). As the NCAA college championship continues I wanted to briefly highlight the work of <a href="https://twitter.com/wesleypasfield">Wesley Pasfield</a> one of our <a href="https://aws.amazon.com/professional-services/">Professional Services</a> Machine Learning Specialists. Wesley was able to take data from <a href="https://kenpom.com">kenpom.com</a> and <a href="https://www.sports-reference.com/cbb/">College Basketball Reference</a> to build a model predicting the outcome of March Madness using the <a href="https://aws.amazon.com/sagemaker/" title="">Amazon SageMaker</a> built-in <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/xgboost.html">XGBoost</a> algorithm.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/march_madness-1024x463.png" /></p> 
+<p>Wesley walks us through grabbing the data, performing an exploratory data analysis (EDA in the data science lingo), reshaping the data for the xgboost algorithm, using the SageMaker SDK to create a training job for two different models, and finally creating a SageMaker inference endpoint for serving predictions at <a href="https://cbbpredictions.com/">https://cbbpredictions.com/</a>. Check out <a href="https://aws.amazon.com/blogs/machine-learning/predict-march-madness-using-amazon-sagemaker/">part one</a> of the post and <a href="https://aws.amazon.com/blogs/machine-learning/building-a-march-madness-predictor-application-supported-by-amazon-sagemaker/">part two.</a></p> 
+<p>Pretty cool right? Why not open the notebook and give the xgboost algorithm a try? Just know that there are a few caveats to the predictions so don’t go making your champion prediction just yet!</p> 
+<p>– <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23608');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/21/efs_sync_splash_1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">EFS File Sync – Faster File Transfer To Amazon EFS File Systems</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-12T13:35:57+00:00">12 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/business-productivity/amazon-chime/" title="View all posts in Amazon Chime*"><span property="articleSection">Amazon Chime*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/price-reduction/" title="View all posts in Price Reduction*"><span property="articleSection">Price Reduction*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/new-usage-based-pricing-for-amazon-chime/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23198" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23198&amp;disqus_title=New+%26%238211%3B+Usage-Based+Pricing+for+Amazon+Chime&amp;disqus_url=https://aws.amazon.com/blogs/aws/new-usage-based-pricing-for-amazon-chime/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<time property="datePublished" datetime="2018-03-22T11:31:07+00:00">22 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/efs-file-sync-faster-file-transfer-to-amazon-efs-file-systems/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23303" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23303&amp;disqus_title=EFS+File+Sync+%26%238211%3B+Faster+File+Transfer+To+Amazon+EFS+File+Systems&amp;disqus_url=https://aws.amazon.com/blogs/aws/efs-file-sync-faster-file-transfer-to-amazon-efs-file-systems/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
 require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23198');
+AWS.Blog.commenting('#aws-comment-trigger-23303');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
-<p>I am a regular and frequent user of <a href="https://chime.aws" title="">Amazon Chime</a>, as are most of my colleagues. In addition to dozens of ongoing point-to-point sessions with individual colleagues, I participate in one chat room for the AWS Blog team and another for the AWS Evangelists. I attend several meetings per day, and use Amazon Chime’s conferencing feature to set up my own meetings once or twice a month. While I don’t actually see the monthly bill, I am on Amazon Chime’s Pro plan, at a per-user rate of $15 per month. This is, based on feedback from our customers, a good value for users who regularly host meetings, but a bit too high for those who use the other features and/or spend more time attending meetings than hosting them.</p> 
-<p><span style="text-decoration: underline"><strong>Usage-Based Pricing</strong></span><br /> To meet the needs of these users and to make <a href="https://chime.aws" title="">Amazon Chime</a> even more economical we are introducing a new, usage-based pricing model that goes in to effect on April 1, 2018.</p> 
-<p>During the initial, 30-day free trial, users have access to all <a href="https://chime.aws" title="">Amazon Chime</a> features at no charge. After the trial period ends, the users can chat with each other and attend meetings, both at no charge. On days that they host meetings, a $3 per day charge will be made, up to a maximum of $15 per month. Based on historical usage patterns, this will result in an overall price reduction for virtually all <a href="https://chime.aws" title="">Amazon Chime</a> customers.</p> 
-<p>In order to use the scheduling and hosting features after the end of the trial period, users must be connected to an AWS account and the administrator must enable the Amazon Pro Features features for the account. Thanks to the usage-based model, administrators will no longer have to purchase licenses for individual users in their organization. Instead, they can use Active Directory settings and policy management within the Amazon Chime Console to set permissions as desired.</p> 
-<p>As part of this change we are also eliminating the Plus plan and adding the screen sharing and corporate directory features to the Basic plan.</p> 
-<p>This change goes in to effect on April 1, 2018! To learn more, take a look at the <a href="https://aws.amazon.com/chime/pricing/">Amazon Chime Pricing</a> page.</p> 
+<p>We launched <a href="https://docs.aws.amazon.com/efs/latest/ug/gs-step-four-sync-files.html">EFS File Sync</a> a few days before <a href="https://reinvent.awsevents.com/" title="">AWS re:Invent</a> 2017 and I finally have time to tell you about it!</p> 
+<p>If you need to move a large collection of files from an on-premises or in-cloud file system to <a href="https://aws.amazon.com/efs" title="">Amazon Elastic File System</a>, this tool is for you. Simple, single-threaded command line tools such as <code>cp</code> and <code>rsync</code> predate the cloud and cannot deliver the throughput required to move massive amounts of data from place to place. These tools are generally used as building blocks, often within scripts that take care of scheduling, orchestration, and network security.</p> 
+<p><span style="text-decoration: underline"><strong>Secure &amp; Parallel</strong></span><br /> EFS File Sync uses a secure, highly parallel data transfer mechanism that can run up to 5 times faster than the tools I mentioned above. It is available as an agent that runs within VMware ESXi or on an EC2 instance, and accesses the source file system via NFS (v3 and v4), and can be used in all AWS Regions where EFS is available. Because the agent is responsible for initiating all communication with AWS you don’t need to set up VPNs or allow inbound connections through your firewall.</p> 
+<p>You can launch, control, and monitor the agent and your sync tasks from the <a href="https://console.aws.amazon.com" title="">AWS Management Console</a>. Jobs can specify the transfer of an entire file system or a specific directory tree, with the option to detect and skip files that are already present in the destination. File metadata (modification and access time, POSIX ownership and permissions, symbolic links, and hard links) is also copied.</p> 
+<p><strong><span style="text-decoration: underline">Using EFS File Sync</span></strong><br /> In order to write this blog post, I launched an EC2 instance, exported an NFS file system (<strong>/data</strong>), and populated the file system with the <a href="https://github.com/torvalds/linux">Linux kernel source code</a>.</p> 
+<p>I open the <a href="https://console.aws.amazon.com/efs/home">EFS Console</a> in the same Region as my instance, and click <strong>File syncs</strong>:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_sync_splash_1.png" /></p> 
+<p>I click on <strong>Get started</strong>, choose <strong>Amazon EC2</strong> as my host platform and click <strong>Launch instance</strong>, and click <strong>Connect to agent</strong> to proceed:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_sync_go_launch_2.png" /></p> 
+<p>Clicking <strong>Launch instance</strong> opens the EC2 console in a separate tab. I pick a <strong>Memory optimized</strong> instance type (<strong>xlarge</strong> or bigger), configure it with a public IP address and with a security group that allows inbound traffic on port 80, and launch it as I would any other EC2 instance. Then I wait a minute or two (time to water my plants or check on my dog), and wait until the status checks pass:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_sync_instance_ready_1.png" /></p> 
+<p>Then I capture the instance’s public IP address, return to the EFS tab, enter the address, and click on <strong>Activate agent</strong>:</p> 
+<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/efs_connect_to_agent_2.png" /></p> 
+<p>This step retrieves the activation key from the sync agent. After it completes, I enter a name for it and click <strong>Activate agent</strong> to proceed:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_activate_agent_1.png" /></p> 
+<p>Now that the agent is running and activated, I click on <strong>Create sync task</strong> to start moving some files to EFS:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_agents_1.png" /></p> 
+<p>I configure the source location (the EC2 instance that I mentioned at the start of this section):</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_config_source_nfs_1.png" /></p> 
+<p>I also choose the destination EFS file system and specify a target location within it for my files:</p> 
+<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/efs_config_dest_2.png" /></p> 
+<p>Then I select my sync options and click <strong>Next</strong> to review my configuration:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_config_sync_1.png" /></p> 
+<p>The review looks good and I click <strong>Create sync task</strong> to start copying my files:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_review_2.png" /></p> 
+<p>After the sync task has been created and its status becomes Available, I can select it and choose <strong>Start</strong> from the <strong>Actions</strong> menu to initiate a sync:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_start_agent_1.png" /></p> 
+<p>I fine-tune the settings that I established when I created the task, and click <strong>Start</strong> to proceed:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_go_go_gadget_1.png" /></p> 
+<p>I can track the status of the sync task on the <strong>History</strong> tab:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_syncing_1.png" /></p> 
+<p>It completes within minutes and my EFS file system now includes the new files:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/efs_linux_synced_1.png" /></p> 
+<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> EFS File Sync is available in all AWS Regions where EFS is available. You pay for the EFS and EC2 resources that you consume and $0.01 per GB of data copied (see the <a href="https://aws.amazon.com/efs/pricing/">EFS Pricing</a> page for more info).</p> 
 <p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
 <script>
 require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23198');
+AWS.Blog.commenting('#aws-comment-trigger-23303');
 });
 </script> 
 </article> 
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/09/reinvent_lego_eseerb_yelnif_1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Summit Season is Almost Here – Get Ready to Register!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-11T10:27:06+00:00">11 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/" title="View all posts in Events*"><span property="articleSection">Events*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/aws-summit-season-is-almost-here-get-ready-to-register/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23210" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23210&amp;disqus_title=AWS+Summit+Season+is+Almost+Here+%26%238211%3B+Get+Ready+to+Register%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-summit-season-is-almost-here-get-ready-to-register/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23210');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>I’m wr<a href="https://media.amazonwebservices.com/blog/2018/contraption A.jpg">i</a>ting th<a href="https://media.amazonwebservices.com/blog/2018/contraption B.jpg">i</a>s post from my hotel room <a href="https://media.amazonwebservices.com/blog/2018/contraption C.jpg">i</a>n Tokyo wh<a href="https://media.amazonwebservices.com/blog/2018/contraption D.jpg">i</a>le doing my best to f<a href="https://media.amazonwebservices.com/blog/2018/contraption E.jpg">i</a>ght jet lag! I’m here to speak at <a href="https://jawsdays2018.jaws-ug.jp/">JAWS Days</a> and <a href="https://aws.amazon.com/startup-day/">Startup Day</a>, and to meet w<a href="https://media.amazonwebservices.com/blog/2018/contraption F.jpg">i</a>th some local customers.</p> 
-<p>I do want to rem<a href="https://media.amazonwebservices.com/blog/2018/contraption G.jpg">i</a>nd you that the <a href="https://aws.amazon.com/summits/">AWS Global Summit</a> series <a href="https://media.amazonwebservices.com/blog/2018/contraption H.jpg">i</a>s just about to start! W<a href="https://media.amazonwebservices.com/blog/2018/contraption I.jpg">i</a>th events planned for <a href="https://aws.amazon.com/summits/#North_America">North America</a>, <a href="https://aws.amazon.com/summits/#Latin_America">Latin America</a>, <a href="https://aws.amazon.com/summits/#Japan">Japan</a> and the rest of <a href="https://aws.amazon.com/summits/#Asia_Pacific">Asia</a>, <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Europe</a>, the <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Middle East</a>, <a href="https://aws.amazon.com/summits/#Europe_.2F_Middle_East_.2F_Africa">Africa</a>, and <a href="https://aws.amazon.com/summits/#Greater_China">Greater China</a>, odds are that there’s one not too far from you. You can reg<a href="https://media.amazonwebservices.com/blog/2018/contraption J.jpg">i</a>ster for the <a href="https://aws.amazon.com/summits/san-francisco/">San Francisco Summit</a> today and you can <a href="https://pages.awscloud.com/2018GlobalSummit.html">ask to be notified</a> as soon as reg<a href="https://media.amazonwebservices.com/blog/2018/contraption K.jpg">i</a>stration for the other 30+ c<a href="https://media.amazonwebservices.com/blog/2018/contraption L.jpg">i</a>ties opens up<a href="https://media.amazonwebservices.com/blog/2018/contraption M.jpg">.</a></p> 
-<p>The Summits are offered at no charge and are an excellent way for you to learn more about AWS. You’ll get to hear from our leaders and tech teams, our partners, and from other customers. You can also participate in hands-on workshops, labs, and team challenges.</p> 
-<p>Because the events are multi-track, you may want to bring a colleague or two in order to make sure that you don’t miss something of interest to your organization.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>PS – I keep meaning to share this <a href="https://www.youtube.com/watch?v=tGjyPMNnFTQ&amp;feature=youtu.be">cool video</a> that my friend <a href="https://en.wikipedia.org/wiki/Mike_Selinker">Mike Selinker</a> took at <a href="https://reinvent.awsevents.com/" title="">AWS re:Invent</a>. Check it out!</p> 
-<p><a href="https://www.youtube.com/watch?v=tGjyPMNnFTQ&amp;feature=youtu.be"><img width="100%" src="https://media.amazonwebservices.com/blog/2018/reinvent_lego_1.png" /></a></p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23210');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/22/ozz_2_0_2.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Join the AWS Quest – Help me to Rebuild Ozz!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-03-09T10:10:13+00:00">09 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23136" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23136&amp;disqus_title=Join+the+AWS+Quest+%26%238211%3B+Help+me+to+Rebuild+Ozz%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23136');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/ozz_2_0_3.jpg">weekly videos</a>, you may have noticed an orange robot in the background from time to time. That’s Ozz, my robot friend and helper. Built from the ground up in my home laboratory, Ozz is an invaluable part of the AWS blogging process!</p> 
-<p>Sadly, when we announced we are adding the <a href="http://d1le29qyzha1u4.cloudfront.net/AWS_Podcast_Episode_234.mp3">AWS Podcast</a> to the blog, Ozz literally went to pieces and all I have left is a large pile of bricks and some great memories of our time together. From what I can tell, Ozz went haywire over this new development due to excessive enthusiasm!</p> 
-<p>Ozz, perhaps anticipating that this could happen at some point, buried a set of clues (each pointing to carefully protected plans) in this blog, in the AWS Podcast, and in other parts of the AWS site. If we can find and decode these plans, we can rebuild Ozz, <a href="https://en.wikipedia.org/wiki/The_Six_Million_Dollar_Man">better, stronger, and faster</a>. Unfortunately, due to concerns about the ultra-competitive robot friend market, Ozz concealed each of the plans inside a set of devious, brain-twisting puzzles. You are going to need to look high, low, inside, outside, around, and through the clues in order to figure this one out. You may even need to <a href="https://en.wikipedia.org/wiki/Who_Wants_to_Be_a_Millionaire%3F">phone a friend</a> or two.</p> 
-<p>Your mission, <a href="https://en.wikiquote.org/wiki/Mission:_Impossible">should you choose to accept it</a>, is to find these clues, decode the plans, and help me to rebuild Ozz. The information that I have is a bit fuzzy, but I think there are 20 or so puzzles, each one describing one part of Ozz. If we can solve them all, we’ll get together on <a href="https://www.twitch.tv/aws">Twitch</a> later this month and put Ozz back together. We’ll be posting additional clues every day or two, so be sure to keep your eyes wide open.</p> 
-<p>Are you with me on this? <a href="https://aws.amazon.com/awsquest/">Let’s do it! </a></p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23136');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Online Tech Talks – March 2018</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by Betsy Chernoff | on 
-<time property="datePublished" datetime="2018-03-07T13:10:09+00:00">07 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/" title="View all posts in Events*"><span property="articleSection">Events*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/events/webinars/" title="View all posts in Webinars*"><span property="articleSection">Webinars*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/aws-online-tech-talks-march-2018/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23189" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23189&amp;disqus_title=AWS+Online+Tech+Talks+%E2%80%93+March+2018&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-online-tech-talks-march-2018/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23189');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Can you believe it’s already the month of March? With some great <a href="https://aws.amazon.com/about-aws/events/monthlywebinarseries/?&amp;trk=el_a131L000005tj0hQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">new Tech Talks</a> available this month, there’s no better time to grow your knowledge about AWS services and solutions.</p> 
-<b><span style="color: #ff6600">AWS Online Tech Talks</span></b> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/05/March_Tech_Talk-1024x174.png" /></p> 
-<b>March 2018– Schedule</b> 
-<p>Below is the full schedule for the live, online technical sessions being held during the month of March. Make sure to register ahead of time so you won’t miss out on these free talks conducted by AWS subject matter experts.</p> 
-<p>Webinars featured this month are:</p> 
-<p><strong><u>Analytics &amp; Big Data </u></strong></p> 
-<p><strong>March 21, 2018 | 09:00 AM – 09:45 AM PT</strong> – <a href="https://pages.awscloud.com/Amazon-Elasticsearch-Service-Deep-Dive_0305-ABD.html?&amp;trk=el_a131L000005tj1aQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Amazon Elasticsearch Service Deep Dive (300)</a> – Learn how to run Elasticsearch using Amazon Elasticsearch Service.</p> 
-<p><strong>March 28, 2018 | 11:00 AM – 12:00 PM PT</strong> – <a href="https://pages.awscloud.com/Deep-Dive-on-Amazon-Athena_0321-ABD.html?&amp;trk=el_a131L000005tj24QAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Deep Dive on Amazon Athena (300)</a> – Dive deep into the most common Amazon Athena use cases, including working with other AWS services.</p> 
-<p><strong><u>Compute </u></strong></p> 
-<p><strong>March 26, 2018 | 01:00 PM – 01:45 PM PT </strong>– <a href="https://pages.awscloud.com/High-Performance-Computing-in-the-Cloud_0312-CMP.html?&amp;trk=el_a131L000005tj1LQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">High Performance Computing in the Cloud (200)</a> – Learn how AWS is enabling faster time to results and higher ROI when it comes to solving the big problems in science, engineering and business with high performance computing in the cloud.</p> 
-<p><strong>March 27, 2018 | 01:00 PM – 01:45 PM PT</strong> – <a href="https://pages.awscloud.com/Introduction-to-Hybrid-Cloud-on-AWS_0315-CMP.html?&amp;trk=el_a131L000005tj1VQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Introduction to Hybrid Cloud on AWS (200)</a> – Learn how AWS is building the industry’s broadest capabilities for Hybrid Cloud deployments.</p> 
-<p><strong><u>Containers </u></strong></p> 
-<p><strong>March 19, 2018 | 01:00 PM – 01:45 PM PT</strong> <a href="https://pages.awscloud.com/Running-Kubernetes-with-Amazon-EKS_0318-CON.html?&amp;trk=el_a131L000005tj1BQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">– Running Kubernetes with Amazon EKS (200)</a> – Learn about how Amazon EKS makes it easy to run and scale Kubernetes in the cloud.</p> 
-<p><strong><u>Databases</u></strong></p> 
-<p><strong>March 21, 2018 | 11:00 AM – 11:45 AM PT</strong> – <a href="https://pages.awscloud.com/Best-Practices-for-Migrating-Oracle-Databases-to-the-Cloud_0306-DAT.html?&amp;trk=el_a131L000005tj0xQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Best Practices for Migrating Oracle Databases to the Cloud (200)</a> – Learn best practices for migrating your Oracle databases to the cloud.</p> 
-<p><strong><u>DevOps</u></strong></p> 
-<p><strong>March 21, 2018 | 01:00 PM – 01:45 PM PT</strong> <a href="https://pages.awscloud.com/Life-of-a-Code-Change-to-a-Tier-1-Service_0307-DEV.html?&amp;trk=el_a131L000005tj11QAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">– Life of a Code Change to a Tier 1 Service (200)</a> – Come follow the journey of an AWS code change on its way to production.</p> 
-<p><strong><u>Enterprise </u></strong></p> 
-<p><strong>March 26, 2018 | 11:00 AM – 11:45 AM PT</strong> – <a href="https://pages.awscloud.com/Improve-Efficiency-by-Migrating-Messaging-to-Amazon-MQ_0311-ENT.html?&amp;trk=el_a131L000005tj1MQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Improve Efficiency by Migrating Messaging to Amazon MQ (200)</a> – Learn how Amazon MQ makes it easy for enterprises, like GE, to save time and money by migrating to a managed message broker.</p> 
-<p><strong><u>IoT</u></strong></p> 
-<p><strong>March 22, 2018 | 11:00 AM – 12:00 PM PT</strong> – <a href="https://pages.awscloud.com/Learn-Step-by-Step-how-iDevices-Uses-AWS-IoT-Analytics_0309-IOT.html?&amp;trk=el_a131L000005tj0rQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Learn Step by Step How iDevices Uses AWS IoT Analytics (300)</a> – Learn how iDevices, with AWS IoT Analytics, built an anomaly system and gains deep insights into user behavior.</p> 
-<p><strong><u>Machine Learning </u></strong></p> 
-<p><strong>March 20, 2018 | 01:00 PM – 01:45 PM PT</strong> – <a href="https://pages.awscloud.com/Working-with-Scalable-Machine-Learning-Algorithms-in-Amazon-SageMaker_0304-MCL.html?&amp;trk=el_a131L000005tj1uQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Working with Scalable Machine Learning Algorithms in Amazon SageMaker (400)</a> – Get an introduction the collection of distributed streaming mach<a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/Polly-combined-conversation.mp3">i</a>ne learning algorithms that come with Amazon SageMaker.</p> 
-<p><strong>March 22, 2018 | 01:00 PM – 01:45 PM PT</strong> – <a href="https://pages.awscloud.com/Enabling-Deep-Learning-in-IoT-Applications-with-Apache-MXNet_0310-MCL.html?&amp;trk=el_a131L000005tj1zQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Enabling Deep Learning in IoT Applications with Apache MXNet (200)</a> – Learn how to use deep learning in IoT apps using Apache MXNet.</p> 
-<p><strong>March 28, 2018 | 01:00 PM – 02:00 PM PT</strong> – <a href="https://pages.awscloud.com/Media-Processing-Workflows-at-High-Velocity-and-Scale-using-AI-and-ML_0324-MCL.html?&amp;trk=el_a131L000005tj29QAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Media Processing Workflows at High Velocity and Scale using AI and ML (200)</a> – Hear how AWS customers have improved media supply chains using AI in areas such as metadata tagging (Rekognition and Comprehend), translations, transcriptions, and cloud services (Elemental).</p> 
-<p><strong><u>Management Tools</u></strong></p> 
-<p><strong>March 19, 2018 | 11:00 AM – 12:00 PM PT</strong> – <a href="https://pages.awscloud.com/Achieving-Global-Consistency-using-AWS-CloudFormation-StackSets_0301-MGT.html?&amp;trk=el_a131L000005tj1GQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Achieving Global Consistency Using AWS CloudFormation StackSets (300)</a> – Learn how to centrally manage your accounts and regions using AWS CloudFormation StackSets.</p> 
-<p><strong><u>Mobile </u></strong></p> 
-<p><strong>March 22, 2018 | 09:00 AM – 09:45 AM PT</strong> – <a href="https://pages.awscloud.com/New-Mobile-CLI-and-Console-Experience_0308-MBL.html?&amp;trk=el_a131L000005tj0wQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">New Mobile CLI and Console Experience (200)</a> – Learn how AWS Mobile Services has introduced a new CLI and streamlined console experience in order to simplify and speed up the development of mobile applications with innovative AWS features and back-end functionality.</p> 
-<p><strong><u>Networking </u></strong></p> 
-<p><strong>March 28, 2018 | 09:00 AM – 09:45 AM PT –</strong> <a href="https://pages.awscloud.com/Deep-Dive-on-New-AWS-Networking-Features_0320-NET.html?&amp;trk=el_a131L000005tj1fQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Deep Dive on New AWS Networking Features (300)</a> – Learn how AWS PrivateLink, Direct Connect gateway, and new features with Elastic Load Balancers (ELB) come together to meet the needs of a modern enterprise.</p> 
-<p><strong><u>Security, Identity &amp; Compliance </u></strong></p> 
-<p><strong>March 27, 2018 | 09:00 AM – 09:45 AM PT –</strong> <a href="https://pages.awscloud.com/The-Evolution-of-AWS-Identity-Management_0313-SID.html?&amp;trk=el_a131L000005tj1QQAQ&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">The Evolution of Identity and Access Management on AWS (300)</a> – Learn how identity federation can address many security and management scenarios as you expand your use of AWS.</p> 
-<p><strong>March 29, 2018 | 09:00 AM – 09:45 AM PT</strong> – <a href="https://pages.awscloud.com/Navigating-GDPR-Compliance-on-AWS_0316-SID.html?&amp;trk=el_a131L000005tj1pQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Navigating GDPR Compliance on AWS (300)</a> – Get a walkthrough of potential General Data Protection Regulation (GDPR) obligations and see how the AWS cloud offers services and features that are consistent with GDPR considerations in the ramp-up to the May 25th, 2018 enforcement date.</p> 
-<p><strong><u>Serverless</u></strong></p> 
-<p><strong>March 20, 2018 | 11:00 AM – 11:45 AM PT –</strong> <a href="https://pages.awscloud.com/Operating-Your-Serverless-API-in-Production-at-Scale_0303-SRV.html?&amp;trk=el_a131L000005tj16QAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Operating Your Serverless API in Production at Scale (400)</a> – Learn how to deploy, monitor, and manage serverless APIs in production.</p> 
-<p><strong><u>Storage</u></strong></p> 
-<p><strong>March 27, 2018 | 11:00 AM – 11:45 AM PT</strong> <strong>–</strong> <a href="https://pages.awscloud.com/Enterprise-Applications-with-Amazon-EFS_0314-STG.html?&amp;trk=el_a131L000005tj1kQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Enterprise Applications with Amazon EFS (300)</a> – Join us for a technical deep dive on Amazon EFS, where you’ll learn tips and tricks for integrating your enterprise applications with Amazon EFS.</p> 
-<p><strong>March 29, 2018 | 11:00 AM – 11:45 AM PT</strong> – <a href="https://pages.awscloud.com/Transforming-Data-Lakes-with-Amazon-S3-Select-and-Amazon-Glacier-Select_0317-STG.html?&amp;trk=el_a131L000005tj0mQAA&amp;sc_channel=el&amp;sc_campaign=pac_Q1-2018_exlinks_blog_OTT_03DGAB&amp;sc_outcome=Product_Adoption_Campaigns&amp;sc_geo=NAMER&amp;sc_country=mult">Transforming Data Lakes with Amazon S3 Select &amp; Amazon Glacier Select (300)</a> – Join us for a webinar where we’ll demonstrate how Amazon S3 Select can increase analytics query performance up to 400%, and Amazon Glacier Select makes it practical to extend queries to archive storage, significantly reducing data lake storage costs.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23189');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Auto Scaling is now available for Amazon SageMaker</b> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/AWS-Quest-logo.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Quest- a puzzling situation</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
 <a href="https://aws.amazon.com/blogs/aws/author/visneski/" title="Posts by Ana Visneski">Ana Visneski</a> | on 
-<time property="datePublished" datetime="2018-03-02T09:43:59+00:00">02 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/amazon-machine-learning/" title="View all posts in Amazon Machine Learning*"><span property="articleSection">Amazon Machine Learning*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/" title="View all posts in Artificial Intelligence*"><span property="articleSection">Artificial Intelligence*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/sagemaker/" title="View all posts in SageMaker"><span property="articleSection">SageMaker</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/auto-scaling-is-now-available-for-amazon-sagemaker/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23166" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23166&amp;disqus_title=Auto+Scaling+is+now+available+for+Amazon+SageMaker&amp;disqus_url=https://aws.amazon.com/blogs/aws/auto-scaling-is-now-available-for-amazon-sagemaker/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23166');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Kumar Venkateswar, Product Manager on the AWS ML Platforms Team, shares details on the announcement of Auto Scaling with Amazon SageMaker.</p> 
-<hr /> 
-<p>With <a href="https://aws.amazon.com/sagemaker/?sc_channel=PS&amp;sc_campaign=pac_ps_q4&amp;sc_publisher=google&amp;sc_medium=sagemaker_b_pac_search&amp;sc_content=sagemaker_e&amp;sc_detail=amazon%20sagemaker&amp;sc_category=sagemaker&amp;sc_segment=webp&amp;sc_matchtype=e&amp;sc_country=US&amp;sc_geo=namer&amp;sc_outcome=pac&amp;s_kwcid=AL!4422!3!245225393505!e!!g!!amazon%20sagemaker&amp;ef_id=WftJbAAAA-YTV2Xs:20180302024125:s">Amazon SageMaker</a>, thousands of customers have been able to easily build, train and deploy their machine learning (ML) models. Today, we’re making it even easier to manage production ML models, with Auto Scaling for Amazon SageMaker. Instead of having to manually manage the number of instances to match the scale that you need for your inferences, you can now have SageMaker automatically scale the number of instances based on an AWS Auto Scaling Policy.</p> 
-<p>SageMaker has made managing the ML process easier for many customers. We’ve seen customers take advantage of managed Jupyter notebooks and managed distributed training. We’ve seen customers deploying their models to SageMaker hosting for inferences, as they integrate machine learning with their applications. SageMaker makes this easy – &nbsp;you don’t have to think about patching the operating system (OS) or frameworks on your inference hosts, and you don’t have to configure inference hosts across Availability Zones. You just deploy your models to SageMaker, and it handles the rest.</p> 
-<p>Until now, you have needed to specify the number and type of instances per endpoint (or production variant) to provide the scale that you need for your inferences. If your inference volume changes, you can change the number and/or type of instances that back each endpoint to accommodate that change, without incurring any downtime. In addition to making it easy to change provisioning, customers have asked us how we can make managing capacity for SageMaker even easier.</p> 
-<p>With Auto Scaling for Amazon SageMaker, in the <a href="https://console.aws.amazon.com/sagemaker">SageMaker console</a>, the <a href="https://docs.aws.amazon.com/autoscaling/application/APIReference/API_PutScalingPolicy.html">AWS Auto Scaling API</a>, and the <a href="https://docs.aws.amazon.com/cli/latest/reference/application-autoscaling/index.html">AWS SDK</a>, this becomes much easier. Now, instead of having to closely monitor inference volume, and change the endpoint configuration in response, customers can configure a scaling policy to be used by AWS Auto Scaling. Auto Scaling adjusts the number of instances up or down in response to actual workloads, determined by using Amazon CloudWatch metrics and target values defined in the policy. In this way, customers can automatically adjust their inference capacity to maintain predictable performance at a low cost. You simply specify the target inference throughput per instance and provide upper and lower bounds for the number of instances for each production variant. SageMaker will then monitor throughput per instance using Amazon CloudWatch alarms, and then it will adjust provisioned capacity up or down as needed.</p> 
-<p>After you configure the endpoint with Auto Scaling, SageMaker will continue to monitor your deployed models to automatically adjust the instance count. SageMaker will keep throughput within desired levels, in response to changes in application traffic. This makes it easier to manage models in production, and it can help reduce the cost of deployed models, as you no longer have to provision sufficient capacity in order to manage your peak load. Instead, you configure the limits to accommodate your minimum expected traffic and the maximum peak, and Amazon SageMaker will work within those limits to minimize cost.</p> 
-<p>How do you get started? Open the SageMaker console. For existing endpoints, you first access the endpoint to modify the settings.</p> 
-<p><em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/Screen-Shot-1-1024x429.png" /></em><br /> Then, scroll to the <strong>Endpoint runtime settings</strong> section, select the variant, and choose <strong>Configure auto scaling</strong>.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/Screen-Shot-2-1024x233.png" /><br /> First, configure the minimum and maximum number of instances.</p> 
-<p><em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/Screen-Shot-3-1024x586.png" /></em></p> 
-<p>Next, choose the throughput per instance at which you want to add an additional instance, given previous load testing.</p> 
-<p><em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/Screen-Shot-4-1024x435.png" /></em></p> 
-<p>You can optionally set cool down periods for scaling in or out, to avoid oscillation during periods of wide fluctuation in workload. If not, SageMaker will assume default values.</p> 
-<p>And that’s it! You now have an endpoint that will automatically scale with increasing inferences.</p> 
-<p><em><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/Screen-Shot-5-1024x423.png" /></em></p> 
-<p>You pay for the capacity used at regular SageMaker pay-as-you-go pricing, so you no longer have to pay for unused capacity during relative idle periods!</p> 
-<p>Auto Scaling in Amazon SageMaker is available today in the US East (N. Virginia &amp; Ohio), EU (Ireland), and U.S. West (Oregon) AWS regions. To learn more, see the <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling.html">Amazon SageMaker Auto Scaling documentation</a>.</p> 
-<hr /> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/02/headshot2.jpg" /></p> 
-<p><a href="https://www.linkedin.com/in/rvenkate/">Kumar Venkateswar</a> is a Product Manager in the AWS ML Platforms team, which includes Amazon SageMaker, Amazon Machine Learning, and the AWS Deep Learning AMIs. When not working, Kumar plays the violin and Magic: The Gathering.</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<hr /> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/aws_news_channel_01.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/aws_news_channel_01.png" /></a></p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23166');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Attending Mobile World Congress? Check Out Our Connected Car Demo!</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-02-27T10:10:31+00:00">27 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/internet-of-things/aws-greengrass/" title="View all posts in AWS Greengrass*"><span property="articleSection">AWS Greengrass*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/internet-of-things/" title="View all posts in Internet of Things*"><span property="articleSection">Internet of Things*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/attending-mobile-world-congress-check-out-our-connected-car-demo/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23150" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23150&amp;disqus_title=Attending+Mobile+World+Congress%3F+Check+Out+Our+Connected+Car+Demo%21&amp;disqus_url=https://aws.amazon.com/blogs/aws/attending-mobile-world-congress-check-out-our-connected-car-demo/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23150');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Are you planning to attend <a href="https://www.mobileworldcongress.com/">Mobile World Congress</a> 2018 in Barcelona (one of my favorite cities)? If so, please be sure to check out the connected car demo in Hall 5 Booth 5E41.</p> 
-<p>The <a href="https://aws.amazon.com/greengrass" title="">AWS Greengrass</a> team has been working on a proof of concept with our friends at <a href="https://www.vodafone.com/content/index.html">Vodafone</a> and <a href="https://www.saguna.net/">Saguna</a> to show you how connected cars can change the automotive industry. The demo is built around the emerging concept of multi-access edge computing, or MEC.</p> 
-<p>Car manufacturers want to provide advanced digital technology in their vehicles but don’t want to make significant upgrades to the on-board computing resources due to cost, power, and time-to-market considerations, not to mention the issues that arise when attempting to retrofit cars that are already on the road. MEC offloads processing resources to the edge of the mobile network, for instance a hub site in the access network. This model helps car manufacturers to take advantage of low-latency compute resources while building features that can evolve and improve over the lifetime of the vehicle, often 20 years or more. It also reduces the complexity and the cost of the on-board components.</p> 
-<p>The MWC demo streams a live video feed over Vodafone’s 4G LTE network, with Saguna’s AI-powered MEC solution that leverages AWS Greengrass. The demo focuses on driver safety, with the goal of helping to detect drivers that are distracted by talking to someone or something in the car. With an on-board camera aimed at the driver, backed up by AI-powered movement tracking and pattern detection running at the edge of the mobile network, distractions can be identified and the driver can be alerted. This architecture also allows manufacturers to enhance existing cars since most of the computing is handled at the edge of the mobile network.</p> 
-<p>If you couldn’t make it to Mobile World Congress, you can also check out the video for this solution, <a href="https://youtu.be/oDNCGIur778">here</a>.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23150');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon GameLift FleetIQ and Spot Instances – Save up to 90% On Game Server Hosting</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-02-22T10:21:34+00:00">22 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/game-development/amazon-gamelift/" title="View all posts in Amazon GameLift*"><span property="articleSection">Amazon GameLift*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/amazon-gamelift-fleetiq-and-spot-instances-save-up-to-90-on-game-server-hosting/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23107" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23107&amp;disqus_title=Amazon+GameLift+FleetIQ+and+Spot+Instances+%26%238211%3B+Save+up+to+90%25+On+Game+Server+Hosting&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-gamelift-fleetiq-and-spot-instances-save-up-to-90-on-game-server-hosting/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23107');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><a href="https://aws.amazon.com/gamelift/" title="">Amazon GameLift</a> is a scalable, cloud-based runtime environment for session-based multiplayer games. You simply upload a build of your game, tell <span title="">Amazon GameLift</span> which type of EC2 instances you’d like to host it on, and sit back while <span title="">Amazon GameLift</span> takes care of setting up sessions and maintaining a suitably-sized fleet of EC2 instances. This automatic scaling allows you to accommodate demand that varies over time without having to keep compute resources in reserve during quiet periods.</p> 
-<p><span style="text-decoration: underline"><strong>Use Spot Instances</strong></span><br /> Last week we added a new feature to further decrease your per-player, per-hour costs when you host your game on <span title="">Amazon GameLift</span>. Before that launch, Amazon GameLift instances were always launched in On-Demand form. Instances of this type are always billed at fixed prices, as detailed on the <a href="https://aws.amazon.com/gamelift/pricing/">Amazon GameLift Pricing</a> page.</p> 
-<p>You can now make use Amazon GameLift Spot Instances in your GameLift fleets. These instances represent unused capacity and have prices that rise and fall over time. While your results will vary, you may see savings of up to 90% when compared to On-Demand Instances.</p> 
-<p>While you can use Spot Instances as a simple money-saving tool, there are other interesting use cases as well. Every game has a life cycle, along with a cadre of loyal players who want to keep on playing until you finally unplug and decommission the servers. You could create an Amazon GameLift fleet comprised of low-cost Spot Instances and keep that beloved game up and running as long as possible without breaking the bank. Behind the scenes, an Amazon GameLift Queue will make use of both Spot and On-Demand Instances, balancing price and availability in an attempt to give you the best possible service at the lowest price.</p> 
-<p>As I mentioned earlier, Spot Instances represent capacity that is not in use by On-Demand Instances. When this capacity decreases, existing Spot Instances could be interrupted with two minutes of notification and then terminated. Fortunately, there’s a lot of capacity and terminations are, statistically speaking, quite rare. To reduce the frequency even further, Amazon GameLift Queues now include a new feature that we call FleetIQ.</p> 
-<p>FleetIQ is powered by historical pricing and termination data for Spot Instances. This data, in combination with a very conservative strategy for choosing instance types, further reduces the odds that any particular game will be notified and then interrupted. The <code><a title="undefined" href="https://docs.aws.amazon.com/gamelift/latest/developerguide/integration-server-sdk-cpp-ref-actions.html" target="null">onProcessTerminate</a></code> callback in your game’s server process will be activated if the underlying Spot Instance is about to be interrupted. At that point you have two minutes to close out the game, save any logs, free up any resources, and otherwise wrap things up. While you are doing this, you can call <code><a title="undefined" href="https://docs.aws.amazon.com/gamelift/latest/developerguide/integration-server-sdk-cpp-ref-actions.html" target="null">GetTerminationTime</a></code> to see how much time remains.</p> 
-<p><span style="text-decoration: underline"><strong>Creating a Fleet</strong></span><br /> To take advantage of Spot Instances and FleetIQ, you can use the Amazon GameLift console or API to set up Queues with multiple fleets of Spot and On-Demand Instances. By adding more fleets into each Queue, you give FleetIQ more options to improve latency, interruption rate, and cost. To start a new game session on an instance, FleetIQ first selects the region with the lowest latency for each player, then chooses the fleet with the lowest interruption rate and cost.</p> 
-<p>Let’s walk through the process. I’ll create a fleet of On-Demand Instances and a fleet of Spot Instances, in that order:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/gl_create_od_fleet_2.png" /></p> 
-<p>And:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/gl_create_spot_fleet_3.png" /></p> 
-<p>I take a quick break while the fleets are validated and activated:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/gl_my_two_fleets_1.png" /></p> 
-<p>Then I create a queue for my game. I select the fleets as the destinations for the queue:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/gl_create_queue_1.png" /></p> 
-<p>If I am building a game that will have a global user base, I can create fleets in additional AWS Regions and use a player latency policy so that game sessions will be created in a suitable region:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/gl_set_player_latency_policy_1.png" /></p> 
-<p>To learn more about how to use this feature, take a look at the <a href="https://docs.aws.amazon.com/gamelift/latest/developerguide/spot-tasks.html">Spot Fleet Integration Guide</a>.</p> 
-<p><span style="text-decoration: underline"><strong>Now Available</strong></span><br /> You can use Amazon GameLift Spot Instance fleets to host your session-based games now! Take a look, give it a try, and let me know what you think.<span style="text-decoration: underline"><strong><br /> </strong></span></p> 
-<p>If you are planning to attend GDC this year, be sure to swing by booth 1001. Check out our <a href="https://aws.amazon.com/gdc-2018/">GDC 2018 site</a> for more information on our dev day talks, classroom sessions, and in-booth demos.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23107');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/sar_search-924x630.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Now Available – AWS Serverless Application Repository</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-02-21T11:13:17+00:00">21 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/serverless/" title="View all posts in Serverless*"><span property="articleSection">Serverless*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/now-available-aws-serverless-application-repository/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23092" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23092&amp;disqus_title=Now+Available+%26%238211%3B+AWS+Serverless+Application+Repository&amp;disqus_url=https://aws.amazon.com/blogs/aws/now-available-aws-serverless-application-repository/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23092');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Last year I suggested that you <a href="https://aws.amazon.com/blogs/aws/aws-serverless-app-repo/">Get Ready for the AWS Serverless Application Repository</a> and gave you a sneak peek. The Repository is designed to make it as easy as possible for you to discover, configure, and deploy <a href="https://aws.amazon.com/serverless/" title="">serverless</a> applications and components on AWS. It is also an ideal venue for AWS partners, enterprise customers, and independent developers to share their serverless creations.</p> 
-<p><span style="text-decoration: underline"><strong>Now Available</strong></span><br /> After a well-received public preview, the <a href="https://aws.amazon.com/serverless/serverlessrepo/" title="">AWS Serverless Application Repository</a> is now generally available and you can start using it today!</p> 
-<p>As a <em>consumer</em>, you will be able to tap in to a thriving ecosystem of serverless applications and components that will be a perfect complement to your machine learning, image processing, IoT, and general-purpose work. You can configure and consume them as-is, or you can take them apart, add features, and submit pull requests to the author.</p> 
-<p>As a <em>publisher</em>, you can publish your contribution in the <span title="">Serverless Application Repository</span> with ease. You simply enter a name and a description, choose some labels to increase discoverability, select an appropriate open source license from a menu, and supply a README to help users get started. Then you enter a link to your existing source code repo, choose a <a href="https://github.com/awslabs/serverless-application-model">SAM template</a>, and designate a semantic version.</p> 
-<p>Let’s take a look at both operations…</p> 
-<p><span style="text-decoration: underline"><strong>Consuming a Serverless Application</strong></span><br /> The <a href="https://serverlessrepo.aws.amazon.com">Serverless Application Repository</a> is accessible from the Lambda Console. I can page through the existing applications or I can initiate a search:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/sar_home_2.png" /></p> 
-<p>A search for “todo” returns some interesting results:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_search_todo_1.png" /></p> 
-<p>I simply click on an application to learn more:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_info_2.png" /></p> 
-<p>I can configure the application and deploy it right away if I am already familiar with the application:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_deploy_1.png" /></p> 
-<p>I can expand each of the sections to learn more. The <strong>Permissions</strong> section tells me which IAM policies will be used:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_perms_1.png" /></p> 
-<p>And the <strong>Template</strong> section displays the SAM template that will be used to deploy the application:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_template_1.png" /></p> 
-<p>I can inspect the template to learn more about the AWS resources that will be created when the template is deployed. I can also use the templates as a learning resource in preparation for creating and publishing my own application.</p> 
-<p>The <strong>License</strong> section displays the application’s license:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/sar_todo_license_1.png" /></p> 
-<p>To deploy <strong>todo</strong>, I name the application and click <strong>Deploy</strong>:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_deploy_deploy_1.png" /></p> 
-<p>Deployment starts immediately and is done within a minute (application deployment time will vary, depending on the number and type of resources to be created):</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_created_1.png" /></p> 
-<p>I can see all of my deployed applications in the Lambda Console:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_my_apps_2.png" /></p> 
-<p>There’s currently no way for a SAM template to indicate that an API Gateway function returns binary media types, so I set this up by hand and then re-deploy the API:</p> 
-<p><img class="aligncenter size-medium" src="https://media.amazonwebservices.com/blog/2018/sar_set_binary_1.png" /></p> 
-<p>Following the directions in the Readme, I open the API Gateway Console and find the URL for the app in the <strong>API Gateway Dashboard</strong>:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_dash_1.png" /></p> 
-<p>I visit the URL and enter some items into my list:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_todo_running_1.png" /></p> 
-<p><span style="text-decoration: underline"><strong>Publishing a Serverless Application</strong></span><br /> Publishing applications is a breeze! I visit the <a href="https://console.aws.amazon.com/serverlessrepo/home">Serverless App Repository</a> page and click on <strong>Publish application</strong> to get started:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_pub_main_1.png" /></p> 
-<p>Then I assign a name to my application, enter my own name, and so forth:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_pub_top_1.png" /></p> 
-<p>I can choose from a long list of open-source friendly SPDX licenses:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_pub_licenses_menu_1.png" /></p> 
-<p>I can create an initial version of my application at this point, or I can do it later. Either way, I simply provide a version number, a URL to a public repository containing my code, and a SAM template:</p> 
-<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/sar_pub_version_1.png" /></p> 
-<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> The <a href="https://aws.amazon.com/serverless/serverlessrepo/" title="">AWS Serverless Application Repository</a> is available now and you can start using it today, paying only for the AWS resources consumed by the serverless applications that you deploy.</p> 
-<p>You can deploy applications in the <span title="">US East (Ohio)</span>, <span title="">US East (N. Virginia)</span>, <span title="">US West (N. California)</span>, <span title="">US West (Oregon)</span>, <span title="">Asia Pacific (Tokyo)</span>, <span title="">Asia Pacific (Seoul)</span>, <span title="">Asia Pacific (Mumbai)</span>, <span title="">Asia Pacific (Singapore)</span>, <span title="">Asia Pacific (Sydney)</span>, <span title="">Canada (Central)</span>, <span title="">EU (Frankfurt)</span>, <span title="">EU (Ireland)</span>, <span title="">EU (London)</span>, and <span title="">South America (S&atilde;o Paulo)</span> Regions. You can publish from the <span title="">US East (N. Virginia)</span> or <span title="">US East (Ohio)</span> Regions for global availability.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23092');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/rds_splash_1.png" /> 
-<b class="lb-b blog-post-title" property="name headline">Amazon Relational Database Service – Looking Back at 2017</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
-<time property="datePublished" datetime="2018-02-12T14:46:14+00:00">12 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/database/amazon-aurora/" title="View all posts in Amazon Aurora*"><span property="articleSection">Amazon Aurora*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/database/amazon-rds/" title="View all posts in Amazon RDS*"><span property="articleSection">Amazon RDS*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/amazon-relational-database-service-looking-back-at-2017/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23063" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23063&amp;disqus_title=Amazon+Relational+Database+Service+%26%238211%3B+Looking+Back+at+2017&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-relational-database-service-looking-back-at-2017/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23063');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>The Amazon RDS team launched nearly 80 features in 2017. Some of them were covered in this blog, others on the <a href="https://aws.amazon.com/blogs/database/" title="">AWS Database Blog</a>, and the rest in What’s New or Forum posts. To wrap up my week, I thought it would be worthwhile to give you an organized recap. So here we go!</p> 
-<p><span style="text-decoration: underline"><strong>Certification &amp; Security</strong></span></p> 
-<li><strong>January</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/amazon-rds-receives-provisional-fedramp-high-authorization-to-host-sensitive-government-data/">FedRAMP Certification for Amazon RDS for MySQL, Oracle, and PostgreSQL</a>.</li> 
-<li><strong>February</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/02/amazon-rds-for-sql-server-supports-forced-ssl/">Forced SSL Support for SQL Server</a>.</li> 
-<li><strong>April</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/04/manage-access-to-your-rds-for-mysql-and-amazon-aurora-databases-using-aws-iam/">Access Management for MySQL and Aurora Using IAM</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-rds-supports-cross-region-copying-of-tde-snapshots/">TDE Encrypted Cross-Region Snapshots for RDS SQL Server and Oracle</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-rds-enables-encryption-at-rest-for-additional-t2-instance-types/">RDS Encryption at Rest for Additional T2 Instance Types</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-aurora-can-migrate-encrypted-databases-from-amazon-rds-for-mysql/">Migration of Encrypted RDS MySQL to Aurora</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-rds-for-sql-server-and-amazon-rds-for-mariadb-achieve-hipaa-eligibility/">HIPAA Eligibility for RDS for SQL Server and RDS for MariaDB</a>.</li> 
-<p><span style="text-decoration: underline"><strong>Features</strong></span></p> 
-<li><strong>January</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/amazon-aurora-now-offers-advanced-audit-capability/">Advanced Auditing for Amazon Aurora</a>.</li> 
-<li><strong>January</strong> – <a href="https://aws.amazon.com/blogs/aws/new-create-an-amazon-aurora-read-replica-from-a-mysql-db-instance/">RDS MySQL to Aurora Replication</a> in Same Region.</li> 
-<li><strong>January</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/amazon-rds-now-supports-read-replicas-of-encrypted-database-instances-across-regions/">Cross-Region Read Replicas of Encrypted Database Instances</a>.</li> 
-<li><strong>January</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/amazon-rds-for-oracle-now-supports-outbound-network-access-with-custom-dns/">Outbound Oracle Network Access Using Custom DNS Servers</a>.</li> 
-<li><strong>March</strong> – <a href="https://aws.amazon.com/blogs/aws/amazon-aurora-update-more-cross-region-cross-account-support-t2-small-db-instances-another-region/">Cross-Region Snapshot Copy, Cross-Region Replication, Cross-Account Snapshot Sharing for Aurora</a>.</li> 
-<li><strong>April</strong> – <a href="https://aws.amazon.com/blogs/database/amazon-aurora-under-the-hood-fast-ddl/">Fast, Online DDL Processing for Aurora</a>.</li> 
-<li><strong>May</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/amazon-rds-for-postgresql-supports-linux-huge-pages/">Linux Huge Page Support for Amazon RDS for PostgreSQL</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-aurora-can-export-data-into-amazon-s3/">Amazon Aurora Select Into Amazon S3</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-rds-supports-stopping-and-starting-of-database-instances/">Stopping and Starting of RDS Database Instances</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-aurora-introduces-database-cloning-capabilities/">Amazon Aurora Copy on Write Database Cloning</a>.</li> 
-<li><strong>August</strong> – <a href="https://aws.amazon.com/blogs/aws/amazon-aurora-fast-database-cloning/">Amazon Aurora Fast Database Cloning</a>.</li> 
-<li><strong>August</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/08/amazon-rds-for-sql-server-increases-maxiumum-database-storage-size-to-16-tb/">16 TB Maximum Database Storage Size for SQL Server</a>.</li> 
-<li><strong>September</strong> – <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PerfInsights.html">Open Preview of Performance Insights for Aurora PostgreSQL</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-aurora-enables-database-activity-monitoring-with-cloudwatch-logs/">Amazon Aurora Audit Log Upload to CloudWatch Logs</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-rds-reserved-instances-offer-instance-size-flexibility/">Size Flexibility for Amazon RDS Reserved Instances</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/blogs/aws/now-available-amazon-aurora-with-postgresql-compatibility/">General Availability of Amazon Aurora with PostgreSQL Compatibility</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-aurora-mysql-speeds-join-queries-by-more-than-10x-with-asynchronous-key-prefetch/">Amazon Aurora for MySQL Asynchronous Key Prefetch</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-rds-for-oracle-supports-oracle-sqlt-diagnostics-tool/">Amazon RDS For Oracle Support for Oracle SQLT Diagnostics Tool</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/easily-restore-an-amazon-rds-mysql-database-from-your-mysql-backup/">Restore MySQL Backup to Amazon RDS MySQL Database</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-aurora-now-supports-auto-scaling-for-aurora-replicas/">Auto Scaling for Aurora Replicas</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-sql-server-supports-scaling-storage-size/">Scaling of Storage Size for Amazon RDS for SQL Server</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-now-supports-database-storage-size-up-to-16tb-and-faster-scaling-for-mysql-mariadb-oracle-and-postgresql-engines/">Up to 16 TB of Storage &amp; Faster Scaling for Amazon RDS for MySQL, MariaDB, Oracle, and PostgreSQL</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-sql-server-can-reconfigure-storage-size-on-snapshot-restore/">Amazon RDS for SQL Server Storage Reconfiguration on Snapshot Restore</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-postgresql-supports-new-minor-versions-in-aws-commercial-regions-and-aws-govcloud-us/">Amazon RDS for PostgreSQL Support for the pgrouting and postrgresql-hll Extensions, HyperLogLog Data, and decoder_raw Module</a>.</li> 
-<li><strong>December</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-aurora-with-mysql-compatibility-speeds-query-processing-with-hash-join-and-batched-scans/">Batched Scans and Hashed Joins for Aurora with MySQL Compatibility</a>.</li> 
-<p><span style="text-decoration: underline"><strong>Engine Versions &amp; Features<br /> </strong></span></p> 
-<li><strong>January</strong> – <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MariaDB.html">MariaDB 10.0.28</a>.</li> 
-<li><strong>April</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/04/announcing-open-preview-of-amazon-aurora-with-postgresql-compatibility/">Open Preview of Aurora for PostgreSQL</a>.</li> 
-<li><strong>May</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/amazon-rds-postgresql-version-support/">Amazon RDS Support for Versions 9.6.2, 9.5.6, 9.4.11 and 9.3.16 of PostgreSQL</a>.</li> 
-<li><strong>May</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/05/april-2017-oracle-patch-set-updates-are-available-for-amazon-rds-for-oracle/">Oracle Patch Set Upgrades (PSU) for April 2017</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-rds-for-postgresql-supports-postgresql-minor-versions/">Amazon RDS Support for Versions 9.6.2, 9.5.6, 9.4.11, and 9.3.16 in the AWS GovCloud (US) Region</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/microsoft-sql-server-2016-service-pack-1-sp1-is-available-for-amazon-rds-for-sql-server/">SQL Server 2016 Service Pack 1 (SP1)</a>.</li> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-for-oracle-supports-hugepages/">Amazon RDS for Oracle Supports HugePages</a>.</li> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-for-sql-server-enterprise-edition-with-license-included-announces-expanded-availability/">Amazon RDS for SQL Server Enterprise Edition with License Included in More Regions</a>.</li> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-adds-oracle-se2-license-included-options-in-aws-govcloud/">Oracle SE2 License Included Available in AWS GovCloud (US)</a>.</li> 
-<li><strong>July</strong> – <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MariaDB.html">MariaDB 10.1.23 and 10.0.31</a>.</li> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-for-postgresql-supports-new-minor-versions-9-6-3-and-9-5-7-and-9-4-12-and-9-3-17/">PostgreSQL 9.6.3, 9.5.7, 9.4.12, and 9.3.17</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-rds-for-postgresql-supports-new-minor-versions-9-6-3_9-5-7_9-4-12_and-9-3-17_in-aws-govcloud-us/">PostgreSQL 9.6.3, 9.5.7, 9.4.12, and 9.3.17 in AWS GovCloud (US)</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-rds-for-oracle-supports-oracle-application-express-apex-versions-5-0-4-and-5-1-2/">Amazon RDS for Oracle Support for Oracle APEX</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-rds-for-oracle-supports-oracle-multimedia-spatial-and-locator-options/">Amazon RDS for Oracle Support for Oracle Multimedia, Spatial, and Locator Options</a>.</li> 
-<li><strong>September</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/09/amazon-rds-for-oracle-supports-customer-initiated-snapshot-upgrades-for-deprecated-oracle-database-versions/">Amazon RDS for Oracle Support for Customer-Initiated Snapshot Upgrades for Deprecated Database Versions</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-oracle-supports-oracle-enterprise-manager-oem-cloud-control-13c/">Amazon RDS for Oracle Support for Oracle Enterprise Manager Cloud Control 13c1 and 13c2</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-postgresql-supports-new-minor-versions-in-aws-commercial-regions-and-aws-govcloud-us/">PostgreSQL 9.6.5, 9.5.9, 9.4.14, and 9.3.19 in Commercial and AWS GovCloud (US)</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/july-2017-oracle-patch-set-update-psu-is-available-for-amazon-rds-for-oracle/">Oracle Patch Set Upgrades (PSU) for July 2017</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-sql-server-now-supports-sql-server-2017-and-sql-server-2016-sp1-cu5/">SQL Server 2016 SP1 CU5 and SQL Server 2017</a>.</li> 
-<li><strong>November</strong> – <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MariaDB.html">MariaDB 10.1.26 and 10.0.32</a>.</li> 
-<li><strong>December</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-rds-for-oracle-now-supports-october-2017-oracle-patch-set-update/">Oracle Patch Set Upgrades (PSU) for October 2017</a>.</li> 
-<p><span style="text-decoration: underline"><strong>Regional Support</strong></span></p> 
-<li><strong>March</strong> – Aurora in the <span title="">US West (N. California)</span> Region.</li> 
-<li><strong>June</strong> – Aurora in the <span title="">EU (Frankfurt)</span> Region.</li> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-for-sql-server-supports-windows-authentication-in-additional-regions/">Windows Authentication for RDS for SQL Server in More Regions</a>.</li> 
-<li><strong>August</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/08/amazon-rds-for-sql-server-adds-high-availability-support-to-the-frankfurt-region/">Multi-AZ for RDS SQL Server</a> in the <span title="">EU (Frankfurt)</span> Region.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-aurora-with-postgresql-compatibility-region-expansion/">Amazon Aurora for PostgreSQL</a> in the <span title="">Canada (Central)</span>, <span title="">EU (Frankfurt)</span>, <span title="">Asia Pacific (Sydney)</span>, and <span title="">Asia Pacific (Mumbai)</span> Regions.</li> 
-<li><strong>December</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-aurora-with-postgresql-compatibility-is-available-in-the-eu-paris-region/">Amazon Aurora for PostgreSQL</a> in the <span title="">EU (Paris)</span> Region.</li> 
-<p><span style="text-decoration: underline"><strong>Instance Support</strong></span></p> 
-<li><strong>March</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/03/amazon-aurora-cuts-entry-level-pricing-in-half-with-support-for-t2-small-instances/">Aurora on T2.Small Instances</a>.</li> 
-<li><strong>June</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/06/amazon-rds-is-available-on-m4-instances-in-the-sao-paulo-region/">RDS on M4 Instances in the S&atilde;o Paulo Region</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-rds-for-oracle-supports-new-r4-t2-and-m4-instance-types/">Amazon RDS for Oracle on New R4, T2, and M4 Instance Types</a>.</li> 
-<li><strong>October</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-aurora-mysql-doubles-maxiumum-write-throughput-with-support-for-r4-instances/">Amazon Aurora on R4 Instances</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-mysql-and-mariadb-supports-r4-t2-and-m4-instance-types/">Amazon RDS for MySQL and MariaDB on R4, T2, and M4 Instance Types</a>.</li> 
-<li><strong>November</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-rds-for-sql-server-supports-new-r4-and-m4-instance-types/">Amazon RDS for SQL Server on R4 and M4 Instance Types</a>.</li> 
-<li><strong>December</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/12/amazon-rds-for-postgresql-supports-r4-t2-and-m4-instance-types/">Amazon RDS for PostgreSQL on R4, T2, and M4 Instance Types</a>.</li> 
-<p><span style="text-decoration: underline"><strong>Price Reductions</strong></span></p> 
-<li><strong>July</strong> – <a href="https://aws.amazon.com/about-aws/whats-new/2017/07/amazon-rds-for-sql-server-enterprise-edition-with-license-included-announces-expanded-availability/">Price Reduction for R3 Instances running SQL Server Enterprise License Included</a>.</li> 
-<p><strong><span style="text-decoration: underline">And That’s a Wrap<br /> </span></strong>I’m pretty sure that’s everything. As you can see, 2017 was quite the year! I can’t wait to see what the team delivers in 2018.</p> 
-<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23063');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/feb-hot-startups.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">AWS Hot Startups for February 2018: Canva, Figma, InVision</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by Tina Barr | on 
-<time property="datePublished" datetime="2018-02-12T10:08:05+00:00">12 FEB 2018</time> | in 
+<time property="datePublished" datetime="2018-03-21T23:06:36+00:00">21 MAR 2018</time> | in 
 <span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/aws/aws-hot-startups-for-february-2018-canva-figma-invision/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-23074" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23074&amp;disqus_title=AWS+Hot+Startups+for+February+2018%3A+Canva%2C+Figma%2C+InVision&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-hot-startups-for-february-2018-canva-figma-invision/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<a href="https://aws.amazon.com/blogs/aws/aws-quest-a-puzzling-situation/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23365" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23365&amp;disqus_title=AWS+Quest-+a+puzzling+situation&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-quest-a-puzzling-situation/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
 <script>
 require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23074');
+AWS.Blog.commenting('#aws-comment-trigger-23365');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
 </footer> 
-<p><em>Note to readers! Starting next month, we will be publishing our monthly Hot Startups blog post on the </em><a href="https://aws.amazon.com/blogs/startups/"><em>AWS Startup Blog</em></a><em>. Please come check us out. </em></p> 
-<p>As visual communication—whether through social media channels like Instagram or white space-heavy product pages—becomes a central part of everyone’s life, accessible design platforms and tools become more and more important in the world of tech. This trend is why we have chosen to spotlight three design-related startups—namely <a href="https://www.canva.com/">Canva</a>, <a href="https://www.figma.com/">Figma</a>, and <a href="https://www.invisionapp.com/">InVision</a>—as our hot startups for the month of February. Please read on to learn more about these design-savvy companies and be sure to check out our full post <a href="https://aws.amazon.com/blogs/startups/hot-startups-for-february-2018-canva-figma-invision/">here</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Canva.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Canva-1024x640.png" /></a></p> 
-<p><strong><u>Canva (Sydney, Australia) </u></strong></p> 
-<p>For a long time, creating designs required expensive software, extensive studying, and time spent waiting for feedback from clients or colleagues. With Canva, a graphic design tool that makes creating designs much simpler and accessible, users have the opportunity to design anything and publish anywhere. The platform—which integrates professional design elements, including stock photography, graphic elements, and fonts for users to build designs either entirely from scratch or from thousands of free templates—is available on desktop, iOS, and Android, making it possible to spin up an invitation, poster, or graphic on a smartphone at any time.</p> 
-<p>To learn more about Canva, read our <a href="https://aws.amazon.com/blogs/startups/canva-ceo-melanie-perkins-on-the-future-of-design/">full interview with CEO Melanie Perkins here</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Figma-Product.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Figma-Product.jpg" /></a></p> 
-<p><strong><u>Figma (San Francisco, CA)</u></strong></p> 
-<p>Figma is a cloud-based design platform that empowers designers to communicate and collaborate more effectively. Using recent advancements in WebGL, Figma offers a design tool that doesn’t require users to install any software or special operating systems. It also allows multiple people to work in a file at the same time—a crucial feature.</p> 
-<p>As the need for new design talent increases, the industry will need plenty of junior designers to keep up with the demand. Figma is prepared to help students by offering their platform for free. Through this, they “hope to give young designers the resources necessary to kick-start their education and eventually, their careers.”</p> 
-<p>For more about Figma, check out our full <a href="https://aws.amazon.com/blogs/startups/figma-ceo-dylan-field-on-how-cloud-computing-is-affecting-the-future-of-design/">interview with CEO Dylan Field here</a>.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Invision-product.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/02/12/Invision-product.jpg" /></a></p> 
-<p><strong><u>InVision (New York, NY)</u></strong></p> 
-<p>Founded in 2011 with the goal of helping improve every digital experience in the world, digital product design platform InVision helps users create a streamlined and scalable product design process, build and iterate on prototypes, and collaborate across organizations. The company, which raised a $100 million series E last November, bringing the company’s total funding to $235 million, currently powers the digital product design process at more than 80 percent of the Fortune 100 and brands like Airbnb, HBO, Netflix, and Uber.</p> 
-<p>Learn more about InVision <a href="https://aws.amazon.com/blogs/startups/hot-startups-for-february-2018-canva-figma-invision/">here</a>.</p> 
-<p>—</p> 
-<p>Be sure to check out <a href="https://aws.amazon.com/blogs/startups/hot-startups-for-february-2018-canva-figma-invision/">our full post</a> on the AWS Startups blog!</p> 
-<p>-Tina</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/22/AWS-Quest-Logo_RGB_MAIN_REV@4x.jpg">curtain.</span></p> 
+<p>The whole idea started about a year <span style="color: #808080">ago</span> during an casual conversation with Jeff when I first joined AWS. While <span style="color: #808080">we’re <span style="color: #000000">usually pretty good at staying focused in our meetings, he brought up that he had just finished a book he really enjoyed and asked me if I had read it. (A book that has since been made into a movie.) I don’t think there was a way for him to even </span>imagine<span style="color: #000000"> that as a huge fan of games, both table top and video games, how stoked I would be about the idea of bringing a game to our readers.<br /> </span></span></p> 
+<p>We got to talking about how great it would be to <span style="color: #808080">attempt&nbsp;<span style="color: #000000">a game that would involve the <span style="color: #808080">entire</span>&nbsp;<span style="color: #000000">suite of AWS products and our various platforms. This idea might <span style="color: #808080">appear&nbsp;<span style="color: #000000">to be <span style="color: #808080">easy<span style="color: #000000">, but it has kept us <span style="color: #808080">busy&nbsp;<span style="color: #000000">with Lone Shark for about a year and we haven’t even scratched the surface of what we would like to do. Being able to <span style="color: #808080">finally</span> share this first game with our customers has been an absolute delight.<br /> </span></span></span></span></span></span></span></span></span></p> 
+<p>From March 8-27th, each day we have been and will be releasing a new puzzle. The clues for the puzzles are hidden <span style="color: #808080">somewhere</span> all over AWS, and once customers have found the clues they can figure out the puzzle which results in a word. That word is the name of a component to rebuild Ozz, Jeff’s robot buddy.</p> 
+<p><span style="color: #808080"><span style="color: #000000"><span style="color: #000000"><span style="color: #808080"><span style="color: #000000"><span style="color: #808080"><span style="color: #000000"><span style="color: #808080"><span style="color: #000000">We wanted to try make sure that <span style="color: #808080">anyone</span> could play and we tried to <span style="color: #808080">surround <span style="color: #000000">each puzzle with interesting Easter eggs. So far, it seems to be working and we are seeing some really cool collaborative effort between customers to solve the puzzles. From tech talks to <span style="color: #808080">women</span> who code, posts both recent and well in the past, and to Twitter and podcasts, we wanted to <span style="color: #808080">hide</span> the puzzles in places our customers might not have had a chance to really explore before. <span style="color: #808080">Given</span> how much Jeff enjoyed doing a live Twitch stream so much I won’t be surprised when he tells me he wants to do a <span style="color: #808080">TV</span> show next.</span></span></span></span></span></span></span></span></span></span></span></p> 
+<p><strong><a href="https://aws.amazon.com/awsquest/">So far players have solved 8 of 13 puzzles!</a><br /> </strong></p> 
+<table style="height: 28px;border-color: #000000" border="1" width="807"> 
+<tbody> 
+<tr> 
+<td><a href="https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/">09 Mar</a></td> 
+<td><a href="https://twitter.com/awscloud/status/972651827899633664">10 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/aws/aws-summit-season-is-almost-here-get-ready-to-register/">11 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/machine-learning/congratulations-to-the-winners-of-the-reinvent-robocar-rally-2017/">12 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/apn/new-aws-solution-space-launches-with-10-customer-ready-solutions/">13 Mar</a></td> 
+<td><a href="https://twitter.com/awscloud/status/973959445251284992">14 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/publicsector/empowering-women-in-tech-on-international-womens-day/">15 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/aws/our-newest-aws-community-heroes-spring-2018-edition/">16 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/machine-learning/build-a-social-media-dashboard-using-machine-learning-and-bi-services/">17 Mar</a></td> 
+<td><a href="https://aws.amazon.com/blogs/aws/getting-ready-for-the-aws-quest-finale-on-twitch/">18 Mar</a></td> 
+<td><a href="https://www.twitch.tv/videos/240694558##">19 Mar</a></td> 
+<td style="border-color: #000000"><a href="https://aws.amazon.com/blogs/aws/aws-online-tech-talks-march-2018/">20 Mar</a></td> 
+</tr> 
+</tbody> 
+</table> 
+<p>The <a href="https://aws.amazon.com/blogs/aws/new-route-53-traffic-flow/">learnings</a> we have already gathered as we are just a little past halfway in the quest are mind boggling. We have learned that there will be a <span style="color: #808080">guy</span> who figures out how to build a chicken coop in 3D to solve a puzzle, or build a script to crawl a site looking for any <span style="color: #808080">reply <span style="color: #000000">to a blog post</span></span> that might be a clue. There were puzzles we completely expected people to get <span style="color: #808080">stuck&nbsp;<span style="color: #000000">on that they have solved in a <span style="color: #808080">snap</span>. They have really </span>kept<span style="color: #000000"> us on our toes, which isn’t a <span style="color: #808080">bad</span> thing. It really doesn’t <span style="color: #808080">hurt</span> that the players are incredibly adept at thinking outside the box, and we can’t wait to tell you how the puzzles were solved at the <span style="color: #808080">end</span>.<br /> </span></span></p> 
+<p><span style="color: #808080"><span style="color: #000000"><span style="color: #808080"><span style="color: #000000">We <span style="color: #808080">still</span> have a little under a week of puzzles to go, before you can all join Jeff and special guests on a live Twitch stream to reassemble Ozz 2.0! And you don’t have to <span style="color: #808080">hold<span style="color: #000000"> off for the next time we play, as there are still many puzzles to be solved and every player matters! Just keep an eye out for new puzzles to appear everyday until March 27th, join the Reddit, come to the AMA, or take a peek into the chat and get solving!</span></span></span></span></span></span></p> 
+<p>Time to <span style="color: #808080">wipe</span> off your brow, and get back into solving the last of the puzzles! I am going to try to go explain to my mother and <span style="color: #808080">father&nbsp;<span style="color: #000000"><a href="https://www.youtube.com/watch?v=jW3PFC86UNI">what exactly I am doing</a> with those two masters degrees and how much fun it really is…</span></span></p> 
+<p>&nbsp;</p> 
 <script>
 require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-23074');
+AWS.Blog.commenting('#aws-comment-trigger-23365');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/kinesis_7-1-895x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Real-Time Hotspot Detection in Amazon Kinesis Analytics</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Randall Hunt | on 
+<time property="datePublished" datetime="2018-03-20T14:12:22+00:00">20 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/analytics/amazon-kinesis/" title="View all posts in Amazon Kinesis*"><span property="articleSection">Amazon Kinesis*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/analytics/" title="View all posts in Analytics*"><span property="articleSection">Analytics*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/artificial-intelligence/" title="View all posts in Artificial Intelligence*"><span property="articleSection">Artificial Intelligence*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/real-time-hotspot-detection-in-amazon-kinesis-analytics/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23317" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23317&amp;disqus_title=Real-Time+Hotspot+Detection+in+Amazon+Kinesis+Analytics&amp;disqus_url=https://aws.amazon.com/blogs/aws/real-time-hotspot-detection-in-amazon-kinesis-analytics/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23317');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Today we’re releasing a new machine learning feature in <a href="https://aws.amazon.com/kinesis/data-analytics/">Amazon Kinesis Data Analytics</a> for detecting “hotspots” in your streaming data. We launched <a href="https://aws.amazon.com/blogs/aws/amazon-kinesis-analytics-process-streaming-data-in-real-time-with-sql/">Kinesis Data Analytics</a> in August of 2016 and we’ve continued to add features since. As you may already know, Kinesis Data Analytics is a fully managed real-time processing engine for streaming data that lets you write SQL queries to derive meaning from your data and output the results to <a href="https://aws.amazon.com/kinesis/data-firehose/">Kinesis Data Firehose</a>, <a href="https://aws.amazon.com/kinesis/data-streams/">Kinesis Data Streams</a>, or even an <a href="https://aws.amazon.com/lambda/" title="">AWS Lambda</a> function. The new <code>HOTSPOTS</code> function adds to the <a href="https://aws.amazon.com/blogs/big-data/real-time-clickstream-anomaly-detection-with-amazon-kinesis-analytics/">existing machine learning capabilities</a> in Kinesis that allow customers to leverage unsupervised streaming based machine learning algorithms. Customers don’t need to be experts in data science or machine learning to take advantage of these capabilities.</p> 
+<p><img width="100%" src="https://d1.awsstatic.com/diagrams/product-page-diagrams/diagram-how-it-works-kinesis-data-analytics.6298bab19eaf33227cce667729cbba2a6ac8af18.png" /></p> 
+<h3>Hotspots</h3> 
+<p>The <code><a href="https://docs.aws.amazon.com/kinesisanalytics/latest/sqlref/sqlrf-hotspots.html">HOTSPOTS</a></code> function is a new Kinesis Data Analytics SQL function you can use to idenitfy relatively dense regions in your data without having to explicity build and train complicated machine learning models. You can identify subsections of your data that need immediate attention and take action programatically by streaming the hotspots out to a Kinesis Data stream, to a Firehose delivery stream, or by invoking a <a href="https://aws.amazon.com/lambda/" title="">AWS Lambda</a> function.</p> 
+<p>There are a ton of really cool scenarios where this could make your operations easier. Imagine a ride-share program or autonomous vehicle fleet communicating spatiotemporal data about traffic jams and congestion, or a datacenter where a number of servers start to overheat indicating an HVAC issue. <code>HOTSPOTS</code> is not limited to spatiotemporal data and you could apply it across many problem domains.</p> 
+<p>The function follows some simple syntax and accepts the <code>DOUBLE</code>, <code>INTEGER</code>, <code>FLOAT</code>, <code>TINYINT</code>, <code>SMALLINT</code>, <code>REAL</code>, and <code>BIGINT</code> data types.</p> 
+<p>The <code>HOTSPOTS</code> function takes a cursor as input and returns a JSON string describing the hotspot. This will be easier to understand with an example.</p> 
+<h3>Using Kinesis Data Analytics to Detect Hotspots</h3> 
+<p>Let’s take a simple data set from <a href="http://www.nyc.gov/html/tlc/html/about/trip_record_data.shtml">NY Taxi and&nbsp;Limousine&nbsp;Commission</a> that tracks yellow cab pickup and dropoff locations.&nbsp;Most of this data is already on S3 and publicly accessible at s3://nyc-tlc/. We will create a small python script to load our Kinesis Data Stream with Taxi records which will feed our Kinesis Data Analytics. Finally we’ll output all of this to a Kinesis Data Firehose connected to an <a href="https://aws.amazon.com/elasticsearch-service/" title="">Amazon Elasticsearch Service</a> cluster for visualization with Kibana. I know from living in New York for 5 years that we’ll probably find a hotspot or two in this data.</p> 
+<p>First, we’ll create an input&nbsp;Kinesis stream and start sending our NYC Taxi Ride data into it. I just&nbsp;wrote a quick python script to read from one of the CSV files and used boto3 to push the records into Kinesis. You can put the record in whatever way works for you.</p> 
+<p>&nbsp;</p> 
+<code class="lang-python">import csv
+import json
+import boto3
+def chunkit(l, n):
+&quot;&quot;&quot;Yield successive n-sized chunks from l.&quot;&quot;&quot;
+for i in range(0, len(l), n):
+yield l[i:i + n]
+kinesis = boto3.client(&quot;kinesis&quot;)
+with open(&quot;taxidata2.csv&quot;) as f:
+reader = csv.DictReader(f)
+records = chunkit([{&quot;PartitionKey&quot;: &quot;taxis&quot;, &quot;Data&quot;: json.dumps(row)} for row in reader], 500)
+for chunk in records:
+kinesis.put_records(StreamName=&quot;TaxiData&quot;, Records=chunk)</code> 
+<p>Next, we’ll create the Kinesis&nbsp;Data&nbsp;Analytics application and add our input stream with our taxi data as the source.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/19/kinesis_5-1024x420.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/19/kinesis_4-1024x370.png" /></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/kinesis_1.png" /></p> 
+<p>Next we’ll automatically detect the schema.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/kinesis_2-1-1024x736.png" /></p> 
+<p>Now we’ll create a quick SQL Script to detect our hotspots and add that to the Real Time Analytics section of our application.</p> 
+<code class="lang-sql">CREATE OR REPLACE STREAM &quot;DESTINATION_SQL_STREAM&quot; (
+&quot;pickup_longitude&quot; DOUBLE,
+&quot;pickup_latitude&quot; DOUBLE,
+HOTSPOTS_RESULT VARCHAR(10000)
+); 
+CREATE OR REPLACE PUMP &quot;STREAM_PUMP&quot; AS INSERT INTO &quot;DESTINATION_SQL_STREAM&quot; 
+SELECT &quot;pickup_longitude&quot;, &quot;pickup_latitude&quot;, &quot;HOTSPOTS_RESULT&quot; FROM
+TABLE(HOTSPOTS(
+CURSOR(SELECT STREAM * FROM &quot;SOURCE_SQL_STREAM_001&quot;),
+1000,
+0.013,
+20
+)
+);
+</code> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/kinesis_7-1-1024x721.png">documentation</a>. The <code>HOTSPOTS_RESULT</code> returns some useful JSON that would let us plot bounding boxes around our hotspots:<br /> <code></code></p> 
+{
+&quot;hotspots&quot;: [
+{
+&quot;density&quot;: &quot;elided&quot;,
+&quot;minValues&quot;: [40.7915039, -74.0077401],
+&quot;maxValues&quot;: [40.7915041, -74.0078001]
+}
+]
+} 
+<p>&nbsp;</p> 
+<p>When we have our desired results we can save the script and connect our application to our Amazon Elastic Search Service Firehose Delivery Stream. We can run an intermediate lambda function in the firehose to transform our record into a format more suitable for geographic work. Then we can update our mapping in Elasticsearch to index the hotspot objects as Geo-Shapes.</p> 
+<p>Finally, we can connect to Kibana and visualize the results.<br /> <img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/20/Screen-Shot-2018-03-20-at-10.48.12-AM.png" /></p> 
+<p>Looks like Manhattan is pretty busy!</p> 
+<p><span style="text-decoration: underline"><strong>Available Now</strong></span><br /> This feature is available now in all existing regions with Kinesis Data Analytics. I think this is a really interesting new feature of Kinesis Data Analytics that can bring immediate value to many applications. Let us know what you build with it on Twitter or in the comments!</p> 
+<p>– <a href="https://twitter.com/jrhunt/" title="Randall's Twitter">Randall</a></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23317');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/15/ec2_longer_id_setup_opt_in_1-782x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Amazon EC2 Resource ID Update – More Resource Types to Migrate</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
+<time property="datePublished" datetime="2018-03-19T10:16:39+00:00">19 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2/" title="View all posts in Amazon EC2*"><span property="articleSection">Amazon EC2*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/amazon-ec2-resource-id-update-more-resource-types-to-migrate/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23282" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23282&amp;disqus_title=Amazon+EC2+Resource+ID+Update+%26%238211%3B+More+Resource+Types+to+Migrate&amp;disqus_url=https://aws.amazon.com/blogs/aws/amazon-ec2-resource-id-update-more-resource-types-to-migrate/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23282');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>As a follow-up to our earlier work to provide <a href="https://aws.amazon.com/blogs/aws/heads-up-longer-ec2-ebs-resource-ids-coming-in-2016/">longer IDs</a> for a small set of essential EC2 resources, we are now doing the same for the remaining EC2 resources, with a migration deadline of July 2018. You can opt-in on a per-user, per-region, per-type basis and verify that your code, regular expressions, database schemas, and database queries work as expected</p> 
+<p>If you have code that recognizes, processes, or stores IDs for any type of EC2 resources, please read this post with care! Here’s what you need to know:</p> 
+<p><strong>Migration Deadline</strong> – You have until July 2018 to make sure that your code and your schemas can process and store the new, longer IDs. After that, longer IDs will be assigned by default for all newly created resources. IDs for existing resources will remain as-is and will continue to work.</p> 
+<p><strong>More Resource Types</strong> – Longer IDs are now supported for all types of EC2 resources, and you can opt-in as desired:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/ec2_longer_id_setup_opt_in_1.png" /></p> 
+<p>I would like to encourage you to opt-in, starting with your test accounts, as soon as possible. This will give you time to thoroughly test your code and to make any necessary changes before promoting the code to production.</p> 
+<p><strong>More Regions</strong> – The longer IDs are now available in the AWS <span title="">China (Beijing)</span> and AWS <span title="">China (Ningxia)</span> Regions.</p> 
+<p><strong>Test AMIs</strong> – We have published AMIs with longer IDs that you can use for testing (search for <strong>testlongids</strong> to find them in the <strong>Public images</strong>):</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/ec2_long_id_test_amis_1.png" /></p> 
+<p><span style="text-decoration: underline"><strong>For More Information</strong></span><br /> To learn more, read the <a href="https://www.amazonaws.cn/en/ec2/faqs/">EC2 FAQ</a> and the <a href="https://docs.amazonaws.cn/en_us/AWSEC2/latest/UserGuide/resource-ids.html">EC2 documentation</a>.</p> 
+<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23282');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/18/puzzle_11.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Getting Ready for the AWS Quest Finale on Twitch</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
+<time property="datePublished" datetime="2018-03-18T09:54:00+00:00">18 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/getting-ready-for-the-aws-quest-finale-on-twitch/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23312" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23312&amp;disqus_title=Getting+Ready+for+the+AWS+Quest+Finale+on+Twitch&amp;disqus_url=https://aws.amazon.com/blogs/aws/getting-ready-for-the-aws-quest-finale-on-twitch/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23312');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/ozz_2_0_4.jpg">AWS Quest</a> for quite some time and it has been great to see all of the progress made toward solving the puzzles in order to find the orangeprints that I will use to rebuild Ozz.</p> 
+<p>The community effort has been impressive! There’s a <a href="https://docs.google.com/spreadsheets/d/1OFvY0kqA1Qkz8kQpcyoDlr_7jwyJGmGiTfGm7TOLUls/edit#gid=948135787">shared spreadsheet</a> with tabs for puzzles and clues, a busy Slack channel, and a <a href="http://awsquest-leaderboard.s3-website-us-east-1.amazonaws.com/">leaderboard</a>, all organized and built by a team that spans the globe.</p> 
+<p style="clear: both">I’ve been checking out the orangeprints as they are uncovered and have been doing a bit of planning and preparation to make sure that I am ready for the live-streamed rebuild on <a href="https://www.twitch.tv/aws">Twitch</a> later this month. Yesterday I labeled a bunch of containers, one per puzzle, and stocked each one with the parts that I will use to rebuild the corresponding component of Ozz. Fortunately, I have at least (my last count may have skipped a few) 119,807 bricks and other parts at hand so this was easy. Here’s what I have set up so far:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/puzzle_11.jpg" /></p> 
+<p>The Twitch session will take place on Tuesday, March 27 at Noon PT. In the meantime, you should check out the <a href="https://twitter.com/hashtag/awsquest?f=tweets&amp;vertical=default&amp;src=refgoogle">#awsquest</a> tweets and see what you can do to help me to <a href="https://aws.amazon.com/blogs/aws/join-the-aws-quest-help-me-to-rebuild-ozz/">rebuild Ozz</a>.</p> 
+<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23312');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/16/AWSCommunityHeroes-Spring2018.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Our Newest AWS Community Heroes (Spring 2018 Edition)</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by Betsy Chernoff | on 
+<time property="datePublished" datetime="2018-03-16T10:46:43+00:00">16 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/aws-community-heroes/" title="View all posts in AWS Community Heroes*"><span property="articleSection">AWS Community Heroes*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/awsquest/" title="View all posts in AWS Quest*"><span property="articleSection">AWS Quest*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/our-newest-aws-community-heroes-spring-2018-edition/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23258" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23258&amp;disqus_title=Our+Newest+AWS+Community+Heroes+%28Spring+2018+Edition%29&amp;disqus_url=https://aws.amazon.com/blogs/aws/our-newest-aws-community-heroes-spring-2018-edition/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23258');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>The&nbsp;<a href="https://aws.amazon.com/heroes/">AWS Community Heroes</a>&nbsp;program helps shine a spotlight on some of the innovative work being done by rockstar AWS developers around the globe.&nbsp;Marrying cloud expertise&nbsp;with a passion for community building and education, these Heroes share their time and knowledge across social media and in-person events. Heroes also actively help drive content at Meetups, workshops, and conferences.</p> 
+<p>This March, we have five Heroes that we’re&nbsp;happy&nbsp;to welcome to our network of cloud innovators:</p> 
+<li><a href="https://aws.amazon.com/heroes/asia-pacific/peter-sbarski/">Peter Sbarski</a></li> 
+<li><a href="https://aws.amazon.com/heroes/europe/michael-wittig/">Michael Wittig</a></li> 
+<li><a href="https://aws.amazon.com/heroes/SouthAmerica/fernando-honig/">Fernando H&ouml;nig</a></li> 
+<li><a href="https://aws.amazon.com/heroes/europe/anders-bjornestad/">Anders Bj&oslash;rnestad </a></li> 
+<p><a href="https://aws.amazon.com/heroes/asia-pacific/peter-sbarski/"><span style="text-decoration: underline"><strong>Peter Sbarski</strong></span></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/peter-sbarski.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/peter-sbarski-242x300.jpg">Serverless Architectures on AWS</a> and is currently collaborating on another book called Serverless Design Patterns with Tim Wagner and Yochay Kiriaty.</p> 
+<p>Peter is always happy to talk about cloud computing and AWS, and can be found at conferences and meetups throughout the year. He helps to organize Serverless Meetups in Melbourne and Sydney in Australia, and is always keen to share his experience working on interesting and innovative cloud projects.</p> 
+<p>Peter’s passions include serverless technologies, event-driven programming, back end architecture, microservices, and orchestration of systems. Peter holds a PhD in Computer Science from Monash University, Australia and can be followed on <a href="http://twitter.com/sbarski">Twitter</a>, <a href="https://www.linkedin.com/in/petersbarski/">LinkedIn</a>, <a href="https://medium.com/@sbarski">Medium</a>, and <a href="https://github.com/sbarski">GitHub</a>.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p><a href="https://aws.amazon.com/heroes/europe/michael-wittig/"><span style="text-decoration: underline"><strong>Michael Wittig</strong></span></a></p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/Michael-Wittig-1.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/Michael-Wittig-1-236x300.jpg">marbot</a>: a Slack bot supporting your DevOps team to detect and solve incidents on AWS.</p> 
+<p>In close collaboration with his brother Andreas Wittig, the Wittig brothers are actively creating AWS related content. Their book <a href="http://bit.ly/amazon-web-services-in-action-2nd-edition">Amazon Web Services in Action (Manning)</a> introduces AWS with a strong focus on automation. Andreas and Michael run the blog <a href="https://cloudonaut.io/">cloudonaut.io</a> where they share their knowledge about AWS with the community. The Wittig brothers also published a bunch of video courses with O’Reilly, Manning, Pluralsight, and A Cloud Guru. You can also find them speaking at conferences and user groups in Europe. Both brothers are co-organizing the AWS user group in Stuttgart.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p><a href="https://aws.amazon.com/heroes/SouthAmerica/fernando-honig/"><span style="text-decoration: underline"><strong>Fernando H&ouml;nig</strong></span></a></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/FernandoHonig-236x300.jpg" /></p> 
+<p>Fernando is an experienced Infrastructure Solutions Leader, holding 5 AWS Certifications, with extensive IT Architecture and Management experience in a variety of market sectors. Working as a Cloud Architect Consultant in United Kingdom since 2014, Fernando built an online community for Hispanic speakers worldwide.</p> 
+<p>Fernando founded a L<a href="https://www.linkedin.com/groups/7403992/">inkedIn Group</a>, a <a href="https://launchpass.com/aws-spanish">Slack Community</a> and a <a href="https://www.youtube.com/c/AWSenEspa&ntilde;ol">YouTube channel</a> all of them named “AWS en Espa&ntilde;ol”, and started to run a monthly webinar via YouTube streaming where different leaders discuss aspects and challenges around AWS Cloud.</p> 
+<p>During the last 18 months he’s been helping to run and coach AWS User Group leaders across LATAM and Spain, and 10 new User Groups were founded during this time.</p> 
+<p>Feel free to follow Fernando on <a href="https://twitter.com/fernandohonig">Twitter</a>, connect with him on <a href="https://www.linkedin.com/in/fernandohonig">LinkedIn</a>, or join the ever-growing Hispanic Community via <a href="https://launchpass.com/aws-spanish">Slack</a>, <a href="https://www.linkedin.com/groups/7403992/">LinkedIn</a> or <a href="https://www.youtube.com/c/AWSenEspa&ntilde;ol">YouTube</a>.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p><a href="https://aws.amazon.com/heroes/europe/anders-bjornestad/"><span style="text-decoration: underline"><strong>Anders Bj&oslash;rnestad</strong></span></a></p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/da4b9237bacccdf19c0760cab7aec4a8359010b0/2018/03/14/anders-bjornestad-251x300.jpg" /></p> 
+<p>Anders is a consultant and cloud evangelist at <a href="https://www.webstep.com/">Webstep AS</a> in Norway. He finished his degree in Computer Science at the Norwegian Institute of Technology at about the same time the Internet emerged as a public service. Since then he has been an IT consultant and a passionate advocate of knowledge-sharing.</p> 
+<p>He architected and implemented his first customer solution on AWS back in 2010, and is essential in building Webstep’s core cloud team. Anders applies his broad expert knowledge across all layers of the organizational stack. He engages with developers on technology and architectures and with top management where he advises about cloud strategies and new business models.</p> 
+<p>Anders enjoys helping people increase their understanding of AWS and cloud in general, and holds several AWS certifications. He co-founded and co-organizes the <a href="https://s3-eu-west-1.amazonaws.com/anders-aws-website/usergroups/AWSNorway.html">AWS User Groups in the largest cities in Norway</a> (Oslo, Bergen, Trondheim and Stavanger), and also uses any opportunity to engage in events related to AWS and cloud wherever he is.</p> 
+<p>You can follow him on <a href="https://twitter.com/abjoerne">Twitter</a> or connect with him on <a href="https://www.linkedin.com/in/abjoerne/">LinkedIn</a>.</p> 
+<p>To learn more about the AWS Community Heroes Program and how to get involved with your local AWS community, click&nbsp;<a href="https://www.youtube.com/watch?v=hVD25-lBL-E">here</a>.</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<p>&nbsp;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23258');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">AWS Documentation is Now Open Source and on GitHub</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<a href="https://aws.amazon.com/blogs/aws/author/jbarr/" title="Posts by Jeff Barr">Jeff Barr</a> | on 
+<time property="datePublished" datetime="2018-03-13T13:43:15+00:00">13 MAR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/aws/category/news/launch/" title="View all posts in Launch*"><span property="articleSection">Launch*</span></a>, <a href="https://aws.amazon.com/blogs/aws/category/news/" title="View all posts in News*"><span property="articleSection">News*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/aws/aws-documentation-is-now-open-source-and-on-github/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-23146" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-official-blog&amp;disqus_identifier=23146&amp;disqus_title=AWS+Documentation+is+Now+Open+Source+and+on+GitHub&amp;disqus_url=https://aws.amazon.com/blogs/aws/aws-documentation-is-now-open-source-and-on-github/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23146');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Earlier this year we made the <a href="https://aws.amazon.com/tools/">AWS SDK</a> developer guides available as GitHub repos (all found within the <a href="https://github.com/awsdocs">awsdocs</a> organization) and invited interested parties to contribute changes and improvements in the form of pull requests.</p> 
+<p>Today we are adding over 138 additional developer and user guides to the organization, and we are looking forward to receiving your requests. You can fix bugs, improve code samples (or submit new ones), add detail, and rewrite sentences and paragraphs in the interest of accuracy or clarity. You can also look at the commit history in order to learn more about new feature and service launches and to track improvements to the documents.</p> 
+<p><span style="text-decoration: underline"><strong>Making a Contribution</strong></span><br /> Before you get started, read the <a href="https://aws.github.io/code-of-conduct">Amazon Open Source Code of Conduct</a> and take a look at the <a href="https://github.com/awsdocs/aws-step-functions-developer-guide/blob/master/CONTRIBUTING.md">Contributing Guidelines</a> document (generally named <code>CONTRIBUTING.md</code>) for the AWS service of interest. Then create a GitHub account if you don’t already have one.</p> 
+<p>Once you find something to change or improve, visit the HTML version of the document and click on <strong>Edit on GitHub</strong> button at the top of the page:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_doc_edit_1.png" /></p> 
+<p>This will allow you to edit the document in source form (typically <a href="https://en.wikipedia.org/wiki/Markdown">Markdown</a> or <a href="https://en.wikipedia.org/wiki/ReStructuredText">reStructuredText</a>). The source code is used to produce the HTML, PDF, and Kindle versions of the documentation.</p> 
+<p>Once you are in GitHub, click on the pencil icon:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_forkandedit_1.png" /></p> 
+<p>This creates a “fork” — a separate copy of the file that you can edit in isolation.</p> 
+<p>Next, make an edit. In general, as a new contributor to an open source project, you should gain experience and build your reputation by making small, high-quality edits. I’ll change “dozens of services” to “over one hundred services” in this document:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_edit_1.png" /></p> 
+<p>Then I summarize my change and click <strong>Propose file change</strong>:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_propose_edit_1.png" /></p> 
+<p>I examine the differences to verify my changes and then click <strong>Create pull request</strong>:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_diff_1.png" /></p> 
+<p>Then I review the details and click <strong>Create pull request</strong> again:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_create_pr_1.png" /></p> 
+<p>The pull request (also known as a PR) makes its way to the Elastic Beanstalk documentation team and they get to decide if they want to accept it, reject it, or to engage in a conversation with me to learn more. The teams endeavor to respond to PRs within 48 hours, and I’ll be notified via GitHub whenever the status of the PR changes.</p> 
+<p>As is the case with most open source projects, a steady stream of focused, modest-sized pull requests is preferable to the occasional king-sized request with dozens of edits inside.</p> 
+<p>If I am interested in tracking changes to a repo over time, I can Watch and/or Star it:</p> 
+<p><img width="100%" src="https://media.amazonwebservices.com/blog/2018/beanstalk_star_2.png" /></p> 
+<p>If I Watch a repo, I’ll receive an email whenever there’s a new release, issue, or pull request for that service guide.</p> 
+<p><span style="text-decoration: underline"><strong>Go Fork It</strong></span><br /> This launch gives you another way to help us to improve AWS. Let me know what you think!</p> 
+<p>— <a href="https://twitter.com/jeffbarr">Jeff</a>;</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-23146');
 });
 </script> 
 </article> 
