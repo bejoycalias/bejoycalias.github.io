@@ -190,6 +190,240 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/KVB_0118-767x630.png" /> 
+<b class="lb-b blog-post-title" property="name headline">How to Patch Linux Workloads on AWS</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Koen van Blijderveen</span></span> | on 
+<time property="datePublished" datetime="2018-02-15T08:04:20+00:00">15 FEB 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/how-to-patch-linux-workloads-on-aws/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7266" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7266&amp;disqus_title=How+to+Patch+Linux+Workloads+on+AWS&amp;disqus_url=https://aws.amazon.com/blogs/security/how-to-patch-linux-workloads-on-aws/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7266');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p>Most malware tries to compromise your systems by using a known vulnerability that the operating system maker has already patched. As best practices to help prevent malware from affecting your systems, you should apply all operating system patches and actively monitor your systems for missing patches.</p> 
+<p>In this blog post, I show you how to patch Linux workloads using <a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a>. To accomplish this, I will show you how to use the <a href="https://aws.amazon.com/cli/" target="_blank" rel="noopener noreferrer">AWS Command Line Interface</a> (AWS CLI) to:</p> 
+<ol> 
+<li><strong>Launch an </strong><a href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer"><strong>Amazon EC2</strong></a><strong> instance</strong> for use with Systems Manager.</li> 
+<li><strong>Configure Systems Manager</strong> to patch your Amazon EC2 Linux instances.</li> 
+</ol> 
+<p>In two previous blog posts (<a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-1/" target="_blank" rel="noopener noreferrer">Part 1</a> and <a href="https://aws.amazon.com/blogs/security/how-to-patch-inspect-and-protect-microsoft-windows-workloads-on-aws-part-2/" target="_blank" rel="noopener noreferrer">Part 2</a>), I showed how to use the AWS Management Console to perform the necessary steps to patch, inspect, and protect Microsoft Windows workloads. You can implement those same processes for your Linux instances running in AWS by changing the instance tags and types shown in the previous blog posts.</p> 
+<p>Because most Linux system administrators are more familiar with using a command line, I show how to patch Linux workloads by using the AWS CLI in this blog post. The steps to use the <a href="https://docs.aws.amazon.com/solutions/latest/ebs-snapshot-scheduler/overview.html" target="_blank" rel="noopener noreferrer">Amazon EBS Snapshot Scheduler</a> and <a href="https://aws.amazon.com/inspector/" target="_blank" rel="noopener noreferrer">Amazon Inspector</a> are identical for both Microsoft Windows and Linux.</p> 
+<h3>What you should know first</h3> 
+<p>To follow along with the solution in this post, you need one or more Amazon EC2 instances. You may use existing instances or create new instances. For this post, I assume this is an <a href="https://aws.amazon.com/amazon-linux-ami/" target="_blank" rel="noopener noreferrer">Amazon EC2 for Amazon Linux</a> instance installed from <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html" target="_blank" rel="noopener noreferrer">Amazon Machine Images</a> (AMIs).</p> 
+<p>Systems Manager is a collection of capabilities that helps you automate management tasks for AWS-hosted instances on Amazon EC2 and your on-premises servers. In this post, I use Systems Manager for two purposes: to run remote commands and apply operating system patches. To learn about the full capabilities of Systems Manager, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/what-is-systems-manager.html" target="_blank" rel="noopener noreferrer">What Is AWS Systems Manager?</a></p> 
+<p>As of Amazon Linux 2017.09, the AMI comes preinstalled with the Systems Manager agent. <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-patch.html" target="_blank" rel="noopener noreferrer">Systems Manager Patch Manager</a> also supports Red Hat and Ubuntu. To install the agent on these Linux distributions or an older version of Amazon Linux, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-ssm-agent.html" target="_blank" rel="noopener noreferrer">Installing and Configuring SSM Agent on Linux Instances</a>.</p> 
+<p>If you are not familiar with how to launch an Amazon EC2 instance, see <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html" target="_blank" rel="noopener noreferrer">Launching an Instance</a>. I also assume you launched or will launch your instance in a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Subnets.html" target="_blank" rel="noopener noreferrer">private subnet</a>. You must make sure that the Amazon EC2 instance can connect to the internet using a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) instance</a> or <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> to communicate with Systems Manager. The following diagram shows how you should structure your VPC.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/13/KVB_0118_a.png" /></p> 
+<p>Later in this post, you will assign tasks to a maintenance window to patch your instances with Systems Manager. To do this, the <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html" target="_blank" rel="noopener noreferrer">IAM user</a> you are using for this post must have the <code><a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html" target="_blank" rel="noopener noreferrer">iam:PassRole</a></code> permission. This permission allows the IAM user assigning tasks to pass his own IAM permissions to the AWS service. In this example, when you assign a task to a maintenance window, IAM passes your credentials to Systems Manager. You also should authorize your IAM user to use Amazon EC2 and Systems Manager. As mentioned before, you will be using the AWS CLI for most of the steps in this blog post. Our documentation shows you <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-welcome.html" target="_blank" rel="noopener noreferrer">how to get started with the AWS CLI</a>. Make sure you have the AWS CLI installed and configured with an AWS access key and secret access key that belong to an IAM user that have the following AWS managed policies attached to the IAM user you are using for this example: <code>AmazonEC2FullAccess</code> and <code>AmazonSSMFullAccess</code>.</p> 
+<b>Step 1: Launch an Amazon EC2 Linux instance</b> 
+<p>In this section, I show you how to launch an Amazon EC2 instance so that you can use Systems Manager with the instance. This step requires you to do three things:</p> 
+<ol type="A"> 
+<li><strong>Create an IAM role for Systems Manager</strong> before launching your Amazon EC2 instance.</li> 
+<li><strong>Launch your Amazon EC2 instance </strong>with Amazon EBS and the IAM role for Systems Manager.</li> 
+<li><strong>Add tags</strong> to the instances so that you can add your instances to a Systems Manager maintenance window based on tags.</li> 
+</ol> 
+<h3>A. Create an IAM role for Systems Manager</h3> 
+<p>Before launching an Amazon EC2 instance, I recommend that you first create an <a href="https://aws.amazon.com/iam/details/manage-roles/" target="_blank" rel="noopener noreferrer">IAM role</a> for Systems Manager, which you will use to update the Amazon EC2 instance. AWS already provides a preconfigured policy that you can use for the new role and it is called <code>AmazonEC2RoleforSSM</code>.</p> 
+<ol> 
+<li>Create a JSON file named <code>trustpolicy-ec2ssm.json</code> that contains the following trust policy. This policy describes which principal (an entity that can take action on an AWS resource) is allowed to assume the role we are going to create. In this example, the principal is the Amazon EC2 service. 
+<code class="lang-text">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: {
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to create a role named <code>EC2SSM</code> that has the AWS managed policy <code>AmazonEC2RoleforSSM</code> attached to it. This generates JSON-based output that describes the role and its parameters, if the command is successful. 
+<code class="lang-text">$ aws iam create-role --role-name EC2SSM --assume-role-policy-document file://trustpolicy-ec2ssm.json</code> 
+</ol> 
+<ol start="3"> 
+<li>Use the following command to attach the AWS managed IAM policy (<code>AmazonEC2RoleforSSM</code>) to your newly created role. 
+<code class="lang-text">$ aws iam attach-role-policy --role-name EC2SSM --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM</code> 
+</ol> 
+<ol start="4"> 
+<li>Use the following commands to create the IAM <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html" target="_blank" rel="noopener noreferrer">instance profile</a> and add the role to the instance profile. The instance profile is needed to attach the role we created earlier to your Amazon EC2 instance. 
+<code class="lang-text">$ aws iam create-instance-profile --instance-profile-name EC2SSM-IP
+$ aws iam add-role-to-instance-profile --instance-profile-name EC2SSM-IP --role-name EC2SSM</code> 
+</ol> 
+<h3>B. Launch your Amazon EC2 instance</h3> 
+<p>To follow along, you need an Amazon EC2 instance that is running Amazon Linux. You can use any existing instance you may have or create a new instance.</p> 
+<p>When launching a new Amazon EC2 instance, be sure that:</p> 
+<li>The operating system is Amazon Linux.</li> 
+<li>You attach the newly created IAM role (<code>EC2SSM</code>).</li> 
+<li>The Amazon EC2 instance can connect to Systems Manager through a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">network address translation (NAT) gateway</a> or a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_NAT_Instance.html" target="_blank" rel="noopener noreferrer">NAT instance</a>.</li> 
+<ol> 
+<li>Use the following command to launch a new Amazon EC2 instance using an Amazon Linux AMI available in the US East (N. Virginia) Region (also known as us-east-1). Replace <code>YourKeyPair</code> and <code>YourSubnetId</code> with your information. For more information about creating a key pair, see the <a href="https://docs.aws.amazon.com/cli/latest/reference/ec2/create-key-pair.html" target="_blank" rel="noopener noreferrer">create-key-pair documentation</a>. Write down the <code>InstanceId</code> that is in the output because you will need it later in this post. 
+<code class="lang-text">$ aws ec2 run-instances --image-id ami-cb9ec1b1 --instance-type t2.micro --key-name <span style="color: #ff0000">YourKeyPair</span> --subnet-id <span style="color: #ff0000">YourSubnetId</span> --iam-instance-profile Name=EC2SSM-IP</code> 
+</ol> 
+<ol start="2"> 
+<li>If you are using an existing Amazon EC2 instance, you can use the following command to attach the instance profile you created earlier to your instance. 
+<code class="lang-text">$ aws ec2 associate-iam-instance-profile --instance-id <span style="color: #ff0000">YourInstanceId</span> --iam-instance-profile Name=EC2SSM-IP</code> 
+</ol> 
+<h3>C. Add tags</h3> 
+<p>The final step of configuring your Amazon EC2 instances is to add tags. You will use these tags to configure Systems Manager in Step 2 of this post. For this example, I add a tag named <code>Patch Group</code> and set the value to <code>Linux Servers</code>. I could have other groups of Amazon EC2 instances that I treat differently by having the same tag name but a different tag value. For example, I might have a collection of other servers with the tag name <code>Patch Group</code> with a value of <code>Web Servers</code>.</p> 
+<li>Use the following command to add the <code>Patch Group</code> tag to your Amazon EC2 instance. 
+<code class="lang-text">$ aws ec2 create-tags --resources <span style="color: #ff0000">YourInstanceId</span> --tags --tags Key=&quot;Patch Group&quot;,Value=&quot;Linux Servers&quot;</code> 
+<p style="padding-left: 40px"><strong>Note:</strong> You must wait a few minutes until the Amazon EC2 instance is available before you can proceed to the next section. To make sure your Amazon EC2 instance is online and ready, you can use the following AWS CLI command:</p> 
+<code class="lang-text">$ aws ec2 describe-instance-status --instance-ids <span style="color: #ff0000">YourInstanceId</span></code> 
+<p>At this point, you now have at least one Amazon EC2 instance you can use to configure Systems Manager.</p> 
+<b>Step 2: Configure Systems Manager</b> 
+<p>In this section, I show you how to configure and use Systems Manager to apply operating system patches to your Amazon EC2 instances, and how to manage patch compliance.</p> 
+<p>To start, I provide some background information about Systems Manager. Then, I cover how to:</p> 
+<ol> 
+<li><strong>Create the Systems Manager IAM role</strong> so that Systems Manager is able to perform patch operations.</li> 
+<li><strong>Create a Systems Manager patch baseline and associate it with your instance </strong>to define which patches Systems Manager should apply.</li> 
+<li><strong>Define a maintenance window</strong> to make sure Systems Manager patches your instance when you tell it to.</li> 
+<li><strong>Monitor patch compliance </strong>to verify the patch state of your instances.</li> 
+</ol> 
+<p>You must meet two prerequisites to use Systems Manager to apply operating system patches. First, you must attach the IAM role you created in the previous section, <code>EC2SSM</code>, to your Amazon EC2 instance. Second, you must install the Systems Manager agent on your Amazon EC2 instance. If you have used a recent Amazon Linux AMI, Amazon has already installed the Systems Manager agent on your Amazon EC2 instance. You can confirm this by logging in to an Amazon EC2 instance and checking the Systems Manager agent log files that are located at <code>/var/log/amazon/ssm/</code>.</p> 
+<p>To install the Systems Manager agent on an instance that does not have the agent preinstalled or if you want to use the Systems Manager agent on your on-premises servers, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-ssm-agent.html" target="_blank" rel="noopener noreferrer">Installing and Configuring the Systems Manager Agent on Linux Instances</a>. If you forgot to attach the newly created role when launching your Amazon EC2 instance or if you want to attach the role to already running Amazon EC2 instances, see <a href="https://aws.amazon.com/blogs/security/new-attach-an-aws-iam-role-to-an-existing-amazon-ec2-instance-by-using-the-aws-cli/" target="_blank" rel="noopener noreferrer">Attach an AWS IAM Role to an Existing Amazon EC2 Instance by Using the AWS CLI</a> or use the <a href="https://aws.amazon.com/blogs/security/easily-replace-or-attach-an-iam-role-to-an-existing-ec2-instance-by-using-the-ec2-console/" target="_blank" rel="noopener noreferrer">AWS Management Console</a>.</p> 
+<h3>A. Create the Systems Manager IAM role</h3> 
+<p>For a maintenance window to be able to run any tasks, you must create a new role for Systems Manager. This role is a different kind of role than the one you created earlier: this role will be used by Systems Manager instead of Amazon EC2. Earlier, you created the role, <code>EC2SSM</code>, with the policy, <code>AmazonEC2RoleforSSM</code>, which allowed the Systems Manager agent on your instance to communicate with Systems Manager. In this section, you need a new role with the policy, <code>AmazonSSMMaintenanceWindowRole</code>, so that the Systems Manager service can execute commands on your instance.</p> 
+<p>To create the new IAM role for Systems Manager:</p> 
+<ol> 
+<li>Create a JSON file named <code>trustpolicy-maintenancewindowrole.json</code> that contains the following trust policy. This policy describes which principal is allowed to assume the role you are going to create. This trust policy allows not only Amazon EC2 to assume this role, but also Systems Manager. 
+<code class="lang-text">{
+&quot;Version&quot;:&quot;2012-10-17&quot;,
+&quot;Statement&quot;:[
+{
+&quot;Sid&quot;:&quot;&quot;,
+&quot;Effect&quot;:&quot;Allow&quot;,
+&quot;Principal&quot;:{
+&quot;Service&quot;:[
+&quot;ec2.amazonaws.com&quot;,
+&quot;ssm.amazonaws.com&quot;
+]
+},
+&quot;Action&quot;:&quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to create a role named <code>MaintenanceWindowRole</code> that has the AWS managed policy, <code>AmazonSSMMaintenanceWindowRole</code>, attached to it. This command generates JSON-based output that describes the role and its parameters, if the command is successful. 
+<code class="lang-text">$ aws iam create-role --role-name MaintenanceWindowRole --assume-role-policy-document file://trustpolicy-maintenancewindowrole.json</code> 
+</ol> 
+<ol start="3"> 
+<li>Use the following command to attach the AWS managed IAM policy (<code>AmazonEC2RoleforSSM</code>) to your newly created role. 
+<code class="lang-text">$ aws iam attach-role-policy --role-name MaintenanceWindowRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonSSMMaintenanceWindowRole</code> 
+</ol> 
+<h3>B. Create a Systems Manager patch baseline and associate it with your instance</h3> 
+<p>Next, you will create a Systems Manager patch baseline and associate it with your Amazon EC2 instance. A patch baseline defines which patches Systems Manager should apply to your instance. Before you can associate the patch baseline with your instance, though, you must determine if Systems Manager recognizes your Amazon EC2 instance. Use the following command to list all instances managed by Systems Manager. The <code>--filters</code> option ensures you look only for your newly created Amazon EC2 instance.</p> 
+<code class="lang-text">$ aws ssm describe-instance-information --filters Key=InstanceIds,Values= <span style="color: #ff0000">YourInstanceId</span>
+{
+&quot;InstanceInformationList&quot;: [
+{
+&quot;IsLatestVersion&quot;: true,
+&quot;ComputerName&quot;: &quot;ip-10-50-2-245&quot;,
+&quot;PingStatus&quot;: &quot;Online&quot;,
+&quot;InstanceId&quot;: &quot;<span style="color: #ff0000">YourInstanceId</span>&quot;,
+&quot;IPAddress&quot;: &quot;10.50.2.245&quot;,
+&quot;ResourceType&quot;: &quot;EC2Instance&quot;,
+&quot;AgentVersion&quot;: &quot;2.2.120.0&quot;,
+&quot;PlatformVersion&quot;: &quot;2017.09&quot;,
+&quot;PlatformName&quot;: &quot;Amazon Linux AMI&quot;,
+&quot;PlatformType&quot;: &quot;Linux&quot;,
+&quot;LastPingDateTime&quot;: 1515759143.826
+}
+]
+}</code> 
+<p>If your instance is missing from the list, verify that:</p> 
+<ol> 
+<li>Your instance is running.</li> 
+<li>You attached the Systems Manager IAM role, <code>EC2SSM</code>.</li> 
+<li>You deployed a <a href="http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-nat-gateway.html" target="_blank" rel="noopener noreferrer">NAT gateway</a> in your public subnet to ensure your VPC reflects the diagram shown earlier in this post so that the Systems Manager agent can connect to the Systems Manager internet endpoint.</li> 
+<li>The <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-agent-logs.html" target="_blank" rel="noopener noreferrer">Systems Manager agent logs</a> don’t include any unaddressed errors.</li> 
+</ol> 
+<p>Now that you have checked that Systems Manager can manage your Amazon EC2 instance, it is time to create a patch baseline. With a patch baseline, you define which patches are approved to be installed on all Amazon EC2 instances associated with the patch baseline. The <code>Patch Group</code> resource tag you defined earlier will determine to which patch group an instance belongs. If you do not specifically define a patch baseline, the default AWS-managed patch baseline is used.</p> 
+<p>To create a patch baseline:</p> 
+<ol> 
+<li>Use the following command to create a patch baseline named <code>AmazonLinuxServers</code>. With approval rules<strong>,</strong> you can determine the approved patches that will be included in your patch baseline. In this example, you add all <code>Critical</code> severity patches to the patch baseline as soon as they are released, by setting the <code>Auto approval delay</code> to <code>0 days</code>. By setting the <code>Auto approval delay</code> to <code>2 days</code>, you add to this patch baseline the <code>Important</code>, <code>Medium</code>, and <code>Low</code> severity patches two days after they are released. 
+<code class="lang-text">$ aws ssm create-patch-baseline --name &quot;AmazonLinuxServers&quot; --description &quot;Baseline containing all updates for Amazon Linux&quot; --operating-system AMAZON_LINUX --approval-rules &quot;PatchRules=[{PatchFilterGroup={PatchFilters=[{Values=[Critical],Key=SEVERITY}]},ApproveAfterDays=0,ComplianceLevel=CRITICAL},{PatchFilterGroup={PatchFilters=[{Values=[Important,Medium,Low],Key=SEVERITY}]},ApproveAfterDays=2,ComplianceLevel=HIGH}]&quot;
+{
+&quot;BaselineId&quot;: &quot;<span style="color: #ff0000">YourBaselineId</span>&quot;
+}</code> 
+</ol> 
+<ol start="2"> 
+<li>Use the following command to register the patch baseline you created with your instance. To do so, you use the <code>Patch Group</code> tag that you added to your Amazon EC2 instance. 
+<code class="lang-text">$ aws ssm register-patch-baseline-for-patch-group --baseline-id <span style="color: #ff0000">YourPatchBaselineId</span> --patch-group &quot;Linux Servers&quot;
+{
+&quot;PatchGroup&quot;: &quot;Linux Servers&quot;,
+&quot;BaselineId&quot;: &quot;<span style="color: #ff0000">YourBaselineId</span>&quot;
+}</code> 
+</ol> 
+<h3>C.&nbsp; Define a maintenance window</h3> 
+<p>Now that you have successfully set up a role, created a patch baseline, and registered your Amazon EC2 instance with your patch baseline, you will define a maintenance window so that you can control when your Amazon EC2 instances will receive patches. By creating multiple maintenance windows and assigning them to different patch groups, you can make sure your Amazon EC2 instances do not all reboot at the same time.</p> 
+<p>To define a maintenance window:</p> 
+<ol> 
+<li>Use the following command to define a maintenance window. In this example command, the maintenance window will start every Saturday at 10:00 P.M. UTC. It will have a duration of 4 hours and will not start any new tasks 1 hour before the end of the maintenance window. 
+<code class="lang-text">$ aws ssm create-maintenance-window --name SaturdayNight --schedule &quot;cron(0 0 22 ? * SAT *)&quot; --duration 4 --cutoff 1 --allow-unassociated-targets
+{
+&quot;WindowId&quot;: &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;
+}</code> 
+</ol> 
+<p style="padding-left: 30px">For more information about defining a cron-based schedule for maintenance windows, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-cron.html#sysman-cron-maintenance-window" target="_blank" rel="noopener noreferrer">Cron and Rate Expressions for Maintenance Windows</a>.</p> 
+<ol start="2"> 
+<li>After defining the maintenance window, you must register the Amazon EC2 instance with the maintenance window so that Systems Manager knows which Amazon EC2 instance it should patch in this maintenance window. You can register the instance by using the same <code>Patch Group</code> tag you used to associate the Amazon EC2 instance with the AWS-provided patch baseline, as shown in the following command. 
+<code class="lang-text">$ aws ssm register-target-with-maintenance-window --window-id <span style="color: #ff0000">YourMaintenanceWindowId</span> --resource-type INSTANCE --targets &quot;Key=tag:Patch Group,Values=Linux Servers&quot;
+{
+&quot;WindowTargetId&quot;: &quot;<span style="color: #ff0000">YourWindowTargetId</span>&quot;
+}</code> 
+</ol> 
+<ol start="3"> 
+<li>Assign a task to the maintenance window that will install the operating system patches on your Amazon EC2 instance. The following command includes the following options. 
+<ol type="a"> 
+<li><code>name</code> is the name of your task and is optional. I named mine <code>Patching</code>.</li> 
+<li><code>task-arn</code> is the name of the task document you want to run.</li> 
+<li><code>max-concurrency</code> allows you to specify how many of your Amazon EC2 instances Systems Manager should patch at the same time. <code>max-errors</code> determines when Systems Manager should abort the task. For patching, this number should not be too low, because you do not want your entire patch task to stop on all instances if one instance fails. You can set this, for example, to <code>20%</code>.</li> 
+<li><code>service-role-arn</code> is the <a href="https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html" target="_blank" rel="noopener noreferrer">Amazon Resource Name</a> (ARN) of the <code>AmazonSSMMaintenanceWindowRole</code> role you created earlier in this blog post.</li> 
+<li><code>task-invocation-parameters</code> defines the parameters that are specific to the <code>AWS-RunPatchBaseline</code> task document and tells Systems Manager that you want to install patches with a timeout of 600 seconds (10 minutes). 
+<code class="lang-text">$ aws ssm register-task-with-maintenance-window --name &quot;Patching&quot; --window-id &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot; --targets &quot;Key=WindowTargetIds,Values=<span style="color: #ff0000">YourWindowTargetId</span>&quot; --task-arn AWS-RunPatchBaseline --service-role-arn &quot;<span style="color: #ff0000">arn:aws:iam::123456789012:role/MaintenanceWindowRole</span>&quot; --task-type &quot;RUN_COMMAND&quot; --task-invocation-parameters &quot;RunCommand={Comment=,TimeoutSeconds=600,Parameters={SnapshotId=[''],Operation=[Install]}}&quot; --max-concurrency &quot;500&quot; --max-errors &quot;20%&quot;
+{
+&quot;WindowTaskId&quot;: &quot;<span style="color: #ff0000">YourWindowTaskId</span>&quot;
+}</code> 
+</ol> </li> 
+</ol> 
+<p>Now, you must wait for the maintenance window to run at least once according to the schedule you defined earlier. If your maintenance window has expired, you can check the status of any maintenance tasks Systems Manager has performed by using the following command.</p> 
+<code class="lang-text">$ aws ssm describe-maintenance-window-executions --window-id &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;
+{
+&quot;WindowExecutions&quot;: [
+{
+&quot;Status&quot;: &quot;SUCCESS&quot;,
+&quot;WindowId&quot;: &quot;<span style="color: #ff0000">YourMaintenanceWindowId</span>&quot;,
+&quot;WindowExecutionId&quot;: &quot;b594984b-430e-4ffa-a44c-a2e171de9dd3&quot;,
+&quot;EndTime&quot;: 1515766467.487,
+&quot;StartTime&quot;: 1515766457.691
+}
+]
+}</code> 
+<h3>D.&nbsp; Monitor patch compliance</h3> 
+<p>You also can see the overall patch compliance of all Amazon EC2 instances using the following command in the AWS CLI.</p> 
+<code class="lang-text">$ aws ssm list-compliance-summaries</code> 
+<p>This command shows you the number of instances that are compliant with each category and the number of instances that are not in JSON format.</p> 
+<p>You also can see overall patch compliance by choosing <strong>Compliance</strong> under <strong>Insights </strong>in the navigation pane of the <a href="https://console.aws.amazon.com/systems-manager/" target="_blank" rel="noopener noreferrer">Systems Manager console</a>. You will see a visual representation of how many Amazon EC2 instances are up to date, how many Amazon EC2 instances are noncompliant, and how many Amazon EC2 instances are compliant in relation to the earlier defined patch baseline.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/12/KVB_0218.png" /></p> 
+<p>In this section, you have set everything up for patch management on your instance. Now you know how to patch your Amazon EC2 instance in a controlled manner and how to check if your Amazon EC2 instance is compliant with the patch baseline you have defined. Of course, I recommend that you apply these steps to all Amazon EC2 instances you manage.</p> 
+<h3>Summary</h3> 
+<p>In this blog post, I showed how to use Systems Manager to create a patch baseline and maintenance window to keep your Amazon EC2 Linux instances up to date with the latest security patches. Remember that by creating multiple maintenance windows and assigning them to different patch groups, you can make sure your Amazon EC2 instances do not all reboot at the same time.</p> 
+<p>If you have comments about this post, submit them in the “Comments” section below. If you have questions about or issues implementing any part of this solution, start a new thread on the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=30" target="_blank" rel="noopener noreferrer">Amazon EC2 forum</a> or <a href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">contact AWS Support</a>.</p> 
+<p>– Koen</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7266');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/02/06/RB_CustomAuth_diagram_020618aaa-956x630.png" /> 
 <b class="lb-b blog-post-title" property="name headline">How to Use Your Own Identity and Access Management Systems to Control Access to AWS IoT Resources</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -933,51 +1167,6 @@ AWS.Blog.commenting('#aws-comment-trigger-7120');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-7120');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/12/C5.png" /> 
-<b class="lb-b blog-post-title" property="name headline">EU Compliance Update: AWS’s 2017 C5 Assessment</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Oliver Bell</span></span> | on 
-<time property="datePublished" datetime="2018-01-17T23:03:45+00:00">17 JAN 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/eu-compliance-update-awss-2017-c5-assessment/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7076" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7076&amp;disqus_title=EU+Compliance+Update%3A+AWS%E2%80%99s+2017+C5+Assessment&amp;disqus_url=https://aws.amazon.com/blogs/security/eu-compliance-update-awss-2017-c5-assessment/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7076');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/01/12/C5-300x1971.png" /></p> 
-<p>AWS has completed its 2017 assessment against the <a href="https://aws.amazon.com/compliance/bsi-c5/" target="_blank" rel="noopener noreferrer">Cloud Computing Compliance Controls Catalog</a> (C5) information security and compliance program. <a href="https://www.bsi.bund.de/DE/Home/home_node.html" target="_blank" rel="noopener noreferrer">Bundesamt f&uuml;r Sicherheit in der Informationstechnik</a> (BSI)—Germany’s national cybersecurity authority—established C5 to define a reference standard for German cloud security requirements. With C5 (as well as with <a href="https://www.bsi.bund.de/EN/Topics/ITGrundschutz/itgrundschutz_node.html" target="_blank" rel="noopener noreferrer">IT-Grundschutz</a>), customers in German member states can use the work performed under this BSI compliance catalogue to comply with stringent local requirements.</p> 
-<p>Continuing our&nbsp;commitment to Germany and the AWS European Regions, AWS has added 16 services to this year’s scope:</p> 
-<li><a href="https://aws.amazon.com/api-gateway" target="_blank" rel="noopener noreferrer">Amazon API Gateway</a></li> 
-<li><a href="http://aws.amazon.com/cloudfront" target="_blank" rel="noopener noreferrer">Amazon CloudFront</a></li> 
-<li><a href="http://aws.amazon.com/cognito/" target="_blank" rel="noopener noreferrer">Amazon Cognito</a></li> 
-<li><a href="http://aws.amazon.com/connect" target="_blank" rel="noopener noreferrer">Amazon Connect</a></li> 
-<li><a href="https://aws.amazon.com/ecr/" target="_blank" rel="noopener noreferrer">Amazon Elastic Container Registry</a></li> 
-<li><a href="https://aws.amazon.com/ecs/" target="_blank" rel="noopener noreferrer">Amazon Elastic Container Service</a></li> 
-<li><a href="http://aws.amazon.com/efs" target="_blank" rel="noopener noreferrer">Amazon Elastic File System</a></li> 
-<li><a href="https://aws.amazon.com/kinesis/data-streams/" target="_blank" rel="noopener noreferrer">Amazon Kinesis Data Streams</a></li> 
-<li><a href="https://docs.aws.amazon.com/AmazonS3/latest/dev/transfer-acceleration.html" target="_blank" rel="noopener noreferrer">Amazon S3 Transfer Acceleration</a></li> 
-<li><a href="http://aws.amazon.com/directoryservice" target="_blank" rel="noopener noreferrer">AWS Directory Service for Microsoft Active Directory</a></li> 
-<li><a href="https://aws.amazon.com/iot/" target="_blank" rel="noopener noreferrer">AWS IoT</a></li> 
-<li><a href="http://aws.amazon.com/lambda" target="_blank" rel="noopener noreferrer">AWS Lambda</a></li> 
-<li><a href="https://aws.amazon.com/lambda/edge/" target="_blank" rel="noopener noreferrer">AWS Lambda@Edge</a></li> 
-<li><a href="http://aws.amazon.com/shield" target="_blank" rel="noopener noreferrer">AWS Shield</a></li> 
-<li><a href="http://aws.amazon.com/step-functions" target="_blank" rel="noopener noreferrer">AWS Step Functions</a></li> 
-<li><a href="https://aws.amazon.com/ec2/systems-manager" target="_blank" rel="noopener noreferrer">AWS Systems Manager</a></li> 
-<p>The English version of the C5 report is available through <a href="https://console.aws.amazon.com/artifact" target="_blank" rel="noopener noreferrer">AWS Artifact</a>. The German version of the report will be available through AWS Artifact in the coming weeks.</p> 
-<p>– Oliver</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7076');
 });
 </script> 
 </article> 

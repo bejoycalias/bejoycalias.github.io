@@ -190,6 +190,213 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/sentiment-negative1.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Using AWS Lambda and Amazon Comprehend for sentiment analysis</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2018-04-11T08:46:37+00:00">11 APR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/artificial-intelligence/amazon-comprehend/" title="View all posts in Amazon Comprehend"><span property="articleSection">Amazon Comprehend</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/contact-center/amazon-connect/" title="View all posts in Amazon Connect*"><span property="articleSection">Amazon Connect*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/artificial-intelligence/amazon-lex/" title="View all posts in Amazon Lex*"><span property="articleSection">Amazon Lex*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/serverless/" title="View all posts in Serverless*"><span property="articleSection">Serverless*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/using-aws-lambda-and-amazon-comprehend-for-sentiment-analysis/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-4245" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=4245&amp;disqus_title=Using+AWS+Lambda+and+Amazon+Comprehend+for+sentiment+analysis&amp;disqus_url=https://aws.amazon.com/blogs/compute/using-aws-lambda-and-amazon-comprehend-for-sentiment-analysis/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4245');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<li> <a class="lb-txt" href="mailto:?subject=Using%20AWS%20Lambda%20and%20Amazon%20Comprehend%20for%20sentiment%20analysis&amp;body=Using%20AWS%20Lambda%20and%20Amazon%20Comprehend%20for%20sentiment%20analysis%0A%0Ahttps://aws.amazon.com/blogs/compute/using-aws-lambda-and-amazon-comprehend-for-sentiment-analysis/" target="_blank"><span class="icon-envelope-square" aria-label="Share on Email"></span></a> </li> 
+</footer> 
+<p><em>This post courtesy of Giedrius Praspaliauskas, AWS Solutions Architect</em></p> 
+<p>Even with best IVR systems, customers get frustrated. What if you knew that 10 callers in your Amazon Connect contact flow were likely to say “Agent!” in frustration in the next 30 seconds? Would you like to get to them before that happens? What if your bot was smart enough to admit, “I’m sorry this isn’t helping. Let me find someone for you.”?</p> 
+<p>In this post, I show you how to use <a title="undefined" href="https://aws.amazon.com/lambda/" target="null">AWS Lambda</a> and <a title="undefined" href="https://aws.amazon.com/comprehend/" target="null">Amazon Comprehend</a> for sentiment analysis to make your <a title="undefined" href="https://aws.amazon.com/lex/" target="null">Amazon Lex</a> bots in <a title="undefined" href="https://aws.amazon.com/connect/" target="null">Amazon Connect</a> more sympathetic.</p> 
+<b>Setting up a Lambda function for sentiment analysis</b> 
+<p>There are multiple natural language and text processing frameworks or services available to use with Lambda, including but not limited to Amazon Comprehend, TextBlob, Pattern, and NLTK. Pick one based on the nature of your system: &nbsp;the type of interaction, languages supported, and so on. For this post, I picked Amazon Comprehend, which uses natural language processing (NLP) to extract insights and relationships in text.</p> 
+<p>The walkthrough in this post is just an example. In a full-scale implementation, you would likely implement a more nuanced approach. For example, you could keep the overall sentiment score through the conversation and act only when it reaches a certain threshold. It is worth noting that this Lambda function is not called for missed utterances, so there may be a gap between what is being analyzed and what was actually said.</p> 
+<p>The Lambda function is straightforward. It analyses the input transcript field of the Amazon Lex event. Based on the overall sentiment value, it generates a response message with next step instructions. When the sentiment is neutral, positive, or mixed, the response leaves it to Amazon Lex to decide what the next steps should be. It adds to the response overall sentiment value as an additional session attribute, along with slots’ values received as an input.</p> 
+<p>When the overall sentiment is negative, the function returns the dialog action, pointing to an escalation intent (specified in the environment variable <em>ESCALATION_INTENT_NAME</em>) or returns the <em>fulfillment closure</em> action with a failure state when the intent is not specified. In addition to actions or intents, the function returns a message, or prompt, to be provided to the customer before taking the next step. Based on the returned action, Amazon Connect can select the appropriate next step in a contact flow.</p> 
+<p>For this walkthrough, you create a Lambda function using the AWS Management Console:</p> 
+<ol> 
+<li>Open the Lambda console.</li> 
+<li>Choose <strong>Create Function</strong>.</li> 
+<li>Choose <strong>Author from scratch</strong> (no blueprint).</li> 
+<li>For <strong>Runtime</strong>, choose Python 3.6.</li> 
+<li>For <strong>Role</strong>, choose <strong>Create a custom role</strong>. The custom execution role allows the function to detect sentiments, create a log group, stream log events, and store the log events.</li> 
+<li>Enter the following values: 
+<li>For <strong>Role Description</strong>, enter <em>Lambda execution role permissions</em>.</li> 
+<li>For <strong>IAM Role</strong>, choose <strong>Create an IAM role</strong>.</li> 
+<li>For <strong>Role Name</strong>, enter <em>LexSentimentAnalysisLambdaRole</em>.</li> 
+<li>For <strong>Policy</strong>, use the following policy:</li> 
+</ul> </li> 
+</ol> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;
+},
+{
+&quot;Action&quot;: [
+&quot;comprehend:DetectDominantLanguage&quot;,
+&quot;comprehend:DetectSentiment&quot;
+],
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Resource&quot;: &quot;*&quot;
+}
+]
+}
+</code> 
+<ol start="7"> 
+<li style="list-style-type: none"> 
+<ol start="7"> 
+<li>Choose <strong>Create function</strong>.</li> 
+<li>Copy/paste the following code to the editor window</li> 
+</ol> </li> 
+</ol> 
+<code class="lang-python">import os, boto3
+ESCALATION_INTENT_MESSAGE=&quot;Seems that you are having troubles with our service. Would you like to be transferred to the associate?&quot;
+FULFILMENT_CLOSURE_MESSAGE=&quot;Seems that you are having troubles with our service. Let me transfer you to the associate.&quot;
+escalation_intent_name = os.getenv('ESACALATION_INTENT_NAME', None)
+client = boto3.client('comprehend')
+def lambda_handler(event, context):
+sentiment=client.detect_sentiment(Text=event['inputTranscript'],LanguageCode='en')['Sentiment']
+if sentiment=='NEGATIVE':
+if escalation_intent_name:
+result = {
+&quot;sessionAttributes&quot;: {
+&quot;sentiment&quot;: sentiment
+},
+&quot;dialogAction&quot;: {
+&quot;type&quot;: &quot;ConfirmIntent&quot;, 
+&quot;message&quot;: {
+&quot;contentType&quot;: &quot;PlainText&quot;, 
+&quot;content&quot;: ESCALATION_INTENT_MESSAGE
+}, 
+&quot;intentName&quot;: escalation_intent_name
+}
+}
+else:
+result = {
+&quot;sessionAttributes&quot;: {
+&quot;sentiment&quot;: sentiment
+},
+&quot;dialogAction&quot;: {
+&quot;type&quot;: &quot;Close&quot;,
+&quot;fulfillmentState&quot;: &quot;Failed&quot;,
+&quot;message&quot;: {
+&quot;contentType&quot;: &quot;PlainText&quot;,
+&quot;content&quot;: FULFILMENT_CLOSURE_MESSAGE
+}
+}
+}
+else:
+result ={
+&quot;sessionAttributes&quot;: {
+&quot;sentiment&quot;: sentiment
+},
+&quot;dialogAction&quot;: {
+&quot;type&quot;: &quot;Delegate&quot;,
+&quot;slots&quot; : event[&quot;currentIntent&quot;][&quot;slots&quot;]
+}
+}
+return result</code> 
+<ol start="9"> 
+<li>Below the code editor specify the environment variable ESCALATION_INTENT_NAME with a value of <em>Escalate</em>.</li> 
+</ol> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/lambda-env-vars.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/lambda-env-vars-1024x157.png" /></a></p> 
+<ol start="10"> 
+<li>Click on <strong>Save</strong> in the top right of the console.</li> 
+</ol> 
+<p>Now you can test your function.</p> 
+<ol> 
+<li>Click&nbsp;<strong>Test</strong> at the top of the console.</li> 
+<li>Configure a new test event using the following test event JSON:</li> 
+</ol> 
+<code class="lang-json">{
+&quot;messageVersion&quot;: &quot;1.0&quot;,
+&quot;invocationSource&quot;: &quot;DialogCodeHook&quot;,
+&quot;userId&quot;: &quot;1234567890&quot;,
+&quot;sessionAttributes&quot;: {},
+&quot;bot&quot;: {
+&quot;name&quot;: &quot;BookSomething&quot;,
+&quot;alias&quot;: &quot;None&quot;,
+&quot;version&quot;: &quot;$LATEST&quot;
+},
+&quot;outputDialogMode&quot;: &quot;Text&quot;,
+&quot;currentIntent&quot;: {
+&quot;name&quot;: &quot;BookSomething&quot;,
+&quot;slots&quot;: {
+&quot;slot1&quot;: &quot;None&quot;,
+&quot;slot2&quot;: &quot;None&quot;
+},
+&quot;confirmationStatus&quot;: &quot;None&quot;
+},
+&quot;inputTranscript&quot;: &quot;I want something&quot;
+}</code> 
+<ol start="3"> 
+<li>Click <strong>Create</strong></li> 
+<li>Click <strong>Test</strong> on the console</li> 
+</ol> 
+<p>This message should return a response from Lambda with a sentiment session attribute of NEUTRAL.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/execution-success1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/execution-success1.png" /></a></p> 
+<p>However, if you change the input to “This is garbage!”, Lambda changes the <em>dialog</em> action to the <em>escalation</em> intent specified in the environment variable <em>ESCALATION_INTENT_NAME</em>.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/sentiment-negative1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/sentiment-negative1.png" /></a></p> 
+<b>Setting up Amazon Lex</b> 
+<p>Now that you have your Lambda function running, it is time to create the Amazon Lex bot. Use the BookTrip sample bot and call it BookSomething. The IAM role is automatically created on your behalf. Indicate that this bot is not subject to the <a title="undefined" href="https://www.ftc.gov/enforcement/rules/rulemaking-regulatory-reform-proceedings/childrens-online-privacy-protection-rule" target="null">COPPA</a>, and choose <strong>Create</strong>. A few minutes later, the bot is ready.</p> 
+<p>Make the following changes to the default configuration of the bot:</p> 
+<ol> 
+<li>Add an intent with no associated slots. Name it <em>Escalate</em>.</li> 
+<li>Specify the Lambda function for initialization and validation in the existing two intents (“BookCar” and “BookHotel”), at the same time giving Amazon Lex permission to invoke it.</li> 
+<li>Leave the other configuration settings as they are and save the intents.</li> 
+</ol> 
+<p>You are ready to build and publish this bot. Set a new alias, <em>BookSomethingWithSentimentAnalysis</em>. When the build finishes, test it.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/bot-test.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/bot-test.png" /></a></p> 
+<p>As you see, sentiment analysis works!</p> 
+<b>Setting up Amazon Connect</b> 
+<p>Next, <a title="undefined" href="https://docs.aws.amazon.com/connect/latest/adminguide/gettingstarted.html" target="null">provision an Amazon Connect instance</a>.</p> 
+<p>After the instance is created, you need to integrate the <a title="undefined" href="https://docs.aws.amazon.com/connect/latest/adminguide/amazon-connect-instance.html#contact-flows" target="null">Amazon Lex</a> bot created in the previous step. For more information, see the Amazon Lex section in the <em>Configuring Your Amazon Connect Instance</em> topic. &nbsp;You may also want to look at the excellent post by Randall Hunt, <a title="undefined" href="https://aws.amazon.com/blogs/aws/new-amazon-connect-and-amazon-lex-integration/" target="null">New – Amazon Connect and Amazon Lex Integration</a>.</p> 
+<p>Create a new contact flow, “Sentiment analysis walkthrough”:</p> 
+<ol> 
+<li>Log in into the Amazon Connect instance.</li> 
+<li>Choose <strong>Create contact flow, Create transfer to agent flow</strong>.</li> 
+<li>Add a <strong>Get customer input</strong> block, open the icon in the top left corner, and specify your Amazon Lex bot and its intents.</li> 
+<li>Select the <strong>Text to speec</strong>h audio prompt type and enter text for Amazon Connect to play at the beginning of the dialog.</li> 
+<li>Choose <strong>Amazon Lex</strong>, enter your Amazon Lex bot name and the alias.</li> 
+<li>Specify the intents to be used as dialog branches that a customer can choose: <em>BookHotel, BookTrip,</em> or <em>Escalate</em>.</li> 
+<li>Add two <strong>Play prompt</strong> blocks and connect them to the customer input block. 
+<li>If <em>booking hotel or car intent</em> is returned from the bot flow, play the corresponding prompt (“OK, will book it for you”) and initiate booking (in this walkthrough, just hang up after the prompt).</li> 
+<li>However, if <em>escalation</em> intent is returned (caused by the sentiment analysis results in the bot), play the prompt (“OK, transferring to an agent”) and initiate the transfer.</li> 
+</ul> </li> 
+<li>Save and publish the contact flow.</li> 
+</ol> 
+<p>As a result, you have a contact flow with a single customer input step and a text-to-speech prompt that uses the Amazon Lex bot. You expect one of the three intents returned:<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/contact-flow.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/04/11/contact-flow.png" /></a></p> 
+<p>Edit the phone number to associate the contact flow that you just created. It is now ready for testing. Call the phone number and check how your contact flow works.</p> 
+<b>Cleanup</b> 
+<p>Don’t forget to delete all the resources created during this walkthrough to avoid incurring any more costs:</p> 
+<li>Amazon Connect instance</li> 
+<li>Amazon Lex bot</li> 
+<li>Lambda function</li> 
+<li>IAM role <em>LexSentimentAnalysisLambdaRole</em></li> 
+<b>Summary</b> 
+<p>In this walkthrough, you implemented sentiment analysis with a Lambda function. The function can be integrated into Amazon Lex and, as a result, into Amazon Connect. This approach gives you the flexibility to analyze user input and then act. You may find the following potential use cases of this approach to be of interest:</p> 
+<li>Extend the Lambda function to identify “hot” topics in the user input even if the sentiment is not negative and take action proactively. For example, switch to an escalation intent if a user mentioned “where is my order,” which may signal potential frustration.</li> 
+<li>Use <a title="undefined" href="https://github.com/aws/amazon-connect-streams" target="null">Amazon Connect Streams</a> to provide agent sentiment analysis results along with call transfer. Enable service tailored towards particular customer needs and sentiments.</li> 
+<li>Route calls to agents based on both skill set and sentiment.</li> 
+<li>Prioritize calls based on sentiment using multiple Amazon Connect queues instead of transferring directly to an agent.</li> 
+<li>Monitor quality and flag for review contact flows that result in high overall negative sentiment.</li> 
+<li>Implement sentiment and AI/ML based call analysis, such as a real-time recommendation engine. For more details, see <a title="undefined" href="https://aws.amazon.com/machine-learning/" target="null">Machine Learning on AWS</a>.</li> 
+<p>If you have questions or suggestions, please comment below.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-4245');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Node.js 8.10 runtime now available in AWS Lambda</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1523,157 +1730,6 @@ expires 5s;
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3568');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/integrating-on-premises-and-cloud-environments-1260x487.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Running ActiveMQ in a Hybrid Cloud Environment with Amazon MQ</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Tara Van Unen</span></span> | on 
-<time property="datePublished" datetime="2018-02-19T21:47:11+00:00">19 FEB 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-mq/" title="View all posts in Amazon MQ*"><span property="articleSection">Amazon MQ*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/application-integration/" title="View all posts in Application Integration"><span property="articleSection">Application Integration</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/enterprise-strategy/" title="View all posts in Enterprise Strategy*"><span property="articleSection">Enterprise Strategy*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/" title="View all posts in Messaging*"><span property="articleSection">Messaging*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/migration/" title="View all posts in Migration*"><span property="articleSection">Migration*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/running-activemq-in-a-hybrid-cloud-environment-with-amazon-mq/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3946" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3946&amp;disqus_title=Running+ActiveMQ+in+a+Hybrid+Cloud+Environment+with+Amazon+MQ&amp;disqus_url=https://aws.amazon.com/blogs/compute/running-activemq-in-a-hybrid-cloud-environment-with-amazon-mq/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3946');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>This post courtesy of Greg Share, AWS Solutions Architect</p> 
-<p>Many organizations, particularly enterprises, rely on message brokers to connect and coordinate different systems. Message brokers enable distributed applications to communicate with one another, serving as the technological backbone for their IT environment, and ultimately their business services. Applications depend on messaging to work.</p> 
-<p>In many cases, those organizations have started to build new or “lift and shift” applications to AWS. In some cases, there are applications, such as mainframe systems, too costly to migrate. In these scenarios, those on-premises applications still need to interact with cloud-based components.</p> 
-<p><a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> is a managed message broker service for ActiveMQ that enables organizations to send messages between applications in the cloud and on-premises to enable hybrid environments and application modernization. For example, you can <a href="https://aws.amazon.com/blogs/compute/invoking-aws-lambda-from-amazon-mq/">invoke AWS Lambda from queues and topics managed by Amazon MQ brokers</a> to integrate legacy systems with serverless architectures. ActiveMQ is an open-source message broker written in Java that is packaged with clients in multiple languages, Java Message Server (JMS) client being one example.</p> 
-<p>This post shows you can use Amazon MQ to integrate on-premises and cloud environments using the network of brokers feature of ActiveMQ. It provides configuration parameters for a one-way duplex connection for the flow of messages from an on-premises ActiveMQ message broker to Amazon MQ.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/integrating-on-premises-and-cloud-environments.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/integrating-on-premises-and-cloud-environments-1024x396.jpg" /></a></p> 
-<b>ActiveMQ and the network of brokers</b> 
-<p>First, look at queues within ActiveMQ and then at the network of brokers as a mechanism to distribute messages.</p> 
-<p>The network of brokers behaves differently from models such as physical networks. The key consideration is that the production (sending) of a message is disconnected from the consumption of that message. Think of the delivery of a parcel: The parcel is sent by the supplier (producer) to the end customer (consumer). The path it took to get there is of little concern to the customer, as long as it receives the package.</p> 
-<p>The same logic can be applied to the network of brokers. Here’s how you build the flow from a simple message to a queue and build toward a network of brokers. Before you look at setting up a hybrid connection, I discuss how a broker processes messages in a simple scenario.</p> 
-<p>When a message is sent from a producer to a queue on a broker, the following steps occur:</p> 
-<ol> 
-<li>A message is sent to a queue from the producer.</li> 
-<li>The broker persists this in its store or journal.</li> 
-<li>At this point, an acknowledgement (ACK) is sent to the producer from the broker.<br /> <a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-sends-ack.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-sends-ack-300x295.jpg" /></a></li> 
-</ol> 
-<p>When a consumer looks to consume the message from that same queue, the following steps occur:</p> 
-<ol> 
-<li>The message listener (consumer) calls the broker, which creates a subscription to the queue.</li> 
-<li>Messages are fetched from the message store and sent to the consumer.</li> 
-<li>The consumer acknowledges that the message has been received before processing it.</li> 
-<li>Upon receiving the ACK, the broker sets the message as having been consumed. By default, this deletes it from the queue. 
-<li>You can set the consumer to ACK after processing by setting up <strong>transaction</strong> <strong>management</strong> or handle it manually using&nbsp;<strong>Session.CLIENT_ACKNOWLEDGE</strong>.</li> 
-</ul> </li> 
-</ol> 
-<b>Static propagation</b> 
-<p>I now introduce the concept of static propagation with the network of brokers as the mechanism for message transfer from on-premises brokers to Amazon MQ. &nbsp;Static propagation refers to message propagation that occurs in the&nbsp;absence&nbsp;of subscription information. In this case, the objective is to transfer messages arriving at your selected on-premises broker to the Amazon MQ broker for consumption within the cloud environment.</p> 
-<p>After you configure static propagation with a network of brokers, the following occurs:</p> 
-<ol> 
-<li>The on-premises broker receives a message from a producer for a specific queue.</li> 
-<li>The on-premises broker sends (statically propagates) the message to the Amazon MQ broker.</li> 
-<li>The Amazon MQ broker sends an acknowledgement to the on-premises broker, which marks the message as having been consumed.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-sends-ack2-sm.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-sends-ack2-sm.jpg" /></a></li> 
-<li>Amazon MQ holds the message in its queue ready for consumption.</li> 
-<li>A consumer connects to Amazon MQ broker, subscribes to the queue in which the message resides, and receives the message.</li> 
-<li>Amazon MQ broker marks the message as having been consumed.</li> 
-</ol> 
-<b>Getting started</b> 
-<p>The first step is creating an Amazon MQ broker.</p> 
-<ol> 
-<li>Sign in to the <a href="https://console.aws.amazon.com/amazon-mq/">Amazon MQ console</a> and launch a new Amazon MQ broker.</li> 
-<li>Name your broker and choose <strong>Next step</strong>.</li> 
-<li>For <strong>Broker instance type</strong>, choose your instance size:<br /> – <strong>mq.t2.micro</strong><br /> – <strong>mq.m4.large</strong></li> 
-<li>For<strong> Deployment mode</strong>, enter one of the following:<br /> – <strong>Single-instance broker</strong> for development and test implementations (recommended)<br /> – <strong>Active/standby broker for high availability</strong> in production environments</li> 
-<li>Scroll down and enter your user name and password.</li> 
-<li>Expand <strong>Advanced Settings</strong>.</li> 
-<li>For <strong>VPC</strong>, <strong>Subnet</strong>, and <strong>Security Group</strong>, pick the values for the resources in which your broker will reside.</li> 
-<li>For <strong>Public Accessibility</strong>, choose <strong>Yes</strong>, as connectivity is internet-based. Another option would be to use private connectivity between your on-premises network and the VPC, an example being an AWS Direct Connect or VPN connection. In that case, you could set <strong>Public Accessibility</strong> to <strong>No</strong>.</li> 
-<li>For <strong>Maintenance</strong>, leave the default value, <strong>No preference</strong>.</li> 
-<li>Choose <strong>Create Broker</strong>. Wait several minutes for the broker to be created.<br /> <a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-creation.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-creation.jpg" /></a></li> 
-</ol> 
-<p>After creation is complete, you see your broker listed.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-listed.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/broker-listed.jpg" /></a></p> 
-<p>For connectivity to work, you must configure the security group where Amazon MQ resides. For this post, I focus on the OpenWire protocol.</p> 
-<p>For Openwire connectivity, allow port 61617 access for Amazon MQ from your on-premises <strong>ActiveMQ</strong> broker source IP address. For alternate protocols, see the Amazon MQ broker configuration information for the ports required:</p> 
-<p>OpenWire – ssl://xxxxxxx.xxx.com:61617<br /> AMQP – amqp+ssl:// xxxxxxx.xxx.com:5671<br /> STOMP – stomp+ssl:// xxxxxxx.xxx.com:61614<br /> MQTT – mqtt+ssl:// xxxxxxx.xxx.com:8883<br /> WSS – wss:// xxxxxxx.xxx.com:61619</p> 
-<b>Configuring the network of brokers</b> 
-<p>Configuring the network of brokers with static propagation occurs on the on-premises broker by applying changes to the following file:<br /> &lt;activemq install directory&gt;/conf activemq.xml</p> 
-<h3>Network connector</h3> 
-<p>This is the first configuration item required to enable a network of brokers. It is only required on the on-premises broker, which initiates and creates the connection with Amazon MQ. This connection, after it’s established, enables the flow of messages in either direction between the on-premises broker and Amazon MQ. The focus of this post is the uni-directional flow of messages from the on-premises broker to Amazon MQ.</p> 
-<p>The default activemq.xml file does not include the network connector configuration. Add this with the <strong>networkConnector</strong> element. In this scenario, edit the on-premises broker activemq.xml file to include the following information between &lt;systemUsage&gt; and &lt;transportConnectors&gt;:</p> 
-<code class="lang-xml">&lt;networkConnectors&gt;
-&lt;networkConnector 
-name=<strong>&quot;Q:source broker name-&gt;target broker name&quot;</strong>
-duplex=<strong>&quot;false&quot;</strong> 
-uri=<strong>&quot;</strong>static<strong>:(ssl:// aws mq endpoint:61617)&quot;</strong> 
-userName=<strong>&quot;username&quot;</strong>
-password=<strong>&quot;password&quot;</strong> 
-networkTTL=&quot;2&quot; 
-dynamicOnly=&quot;false&quot;&gt;
-&lt;staticallyIncludedDestinations&gt;
-&lt;queue physicalName=<strong>&quot;queuename&quot;</strong>/&gt;
-&lt;/staticallyIncludedDestinations&gt; 
-&lt;excludedDestinations&gt;
-&lt;queue physicalName=&quot;&gt;&quot; /&gt;
-&lt;/excludedDestinations&gt;
-&lt;/networkConnector&gt; 
-&lt;networkConnectors&gt;</code> 
-<p>The highlighted components are the most important elements when configuring your on-premises broker.</p> 
-<li><strong>name</strong> – Name of the network bridge. In this case, it specifies two things: 
-<li>That this connection relates to an ActiveMQ queue (Q) as opposed to a topic (T), for reference purposes.</li> 
-<li>The source broker and target broker.</li> 
-</ul> </li> 
-<li><strong>duplex</strong> –Setting this to <strong>false</strong> ensures that messages traverse uni-directionally from the on-premises broker to Amazon MQ.</li> 
-<li><strong>uri</strong> –Specifies the remote endpoint to which to connect for message transfer. In this case, it is an Openwire endpoint on your Amazon MQ broker. This information could be obtained from the Amazon MQ console or via the API.<a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/endpoints.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/endpoints.jpg" /></a></li> 
-<li><strong>username and password</strong> – The same username and password configured when creating the Amazon MQ broker, and used to access the Amazon MQ ActiveMQ console.</li> 
-<li><strong>networkTTL</strong> – Number of brokers in the network through which messages and subscriptions can pass. Leave this setting at the current value, if it is already included in your broker connection.</li> 
-<li><strong>staticallyIncludedDestinations &gt; queue physicalName</strong> – The destination ActiveMQ queue for which messages are destined. This is the queue that is propagated from the on-premises broker to the Amazon MQ broker for message consumption.</li> 
-<p>After the network connector is configured, you must restart the ActiveMQ service on the on-premises broker for the changes to be applied.</p> 
-<b>Verify the configuration</b> 
-<p>There are a number of places within the ActiveMQ console of your on-premises and Amazon MQ brokers to browse to verify that the configuration is correct and the connection has been established.</p> 
-<h3>On-premises broker</h3> 
-<p>Launch the ActiveMQ console of your on-premises broker and navigate to <strong>Network</strong>. You should see an active network bridge similar to the following:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/network-bridge.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/network-bridge.jpg" /></a></p> 
-<p>This identifies that the connection between your on-premises broker and your Amazon MQ broker is up and running.</p> 
-<p>Now navigate to <strong>Connections</strong> and scroll to the bottom of the page. Under the <strong>Network Connectors</strong> subsection, you should see a connector labeled with the <strong>name</strong>: value that you provided within the ActiveMQ.xml configuration file. You should see an entry similar to:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/connector.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/connector.jpg" /></a></p> 
-<h3>Amazon MQ broker</h3> 
-<p>Launch the ActiveMQ console of your Amazon MQ broker and navigate to<strong> Connections</strong>. Scroll to the <strong>Connections openwire</strong> subsection and you should see a connection specified that references the <strong>name: value</strong> that you provided within the ActiveMQ.xml configuration file. You should see an entry similar to:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/name-value.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/name-value.jpg" /></a></p> 
-<p>If you configured the <strong>uri</strong>: for AMQP, STOMP, MQTT, or WSS as opposed to Openwire, you would see this connection under the corresponding section of the <strong>Connections</strong> page.</p> 
-<b>Testing your message flow</b> 
-<p>The setup described outlines a way for messages produced on premises to be propagated to the cloud for consumption in the cloud. This section provides steps on verifying the message flow.</p> 
-<h3>Verify that the queue has been created</h3> 
-<p>After you specify this queue name as <strong>staticallyIncludedDestinations &gt; queue physicalName</strong>: and your ActiveMQ service starts, you see the following on your on-premises ActiveMQ console <strong>Queues</strong> page.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/queues.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/queues.jpg" /></a></p> 
-<p>As you can see, no messages have been sent but you have one consumer listed. If you then choose Active Consumers under the Views column, you see Active Consumers for TestingQ.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/testing-Q.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/testing-Q.jpg" /></a></p> 
-<p>This is telling you that your Amazon MQ broker is a consumer of your on-premises broker for the testing queue.</p> 
-<h3>Produce and send a message to the on-premises broker</h3> 
-<p>Now, produce a message on an on-premises producer and send it to your on-premises broker to a queue named <strong>TestingQ</strong>. If you navigate back to the <strong>queues</strong> page of your on-premises ActiveMQ console, you see that the <strong>messages enqueued</strong> and <strong>messages dequeued</strong> column count for your <strong>TestingQ</strong> queue have changed:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/messages-enqueued.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/messages-enqueued.jpg" /></a></p> 
-<p>What this means is that the message originating from the on-premises producer has traversed the on-premises broker and propagated immediately to the Amazon MQ broker. At this point, the message is no longer available for consumption from the on-premises broker.</p> 
-<p>If you access the ActiveMQ console of your Amazon MQ broker and navigate to the <strong>Queues</strong> page, you see the following for the <strong>TestingQ</strong> queue:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/testing-Q-2.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/testing-Q-2.jpg" /></a></p> 
-<p>This means that the message originally sent to your on-premises broker has traversed the network of brokers unidirectional network bridge, and is ready to be consumed from your Amazon MQ broker. The indicator is the <strong>Number of Pending Messages</strong> column.</p> 
-<h3>Consume the message from an Amazon MQ broker</h3> 
-<p>Connect to the Amazon MQ <strong>TestingQ</strong> queue from a consumer within the AWS Cloud environment for message consumption. Log on to the ActiveMQ console of your Amazon MQ broker and navigate to the <strong>Queue</strong> page:</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/queues-2.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/queues-2.jpg" /></a></p> 
-<p>As you can see, the <strong>Number of Pending Messages</strong> column figure has changed to 0 as that message has been consumed.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/message-lifecycle.jpg"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/02/20/message-lifecycle-1024x518.jpg" /></a></p> 
-<p>This diagram outlines the message lifecycle from the on-premises producer to the on-premises broker, traversing the hybrid connection between the on-premises broker and Amazon MQ, and finally consumption within the AWS Cloud.</p> 
-<b>Conclusion</b> 
-<p>This post focused on an ActiveMQ-specific scenario for transferring messages within an ActiveMQ queue from an on-premises broker to Amazon MQ.</p> 
-<p>For other on-premises brokers, such as IBM MQ, another approach would be to run ActiveMQ on-premises broker and use JMS bridging to IBM MQ, while using the approach in this post to forward to Amazon MQ. Yet another approach would be to use Apache Camel for more sophisticated routing.</p> 
-<p>I hope that you have found this example of hybrid messaging between an on-premises environment and the AWS Cloud to be useful. Many customers are already using on-premises ActiveMQ brokers, and this is a great use case to enable hybrid cloud scenarios.</p> 
-<p>To learn more, see the <a href="https://aws.amazon.com/amazon-mq/">Amazon MQ</a> website and <a href="https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/welcome.html">Developer Guide</a>. You can <a href="https://console.aws.amazon.com/amazon-mq/home">try Amazon MQ for free</a> with the AWS Free Tier, which includes up to 750 hours of a single-instance mq.t2.micro broker and up to 1 GB of storage per month for one year.</p> 
-<p>&nbsp;</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3946');
 });
 </script> 
 </article> 

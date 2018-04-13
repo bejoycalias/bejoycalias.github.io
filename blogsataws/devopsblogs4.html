@@ -190,6 +190,93 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Performing Blue/Green Deployments with AWS CodeDeploy and Auto Scaling Groups</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Jeff Levine</span></span> | on 
+<time property="datePublished" datetime="2017-04-18T23:26:52+00:00">18 APR 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/performing-bluegreen-deployments-with-aws-codedeploy-and-auto-scaling-groups/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>Jeff Levine is a Solutions Architect for Amazon Web Services.</em></p> 
+<p>Amazon Web Services offers services that enable organizations to leverage the power of the cloud for their development and deployment needs. <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> makes it possible to automate the deployment of code to either <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> or on-premises instances. AWS CodeDeploy now supports <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/aws-codedeploy-introduces-blue-green-deployments/">blue/green deployments</a>. In this blog post, I will discuss the benefits of blue/green deployments and show you how to perform one.</p> 
+<p><span id="more-870"></span></p> 
+<p><strong>The benefits of blue/green deployments</strong></p> 
+<p>Blue/green deployment involves two production environments:</p> 
+<li>Blue is the active environment.</li> 
+<li>Green is for the release of a new version.</li> 
+<p>Here are some of the advantages of a blue/green deployment:</p> 
+<li>You can perform testing on the green environment without disrupting the blue environment.</li> 
+<li>Switching to the green environment involves no downtime. It only requires the redirecting of user traffic.</li> 
+<li>Rolling back from the green environment to the blue environment in the event of a problem is easier because you can redirect traffic to the blue environment without having to rebuild it.</li> 
+<li>You can incorporate the principle of infrastructure immutability by provisioning fresh instances when you need to make changes. In this way, you avoid configuration drift.</li> 
+<p>AWS CodeDeploy offers two ways to perform blue/green deployments:</p> 
+<li>In the first approach, AWS CodeDeploy makes a copy of an Auto Scaling group. It, in turn, provisions new Amazon EC2 instances, deploys the application to these new instances, and then redirects traffic to the newly deployed code.</li> 
+<li>In the second approach, you use instance tags or an Auto Scaling group to select the instances that will be used for the green environment. AWS CodeDeploy then deploys the code to the tagged instances.</li> 
+<p>So how do you set up your first blue environment? A best practice is to start with an in-place deployment. You can also start with an existing, empty Auto Scaling group.</p> 
+<p><strong>An example of blue/green deployments</strong></p> 
+<p>Let’s take a look at an example of how to use Auto Scaling groups to perform a blue/green deployment.</p> 
+<p><strong>Overview</strong></p> 
+<p>In the following figure, the example environment includes an Amazon EC2 instance that serves as a workstation for AWS CodeDeploy. A release manager or developer could use this workstation to deploy new versions of code. The blue environment consists of an Auto Scaling group that provisions two more instances to function as web servers. The web servers will initially contain the first version of an application and the AWS CodeDeploy agent. A load balancer directs traffic to the two web servers in a round-robin manner.</p> 
+<p>The release manager uses the workstation instance to push a new version of the application to AWS CodeDeploy and starts a blue-green deployment. AWS CodeDeploy creates a copy of the Auto Scaling group. It launches two new web server instances just like the original two. AWS CodeDeploy installs the new version of the application and then redirects the load balancer to the new instances. The original instances continue to be part of the original Auto Scaling group. They can be reattached to the load balancer, if needed.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/18/CDBG-topology.png" /></p> 
+<p><strong>Prerequisites for building the example</strong></p> 
+<p>Here are the things you will need to build out this example.</p> 
+<li>An IAM user with permissions to use Amazon EC2, Amazon S3, Amazon VPC, AWS CodeDeploy, and AWS CloudFormation.</li> 
+<li>An AWS region and Availability Zone in which you can provision the environment.</li> 
+<li>An Amazon EC2 key pair.</li> 
+<li>Working knowledge of the aforementioned services and the AWS Management Console, and familiarity with connecting to an Amazon EC2 instance.</li> 
+<p><strong>Other Considerations</strong></p> 
+<p>You will incur charges from AWS for the use of the underlying AWS services in this example. The Amazon EC2 t2.micro instances and Amazon S3 storage might be covered under the <a href="https://aws.amazon.com/free/">AWS Free Tier</a>, depending on your eligibility. The resources provided in this example are for training purposes. Be sure to consider the security needs of your organization when implementing techniques similar to those described in this blog post.</p> 
+<p>Step 1: Create the initial environment</p> 
+<ol> 
+<li>Download an archive containing the sample template from this <a href="https://github.com/awslabs/codedeploy-blue-green" target="_blank">location</a> and save it in a convenient location.</li> 
+<li>Sign in to the AWS Management Console and open the AWS CloudFormation console at <a href="https://console.aws.amazon.com/cloudformation/">https://console.aws.amazon.com/cloudformation/</a>.</li> 
+<li>If this is a new AWS CloudFormation account, click <strong>Create New Stack</strong>. Otherwise, click <strong>Create Stack</strong>.</li> 
+<li>Under <strong>Upload a template to Amazon S3</strong>, click <strong>Choose File</strong>, choose the YAML file from the archive you downloaded, and then click <strong>Next</strong>.</li> 
+<li>In <strong>Specify Details</strong>, in <strong>Stack name</strong>, type <code>bluegreen</code>.</li> 
+<li>In <strong>AZName</strong>, select one of the Availability Zones. (In this blog post, I am using us-east-1a.)</li> 
+<li>In <strong>BlueGreenKeyPairName</strong>, select the key pair to use.</li> 
+<li>In <strong>NamePrefix</strong>, use the default value of <code>bluegreen</code>&nbsp;unless you are already running an application with a name that starts with <code>bluegreen</code>. The name prefix is used to assign name tags to the created resources. Click <strong>Next</strong>.</li> 
+<li>On the Options page, click <strong>Next</strong>.</li> 
+<li>Select the acknowledgement box to allow the creation of IAM resources, and then click <strong>Create</strong>. It will take CloudFormation about 10 minutes to create the sample environment. In addition to creating the infrastructure resources shown in the diagram, the CloudFormation template also sets up an AWS CodeDeploy application and blue/green deployment group.</li> 
+</ol> 
+<p>Step 2: Review initial environment</p> 
+<ol> 
+<li>Look at the CloudFormation stack outputs. You should see something similar to the following.&nbsp;<strong>WorkstationIP</strong> is the IP address of the workstation instance.&nbsp;<strong>AutoScalingGroup</strong> and <strong>LoadBalancer</strong> are the DNS names created by CloudFormation for the Auto Scaling group and the Elastic Load Balancing load balancer.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/CloudFormationOutputs2-1.png" /></li> 
+<li>Copy the <strong>LoadBalancer</strong> value into your browser and browse to that link. The following application should be displayed. This PHP application queries the Amazon EC2 instance metadata. If you refresh the page, you will see the IP address and instance ID change in accordance with the round-robin load balancing algorithm.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/appversion1-v2-1.png" /></li> 
+<li>Go to the EC2 console and display the instances. You will see three running instances associated with this example: the workstation and the two web server instances created by the Auto Scaling group. The web server instances make up the blue environment.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/instances1-v2.png" /></li> 
+</ol> 
+<p>Step 3: Deploy the new version of code</p> 
+<ol> 
+<li><a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AccessingInstances.html">Connect to the workstation instance</a> at the address displayed in <strong>WorkStationIP</strong>. This instance is running the Ubuntu operating system, so the user name is <strong>ubuntu</strong>. After you sign in, you will see two directories. The scripts directory contains Bourne shell scripts. The newversion directory contains an update to the PHP application.</li> 
+<li>Here is the PHP code for the new version in newversion/content/index.php. The only difference from the initially installed code is the application version number.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/newappcode-1.png" /></li> 
+<li>Now look at the following scripts/pushnewversion.sh shell script. It uses the <strong>aws deploy push command</strong> to bundle the code and upload it to Amazon S3.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/pushversion.png" /></li> 
+<li>Run the pushnewversion.sh script. You will see a message that tells you how to deploy the code with the AWS command line interpreter, but we will use the AWS CodeDeploy console to do this instead.</li> 
+<li>Open the AWS CodeDeploy console at <a href="https://console.aws.amazon.com/codedeploy">https://console.aws.amazon.com/codedeploy</a>.</li> 
+<li>Click the link for bluegreen-app. If you chose a name other than the default for <strong>NamePrefix</strong>, click that name instead. Expand <strong>Revisions</strong>. You will see the revision you just pushed from the AWS CodeDeploy workstation. Click <strong>Deploy revision</strong>.</li> 
+<li>On the <strong>Create deployment</strong> page, select the bluegreen-app application and the bluegreen-dg deployment group. Leave all the other default values in place, and then click <strong>Deploy</strong>. AWS CodeDeploy will provision the Auto Scaling group and instances, deploy the code, set up health checks, and redirect traffic to the new instances. This process will take a few minutes. When the deployment is complete, the deployment should appear, as shown here. AWS CodeDeploy skips the termination of the original instances because of the settings in the deployment group.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/codedeployresults.png" /></li> 
+</ol> 
+<p>Step 4: Review the updated environment</p> 
+<ol> 
+<li>Browse to the DNS name for the load balancer. You should see the new version of the application, as shown here. The application version has changed from 1 to 2, as expected.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/appversion2-v2.png" /></li> 
+<li>Go to the EC2 console and display the instances. You will see four instances that have been tagged by the Auto Scaling group and launch configuration. The instances with IP addresses 10.200.11.11 and 10.200.11.192 are the ones we saw before in the blue environment. The deployment process created the instances with IP addresses 10.200.11.13 and 10.200.22 that are now part of the green environment.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/instances2-v2-1.png" /></li> 
+<li>Go to the <a href="https://console.aws.amazon.com/ec2/autoscaling/home">Auto Scaling console</a>. You will see that there are now two Auto Scaling groups, each of which has two instances. The Auto Scaling group whose names begins with CodeDeploy was created during the deployment process.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/AutoScaling2-v2-1.png" /></li> 
+</ol> 
+<p>You have now successfully completed a blue/green deployment using AWS CodeDeploy.</p> 
+<p>Step 5: Cleanup</p> 
+<ol> 
+<li>Return to the session on the AWS CodeDeploy workstation.</li> 
+<li>Run the scripts/cleanup.sh script. This will remove the deployment bundle and shut down the Auto Scaling groups.</li> 
+<li>Go to the CloudFormation console, select the stack you created, and delete it.</li> 
+</ol> 
+<p><strong>Conclusion</strong></p> 
+<p>AWS CodeDeploy enables developers to automate code deployments to Amazon EC2 and on-premises instances. The blue/green deployment option enables release managers to create a new production environment and makes it easier to roll back to the previous environment if problems arise. For more information about AWS CodeDeploy, see the <a href="https://aws.amazon.com/documentation/codedeploy/">AWS CodeDeploy documentation</a>. You can get started in just a few clicks.</p> 
+<p>Enjoy life in the blue/green world!</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Use Parameter Store to Securely Access Secrets and Config Data in AWS CodeDeploy</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -965,25 +1052,6 @@ $ git clone https://git-codecommit.us-east-1.amazonaws.com/v1/repos/TestRepo_Dav
 </ol> 
 <p>For more information, see the <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-gc.html" target="_blank">AWS CodeCommit documentation</a>.</p> 
 <p>We are excited to provide this new way of connecting to AWS CodeCommit. We look forward to hearing from you about the many different tools and IDEs you will be able to use with your AWS CodeCommit repositories.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">DevOps and Continuous Delivery at re:Invent 2016 – Wrap-up</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Frank Li</span></span> | on 
-<time property="datePublished" datetime="2016-12-15T15:38:56+00:00">15 DEC 2016</time> | 
-<a href="https://aws.amazon.com/blogs/devops/devops-and-continuous-delivery-at-reinvent-2016-wrap-up/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>The AWS re:Invent 2016 conference was packed with some exciting announcements and sessions around DevOps and Continuous Delivery. We launched <a title="undefined" href="https://aws.amazon.com/codebuild/" target="_blank">AWS CodeBuild</a>, a fully managed build service that eliminates the need to provision, manage, and scale your own build servers. You now have the ability to run your <a title="undefined" href="https://aws.amazon.com/devops/continuous-integration/" target="_blank">continuous integration</a> and <a title="undefined" href="https://aws.amazon.com/devops/continuous-delivery/" target="_blank">continuous delivery</a> process entirely on AWS by plugging AWS CodeBuild into <a title="undefined" href="https://aws.amazon.com/codepipeline/" target="_blank">AWS CodePipeline</a>, which automates building, testing, and deploying code each time you push a change to your source repository. If you are interested in learning more about AWS CodeBuild, you can sign up for the webinar on January 20th <a title="undefined" href="https://publish.awswebcasts.com/content/connect/c1/7/en/events/event/private/23850344/41359021/event_registration.html?connect-session=graysonbreezmc6gg36rqdt6ehbb&amp;sco-id=54633193&amp;" target="_blank">here</a>.</p> 
-<p>The DevOps track had over 30 different breakout sessions ranging from customer stories to deep dive talks to best practices. If you weren’t able to attend the conference or missed a specific session, here is a link to the entire <a title="undefined" href="https://www.youtube.com/playlist?list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">playlist</a>.</p> 
-<p>&nbsp;</p> 
-<p>There were a number of talks that can help you get started with your own DevOps practices for rapid software delivery.&nbsp;Here are some introductory sessions to give you the proper background:<br /> DEV201: <a title="undefined" href="https://www.youtube.com/watch?v=-ddpq2VQNxo&amp;&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Accelerating Software Delivery with AWS Developer Tools</a><br /> DEV211: <a title="undefined" href="https://www.youtube.com/watch?v=y9wuBtWSbvc&amp;&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Automated DevOps and Continuous Delivery</a></p> 
-<p>After you understand the big picture, you can dive into automating your software delivery. Here are some sessions on how to deploy your applications:<br /> DEV310: <a title="undefined" href="https://www.youtube.com/watch?v=bSXRF1poE8g&amp;&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Choosing the Right Software Deployment Technique</a><br /> DEV403: <a title="undefined" href="https://www.youtube.com/watch?v=_xmYShSDDJg&amp;&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Advanced Continuous Delivery Techniques</a><br /> DEV404: <a title="undefined" href="https://www.youtube.com/watch?v=bWOGZhQWqAo&amp;&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Develop, Build, Deploy, and Manage Services and Applications</a></p> 
-<p>Finally, to maximize your DevOps efficiency, you’ll want to automate the provisioning of your infrastructure. Here are a couple sessions on how to manage your infrastructure:<br /> DEV313: <a title="undefined" href="https://www.youtube.com/watch?v=TDalsML3QqY" target="_blank">Infrastructure Continuous Delivery Using AWS CloudFormation</a><br /> DEV319: <a title="undefined" href="https://www.youtube.com/watch?v=Epx_32c3c6s&amp;list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">Automating Cloud Management &amp; Deployment</a></p> 
-<p>If you’re a Lambda developer, be sure to watch this session and read this <a title="undefined" href="http://docs.aws.amazon.com/lambda/latest/dg/deploying-lambda-apps.html" target="_blank">documentation</a> on how to practice continuous delivery for your serverless applications:<br /> SVR307: <a title="undefined" href="https://www.youtube.com/watch?v=8Zd-8GV-1mY" target="_blank">Application Lifecycle Management in a Serverless World</a></p> 
-<p>For all 30+ DevOps sessions, click <a title="undefined" href="https://www.youtube.com/playlist?list=PLhr1KZpdzukdPNwdTvedPlGp90Qbz1VVB" target="_blank">here</a>.</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

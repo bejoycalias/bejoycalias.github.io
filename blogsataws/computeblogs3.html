@@ -190,6 +190,309 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="computeblogs1.html">Page 1</a>|<a href="computeblogs2.html">Page 2</a>|<a href="computeblogs3.html">Page 3</a>|<a href="computeblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/16/Screen-Shot-2018-01-15-at-9.44.14-PM.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Announcing Go Support for AWS Lambda</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Munns</span></span> | on 
+<time property="datePublished" datetime="2018-01-15T15:56:16+00:00">15 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/application-services/amazon-api-gateway-application-services/" title="View all posts in Amazon API Gateway*"><span property="articleSection">Amazon API Gateway*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codebuild/" title="View all posts in AWS CodeBuild*"><span property="articleSection">AWS CodeBuild*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-codepipeline/" title="View all posts in AWS CodePipeline*"><span property="articleSection">AWS CodePipeline*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/developer-tools/aws-sdk-for-go/" title="View all posts in AWS SDK for Go*"><span property="articleSection">AWS SDK for Go*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/compute/announcing-go-support-for-aws-lambda/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-3608" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3608&amp;disqus_title=Announcing+Go+Support+for+AWS+Lambda&amp;disqus_url=https://aws.amazon.com/blogs/compute/announcing-go-support-for-aws-lambda/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3608');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>This post courtesy of Paul Maddox, Specialist Solutions Architect (Developer Technologies).</em></p> 
+<p><a href="https://aws.amazon.com/about-aws/whats-new/2018/01/aws-lambda-supports-go/">Today</a>, we’re excited to announce <a href="https://golang.org/">Go</a> as a supported language for <a href="https://aws.amazon.com/lambda">AWS Lambda</a>.</p> 
+<p>As someone who’s done their fair share of Go development (recent projects include <a href="https://github.com/awslabs/aws-sam-local">AWS SAM Local</a> and <a href="https://github.com/awslabs/goformation">GoFormation</a>), this is a release I’ve been looking forward to for a while. I’m going to take this opportunity to walk you through how it works by creating a Go serverless application, and deploying it to Lambda.</p> 
+<h3>Prerequisites</h3> 
+<p>This post assumes that you already have Go installed and configured on your development machine, as well as a basic understanding of Go development concepts. For more details, see&nbsp;<a href="https://golang.org/doc/install">https://golang.org/doc/install</a>.</p> 
+<b>Creating an example Serverless application with Go</b> 
+<p>Lambda functions can be triggered by variety of event sources:</p> 
+<li>Asynchronous events (such as an object being put in an <a href="https://aws.amazon.com/s3">Amazon S3</a> bucket)</li> 
+<li>Streaming events (for example, new data records on an <a href="https://aws.amazon.com/kinesis">Amazon Kinesis</a> stream)</li> 
+<li>Synchronous events (manual invocation, or HTTPS request via <a href="https://aws.amazon.com/apigateway">Amazon API Gateway</a>)</li> 
+<p>As an example, you’re going to create an application that uses an API Gateway event source to create a simple Hello World RESTful API.&nbsp;The full source code for this example application can be found on GitHub at:&nbsp;<a href="https://github.com/aws-samples/lambda-go-samples">https://github.com/aws-samples/lambda-go-samples</a>.</p> 
+<p>After the application is published, it receives a name via the HTTPS request body, and responds with&nbsp;“Hello &lt;name&gt;.” For example:</p> 
+<code class="lang-bash">$ curl -XPOST -d &quot;Paul&quot;&nbsp;&quot;https://my-awesome-api.example.com/&quot;
+Hello&nbsp;Paul</code> 
+<p>To implement this, create a Lambda handler function in Go.</p> 
+<p>Import the <a href="http://github.com/aws/aws-lambda-go">github.com/aws/aws-lambda-go</a>&nbsp;package, which includes helpful Go definitions for Lambda event sources, as well as the <strong>lambda.Start()</strong> method used to register your handler function.</p> 
+<p>Start by creating a new project directory in your <strong>$GOPATH</strong>, and then creating a <strong>main.go</strong> file that contains your Lambda handler function:</p> 
+<code class="lang-go">package main
+import (
+&quot;errors&quot;
+&quot;log&quot;
+&quot;github.com/aws/aws-lambda-go/events&quot;
+&quot;github.com/aws/aws-lambda-go/lambda&quot;
+)
+var (
+// ErrNameNotProvided is thrown when a name is not provided
+ErrNameNotProvided = errors.New(&quot;no name was provided in the HTTP body&quot;)
+)
+// Handler is your Lambda function handler
+// It uses Amazon API Gateway request/responses provided by the aws-lambda-go/events package,
+// However you could use other event sources (S3, Kinesis etc), or JSON-decoded primitive types such as 'string'.
+func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+// stdout and stderr are sent to AWS CloudWatch Logs
+log.Printf(&quot;Processing Lambda request %s\n&quot;, request.RequestContext.RequestID)
+// If no name is provided in the HTTP request body, throw an error
+if len(request.Body) &lt; 1 {
+return events.APIGatewayProxyResponse{}, ErrNameNotProvided
+}
+return events.APIGatewayProxyResponse{
+Body: &nbsp; &nbsp; &nbsp; &quot;Hello &quot; + request.Body,
+StatusCode: 200,
+}, nil
+}
+func main() {
+lambda.Start(Handler)
+}
+</code> 
+<p>The <strong>lambda.Start()</strong> method takes a handler, and talks to an internal Lambda endpoint to pass Invoke requests to the handler. If a&nbsp;handler does not match one of the supported types, the Lambda package responds to new invocations served by an&nbsp;internal endpoint with an error message such as:</p> 
+<code class="lang-bash">json: cannot unmarshal object into Go value of type int32: UnmarshalTypeError</code> 
+<p>The&nbsp;<strong>lambda.Start()</strong>&nbsp;method blocks, and does not return after being called, meaning that it’s suitable to run in your Go application’s main entry point.</p> 
+<b>More detail on AWS Lambda function handlers with Go</b> 
+<p>A handler function passed to <strong>lambda.Start()</strong> must follow these rules:</p> 
+<li>It must be a function.</li> 
+<li>The function may take between 0 and 2 arguments. 
+<li>If there are two arguments, the first argument must implement <strong>context.Context</strong>.</li> 
+</ul> </li> 
+<li>The function may return between 0 and 2 values. 
+<li>If there is one return value, it must implement&nbsp;<strong>error</strong>.</li> 
+<li>If there are two return values, the second value must implement&nbsp;<strong>error</strong>.</li> 
+</ul> </li> 
+<p>The <a href="http://github.com/aws/aws-lambda-go">github.com/aws/aws-lambda-go</a>&nbsp;library automatically unmarshals the Lambda event JSON to the argument type used by your handler function. To do this, it uses Go’s standard <a href="https://golang.org/pkg/encoding/json/#Unmarshal">encoding/json</a>&nbsp;package, so your handler function can use any of the standard types supported for unmarshalling (or custom types containing those):</p> 
+<li>bool, for JSON booleans</li> 
+<li>float64, for JSON numbers</li> 
+<li>string, for JSON strings</li> 
+<li>[]interface{}, for JSON arrays</li> 
+<li>map[string]interface{}, for JSON objects</li> 
+<li>nil, for JSON null</li> 
+<p>For example, your Lambda function received a JSON event payload like the following:</p> 
+<code class="lang-json">{
+&quot;id&quot;:&nbsp;12345,
+&quot;value&quot;:&nbsp;&quot;some-value&quot;
+}</code> 
+<p>It should respond with a JSON response that looks like the following:</p> 
+<code class="lang-json">{
+&quot;message&quot;:&nbsp;&quot;processed request ID 12345&quot;,
+&quot;ok&quot;:&nbsp;true
+}</code> 
+<p>You could use a Lambda handler function that looks like the following:</p> 
+<code class="lang-go">package&nbsp;main
+import&nbsp;(
+&quot;fmt&quot;
+&quot;github.com/aws/aws-lambda-go/lambda&quot;
+)
+type Request struct {
+ID &nbsp; &nbsp; &nbsp; &nbsp;float64 `json:&quot;id&quot;`
+Value &nbsp; &nbsp; string &nbsp;`json:&quot;value&quot;`
+}
+type Response struct {
+Message string `json:&quot;message&quot;`
+Ok &nbsp; &nbsp; &nbsp;bool &nbsp; `json:&quot;ok&quot;`
+}
+func Handler(request Request) (Response, error) {
+return Response{
+Message: fmt.Sprintf(&quot;Processed request ID %f&quot;, request.ID),
+Ok: &nbsp; &nbsp; &nbsp;true,
+}, nil
+}
+func main() {
+lambda.Start(Handler)
+}</code> 
+<p>For convenience, the <a href="http://github.com/aws/aws-lambda-go">github.com/aws/aws-lambda-go</a>&nbsp;package provides event sources that you can also use in your handler function arguments. It also provides return values for common sources such as S3, Kinesis, Cognito, and the API Gateway event source and response objects that you’re using in the application example.</p> 
+<b>Adding unit tests</b> 
+<p>To test that the Lambda handler works as expected, create a main_test.go file containing some basic unit tests.</p> 
+<code class="lang-go">package main_test
+import (
+&quot;testing&quot;
+main &quot;github.com/aws-samples/lambda-go-samples&quot;
+&quot;github.com/aws/aws-lambda-go/events&quot;
+&quot;github.com/stretchr/testify/assert&quot;
+)
+func TestHandler(t *testing.T) {
+tests := []struct {
+request events.APIGatewayProxyRequest
+expect &nbsp;string
+err &nbsp; &nbsp; error
+}{
+{
+// Test that the handler responds with the correct response
+// when a valid name is provided in the HTTP body
+request: events.APIGatewayProxyRequest{Body: &quot;Paul&quot;},
+expect: &nbsp;&quot;Hello Paul&quot;,
+err: &nbsp; &nbsp; nil,
+},
+{
+// Test that the handler responds ErrNameNotProvided
+// when no name is provided in the HTTP body
+request: events.APIGatewayProxyRequest{Body: &quot;&quot;},
+expect: &nbsp;&quot;&quot;,
+err: &nbsp; &nbsp; main.ErrNameNotProvided,
+},
+}
+for _, test := range tests {
+response, err := main.Handler(test.request) 
+assert.IsType(t, test.err, err)
+assert.Equal(t, test.expect, response.Body)
+}
+}
+</code> 
+<h3>Run your tests:</h3> 
+<code class="lang-base">$ go test
+PASS
+ok &nbsp; &nbsp; &nbsp;github.com/awslabs/lambda-go-example &nbsp; &nbsp;0.041s</code> 
+<p><em>Note:&nbsp;To make the unit tests more readable, this example uses a third-party library (https://github.com/stretchr/testify). This allows you to describe the test cases in a more natural format, making them more maintainable for other people who may be working in the code base.</em></p> 
+<b>Build and deploy</b> 
+<p>As Go is a compiled language, build the application and create a <a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-go-how-to-create-deployment-package.html">Lambda deployment package</a>. To do this, build a binary that runs on Linux, and zip it up into a deployment package.</p> 
+<p>To do this, we need to build a binary that will run on Linux, and ZIP it up into a deployment package.</p> 
+<code class="lang-bash">$ GOOS=linux go build -o main
+$ zip deployment.zip main</code> 
+<p>The binary doesn’t need to be called main, but the name must match the Handler configuration property of the deployed Lambda function.</p> 
+<p>The deployment package is now ready to be deployed to Lambda.&nbsp;One deployment method is to use the <a href="https://aws.amazon.com/cli/">AWS CLI</a>. Provide a valid <a href="https://docs.aws.amazon.com/lambda/latest/dg/intro-permission-model.html#lambda-intro-execution-role">Lambda execution role</a> for&nbsp; <strong>–role</strong>.</p> 
+<code class="lang-bash">$&nbsp;aws lambda create-function \
+--region us-west-1 \
+--function-name HelloFunction&nbsp;\
+--zip-file fileb://./deployment.zip \
+--runtime go1.x \
+--tracing-config Mode=Active \
+--role arn:aws:iam::&lt;account-id&gt;:role/&lt;role&gt;&nbsp;\
+--handler main</code> 
+<p>From here, configure the invoking service for your function, in this example API Gateway, to call this function and provide the HTTPS frontend for your API. For more information about how to do this in the API Gateway console, see <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-create-api-as-simple-proxy-for-lambda.html#api-gateway-create-api-as-simple-proxy-for-lambda-build">Create an API with Lambda Proxy Integration</a>. You could also do this in the Lambda console by assigning an API Gateway trigger.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/lambda-console1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/lambda-console1.png" /></a></p> 
+<p>Then, configure the trigger:</p> 
+<li><strong>API name</strong>: lambda-go</li> 
+<li><strong>Deployment stage</strong>: prod</li> 
+<li><strong>Security</strong>: open</li> 
+<p>This results in an API Gateway endpoint that you can test.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/lambda-console-gateway.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/lambda-console-gateway.png" /></a></p> 
+<p>Now, you can use cURL to test your API:</p> 
+<code class="lang-bash">$ curl -XPOST -d &quot;Paul&quot;&nbsp;https://u7fe6p3v64.execute-api.us-east-1.amazonaws.com/prod/main
+Hello&nbsp;Paul</code> 
+<p>Doing this manually is fine and works for testing and exploration. If you were doing this for real, you’d want to automate this process further. The next section shows how to add a CI/CD pipeline to this process to build, test, and deploy your serverless application as you change your code.</p> 
+<b>Automating tests and deployments</b> 
+<p>Next, configure <a href="https://aws.amazon.com/codepipeline">AWS CodePipeline</a> and <a href="https://aws.amazon.com/codebuild">AWS CodeBuild</a> to build your application automatically and run all of the tests. If it passes, deploy your application to Lambda.</p> 
+<p>The first thing you need to do is create an <a href="https://aws.amazon.com/about-aws/whats-new/2016/11/introducing-the-aws-serverless-application-model/">AWS Serverless Application Model (AWS SAM)</a> template in your source repository. SAM provides an easy way to deploy Serverless resources, such as Lambda functions, APIs, and other event sources, as well as all of the necessary IAM permissions, etc. You can also include any valid <a href="https://aws.amazon.com/cloudformation">AWS CloudFormation</a> resources within your SAM template, such as a Kinesis stream, or an&nbsp;<a href="https://aws.amazon.com/dynamodb">Amazon DynamoDB</a> table. They are deployed alongside your Serverless application.</p> 
+<p>Create a file called <strong>template.yml</strong> in your application repository with the following contents:</p> 
+<code class="lang-yaml">AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Resources:
+HelloFunction:
+Type: AWS::Serverless::Function
+Properties:
+Handler:&nbsp;main
+Runtime: go1.x
+Tracing: Active
+Events:
+GetEvent:
+Type: Api
+Properties:
+Path: /
+Method: post</code> 
+<p>The above template instructs SAM to deploy a Lambda function (called <strong>HelloFunction</strong> in this case), with the Go runtime (<strong>go1.x</strong>), and also an API configured to pass HTTP POST requests to your Lambda function. The Handler property defines which binary in the deployment package needs to be executed (<strong>main</strong> in this case).</p> 
+<p>You’re going to use CodeBuild to run your tests, build your Go application, and package it. You can tell CodeBuild how to do all of this by creating a <strong>buildspec.yml</strong> file in your repository containing the following:</p> 
+<code class="lang-yaml">
+version: 0.2
+env:
+variables:
+# This S3 bucket is used to store the packaged Lambda deployment bundle.
+# Make sure to provide a valid S3 bucket name (it must exist already).
+# The CodeBuild IAM role must allow write access to it.
+S3_BUCKET: &quot;your-s3-bucket&quot;
+PACKAGE: &quot;github.com/aws-samples/lambda-go-samples&quot;
+phases:
+install:
+commands:
+# AWS Codebuild Go images use /go for the $GOPATH so copy the
+# application source code into that directory structure.
+- mkdir -p &quot;/go/src/$(dirname ${PACKAGE})&quot;
+- ln -s &quot;${CODEBUILD_SRC_DIR}&quot; &quot;/go/src/${PACKAGE}&quot;
+# Print all environment variables (handy for AWS CodeBuild logs)
+- env
+# Install golint
+- go get -u github.com/golang/lint/golint
+pre_build:
+commands:
+# Make sure we're in the project directory within our GOPATH
+- cd &quot;/go/src/${PACKAGE}&quot;
+# Fetch all dependencies
+- go get -t ./...
+# Ensure that the code passes all lint tests
+- golint -set_exit_status
+# Check for common Go problems with 'go vet'
+-&nbsp;go vet .
+# Run all tests included with the application
+- go test .
+build:
+commands:
+# Build the go application
+- go build -o main
+# Package the application with AWS SAM
+- aws cloudformation package --template-file template.yml --s3-bucket ${S3_BUCKET} --output-template-file packaged.yml
+artifacts:
+files:
+- packaged.yml</code> 
+<p>This buildspec file does the following:</p> 
+<li>Sets up your GOPATH, ready for building</li> 
+<li>Runs <a href="https://github.com/golang/lint">golint</a>&nbsp;to make sure that any committed code matches the Go style and formatting specification</li> 
+<li>Runs any unit tests present (via <strong>go test</strong>)</li> 
+<li>Builds your application binary</li> 
+<li>Packages the binary into a&nbsp;<a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-go-how-to-create-deployment-package.html">Lambda deployment package</a>&nbsp;and uploads it to S3</li> 
+<p>For more details about buildspec files, see the <a href="https://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html">Build Specification Reference</a> for AWS CodeBuild.</p> 
+<p>Your project directory should now contain the following files:</p> 
+<code>$ tree
+.
+├── buildspec.yml &nbsp; &nbsp;(AWS CodeBuild&nbsp;configuration file)
+├── main.go &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(Our&nbsp;application)
+├── main_test.go&nbsp;&nbsp; &nbsp;&nbsp;(Unit&nbsp;tests)
+└── template.yml &nbsp; &nbsp; (AWS SAM template)
+0 directories, 4 files</code> 
+<p>You’re now ready to set up your automated pipeline with CodePipeline.</p> 
+<h3>Create a new pipeline</h3> 
+<p>Get started by navigating to the <a href="https://console.aws.amazon.com/codepipeline/">CodePipeline</a> console. You need to give your new pipeline a name, such as HelloService.</p> 
+<p>Next, select the source repository in which your application code is located. CodePipeline supports either AWS CodeCommit, GitHub.com, or S3. To use the example GitHub.com repository mentioned earlier in this post, <a href="https://help.github.com/articles/fork-a-repo/">fork</a> it into your own GitHub.com account or create a new CodeCommit repository and <a href="https://docs.aws.amazon.com/codecommit/latest/userguide/how-to-migrate-repository-existing.html">clone</a> it into there. Do this first before selecting a source location.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline1.png" /></a></p> 
+<p>Tell CodePipeline to use CodeBuild to test, build, and package your application using the buildspec.yml file created earlier:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-build.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-build.png" /></a></p> 
+<p><strong>Important:</strong>&nbsp;CodeBuild needs read/write access to the S3 bucket referenced in the buildspec.yml file that you wrote. It places the packaged Lambda deployment package into S3 after the tests and build are completed. Make sure that the CodeBuild service role created or provided has the correct IAM permissions. For more information, see <a href="https://aws.amazon.com/blogs/security/writing-iam-policies-how-to-grant-access-to-an-amazon-s3-bucket/">Writing IAM Policies: How to grant access to an Amazon S3 bucket</a>. If you don’t do this, CodeBuild fails.</p> 
+<p>Finally, set up the deployment stage of your pipeline. Select <strong>AWS CloudFormation</strong> as the deployment method, and the <strong>Create or replace a change set</strong>&nbsp;mode (as required by SAM). To deploy multiple environments (for example, staging, production), add additional deployment stages to your pipeline after it has been created.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-deploy.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-deploy.png" /></a></p> 
+<p>After being created, your pipeline takes a few minutes to initialize, and then automatically triggers.&nbsp;You can see the latest commit in your version control system make progress through the build and deploy stages of your pipeline.</p> 
+<p>You do not need to configure anything further to automatically run your pipeline on new version control commits. It already automatically triggers, builds, and deploys each time.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-created.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-created.png" /></a></p> 
+<p>Make one final change to the pipeline, to configure the deployment stage to execute the CloudFormation changeset that it creates. To make this change, choose the <strong>Edit</strong> button on your pipeline, choose the pencil icon on the staging deployment stage, and add a new action:</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-addaction.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/codepipeline-addaction.png" /></a></p> 
+<p>After the action is added, save your pipeline. You can test it by making a small change to your Lambda function, and then committing it back to version control. You can see your pipeline trigger, and the changes get deployed to your staging environment.</p> 
+<h3>See it in Action</h3> 
+<p>After a successful run of the pipeline has completed, you can navigate to the CloudFormation console to see the deployment details.</p> 
+<p>In your case, you have a CloudFormation stack deployed. If you look at the <strong>Resources</strong> tab, you see a table of the AWS resources that have been deployed.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/cloudformation-resources.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/cloudformation-resources.png" /></a></p> 
+<p>Choose the <strong>ServerlessRestApi</strong> item link to navigate to the API Gateway console and view the details of your deployed API, including the URL,</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/api-gw-stage-edit.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/api-gw-stage-edit.png" /></a></p> 
+<p>You can use cURL to test that your Serverless application is functioning as expected:</p> 
+<code>$ curl -XPOST -d &quot;Paul&quot;&nbsp;https://y5fjgtq6dj.execute-api.us-west-1.amazonaws.com/Stage
+Hello&nbsp;Paul</code> 
+<b>One more thing!</b> 
+<p>We are also excited to announce that <a href="https://aws.amazon.com/xray/">AWS X-Ray</a>&nbsp;can be enabled in your Lambda runtime to analyze and debug your Go functions written for Lambda. The&nbsp;<a href="https://docs.aws.amazon.com/xray/latest/devguide/xray-sdk-go.html">X-Ray SDK for Go</a>&nbsp;works with the Go context of your Lambda function, providing features such as&nbsp;AWS SDK retry visibility&nbsp;and one-line error capture.<br /> <a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/xray-go.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/15/xray-go.png">annotations and metadata</a>&nbsp;to capture additional information in X-Ray about your function invocations. Moreover, the SDK supports the net/http client package, enabling you to trace requests made to&nbsp;endpoints even if they are not X-Ray enabled.</p> 
+<b>Wrapping it up!</b> 
+<p>Support for Go has been a much-requested feature in Lambda and we are excited to be able to bring it to you. In this post, you created a basic Go-based API and then went on to create a full continuous integration and delivery pipeline that tests, builds, and deploys your application each time you make a change.</p> 
+<p>You can also get started with AWS Lambda Go support through <a href="https://aws.amazon.com/codestar">AWS CodeStar</a>. AWS CodeStar lets you quickly launch development projects that include a sample application, source control and release automation. With this announcement, AWS CodeStar introduced new project templates for Go running on AWS Lambda. Select one of the <a href="https://console.aws.amazon.com/codestar/home?region=us-east-1#/quickstart">CodeStar Go project templates</a> to get started. CodeStar makes it easy to begin editing your Go project code in <a href="https://aws.amazon.com/cloud9">AWS Cloud9</a>, an online IDE, with just a few clicks.</p> 
+<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/16/Screen-Shot-2018-01-15-at-9.44.14-PM.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2018/01/16/Screen-Shot-2018-01-15-at-9.44.14-PM-300x169.png" /></a></p> 
+<p>Excited about Go in Lambda or have questions? Let us know in the comments here, in the <a href="https://forums.aws.amazon.com/forum.jspa?forumID=186">AWS Forums for Lambda</a>, or find us on Twitter at <a href="https://twitter.com/awscloud">@awscloud</a>.</p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-3608');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/12/22/Social_png.png" /> 
 <b class="lb-b blog-post-title" property="name headline">Set Up a Continuous Delivery Pipeline for Containers Using AWS CodePipeline and Amazon ECS</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1178,132 +1481,6 @@ AWS.Blog.commenting('#aws-comment-trigger-3387');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-3387');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Simplify Your Pub/Sub Messaging with Amazon SNS Message Filtering</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Christie Gifrin</span></span> | on 
-<time property="datePublished" datetime="2017-11-22T11:56:01+00:00">22 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-notification-service-sns/" title="View all posts in Amazon Simple Notification Service (SNS)*"><span property="articleSection">Amazon Simple Notification Service (SNS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/messaging/amazon-simple-queue-service-sqs/" title="View all posts in Amazon Simple Queue Service (SQS)*"><span property="articleSection">Amazon Simple Queue Service (SQS)*</span></a>, <a href="https://aws.amazon.com/blogs/compute/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/compute/simplify-pubsub-messaging-with-amazon-sns-message-filtering/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-3362" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-compute&amp;disqus_identifier=3362&amp;disqus_title=Simplify+Your+Pub%2FSub+Messaging+with+Amazon+SNS+Message+Filtering&amp;disqus_url=https://aws.amazon.com/blogs/compute/simplify-pubsub-messaging-with-amazon-sns-message-filtering/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3362');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>Contributed by:&nbsp;Stephen Liedig, Senior Solutions Architect, ANZ Public Sector, and&nbsp;Otavio Ferreira, Manager, Amazon Simple Notification Service</em></p> 
-<p>Want to make your cloud-native applications scalable, fault-tolerant, and highly available? Recently, we wrote a couple of posts about using AWS messaging services <a href="https://aws.amazon.com/sqs/">Amazon SQS</a>&nbsp;and&nbsp;<a href="https://aws.amazon.com/sns/">Amazon SNS</a> to address messaging patterns for loosely coupled communication between highly cohesive components. For more information, see:</p> 
-<li><a href="https://aws.amazon.com/blogs/compute/building-loosely-coupled-scalable-c-applications-with-amazon-sqs-and-amazon-sns/">Building Loosely Coupled, Scalable, C# Applications with Amazon SQS and Amazon SNS</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/messaging-fanout-pattern-for-serverless-architectures-using-amazon-sns/">Messaging Fanout Pattern for Serverless Architectures Using Amazon SNS</a></li> 
-<li><a href="https://aws.amazon.com/blogs/compute/event-driven-computing-with-amazon-sns-compute-storage-database-and-networking-services/">Event-Driven Computing with Amazon SNS and AWS Compute, Storage, Database, and Networking Services</a></li> 
-<p>Today, AWS is releasing a new message filtering functionality for SNS.&nbsp;This new feature simplifies the pub/sub messaging architecture by offloading the filtering logic from subscribers, as well as the routing logic from publishers, to SNS.</p> 
-<p>In this post, we walk you through the new message filtering feature, and how to use it to clean up unnecessary logic in your components, and reduce the number of topics in your architecture.<span id="more-3362"></span></p> 
-<b>Topic-based filtering</b> 
-<p>SNS is a fully managed <a href="https://aws.amazon.com/pub-sub-messaging/">pub/sub messaging</a> service that lets you fan out messages to large numbers of recipients at one time, using topics. SNS topics support a variety of subscription types, allowing you to push messages to SQS&nbsp;queues, <a href="https://aws.amazon.com/lambda">AWS Lambda</a> functions, HTTP endpoints, email addresses, and mobile devices (SMS, push).</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_1.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_1.png" /></a></p> 
-<p>In the above scenario, every subscriber receives the same message published to the topic, allowing them to process the message independently. For many use cases, this is sufficient.</p> 
-<p>However, in more complex scenarios, the subscriber may only be interested in a subset of the messages being published. The onus, in that case, is on each subscriber to ensure that they are filtering and only processing those messages in which they are actually interested.</p> 
-<p>To avoid this additional filtering logic on each subscriber, many organizations have adopted a practice in which the publisher is now responsible for routing different types of messages to different topics. However, as depicted in the following diagram, this topic-based filtering practice can lead to overly complicated publishers, topic proliferation, and additional overhead in provisioning and&nbsp;managing your SNS topics.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_2.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_2.png" /></a></p> 
-<b>Attribute-based filtering</b> 
-<p>To leverage the new message filtering capability, SNS requires the publisher to set message attributes and each subscriber to set a subscription attribute (a&nbsp;subscription filter policy). When the publisher posts a new message to the topic, SNS attempts to match the incoming message attributes to the filter policy set on each subscription, to determine whether a particular subscriber is interested in that incoming event. If there is a match, SNS then pushes the message to the subscriber in question. The new attribute-based message filtering approach is depicted in the following diagram.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_3.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_3.png" /></a></p> 
-<b>Message filtering in action</b> 
-<p>Look at how message filtering works. The following example is based on a sports merchandise ecommerce website, which publishes a variety of events to an SNS topic. The events range from checkout events (triggered when orders are placed or canceled) to buyers’ navigation events (triggered when product pages are visited).&nbsp;The code below is based on the existing <a href="https://aws.amazon.com/tools/#sdk">AWS SDK for Python</a>.</p> 
-<p>First, create the single SNS topic to which all shopping events are published.</p> 
-<code class="lang-python">topic_arn = sns.create_topic(
-Name='ShoppingEvents'
-)['TopicArn']</code> 
-<p>Next, subscribe the endpoints that will be listening to those shopping events. The first subscriber is an SQS queue that is processed by a payment gateway, while the second subscriber is a Lambda function that indexes the buyer’s shopping interests against a search engine.</p> 
-<p>A subscription filter policy is set as a subscription attribute, by the subscription owner, as a simple JSON object, containing a set of key-value pairs. This object defines the kind of event in which the subscriber is interested.</p> 
-<code class="lang-python">payment_gateway_subscription_arn = sns.subscribe(
-TopicArn = topic_arn,
-Protocol = 'sqs',
-Endpoint = 'arn:aws:sqs:ap-southeast-2:123456789012:PaymentQueue'
-)['SubscriptionArn']
-sns.set_subscription_attributes(
-SubscriptionArn = payment_gateway_subscription_arn, 
-AttributeName = 'FilterPolicy', 
-AttributeValue = '{&quot;event_type&quot;: [&quot;order_placed&quot;, &quot;order_cancelled&quot;]}'
-)
-search_engine_subscription_arn = sns.subscribe(
-TopicArn = topic_arn,
-Protocol = 'lambda',
-Endpoint = 'arn:aws:lambda:ap-southeast-2:123456789012:function:SearchIndex'
-)['SubscriptionArn']
-sns.set_subscription_attributes(
-SubscriptionArn = search_engine_subscription_arn,
-AttributeName ='FilterPolicy', 
-AttributeValue ='{&quot;event_type&quot;: [&quot;product_page_visited&quot;]}'
-)</code> 
-<p>You’re now ready to start publishing events with attributes!</p> 
-<p>Message attributes allow you to provide structured metadata items (such as time stamps, geospatial data, event type, signatures, and identifiers) about the message. Message attributes are optional and separate from, but sent along with, the message body. You can include up to 10 message attributes with your message.</p> 
-<p>The first message published in this example is related to an order that has been placed on the ecommerce website. The message attribute “<strong>event_type</strong>” with the value “<strong>order_placed</strong>” matches only the filter policy associated with the payment gateway subscription. Therefore, only the SQS queue subscribed to the SNS topic is notified about this checkout event.</p> 
-<code class="lang-python">message = '{&quot;order&quot;: {&quot;id&quot;: 5678, &quot;status&quot;: &quot;confirmed&quot;, &quot;items&quot;: [' \
-'{&quot;code&quot;: &quot;P-9012&quot;, &quot;product&quot;: &quot;Santos FC Jersey&quot;, &quot;units&quot;: 1},' \
-'{&quot;code&quot;: &quot;P-3156&quot;, &quot;product&quot;: &quot;Soccer Ball&quot;, &quot;units&quot;: 2}]},' \
-' &quot;buyer&quot;: {&quot;id&quot;: 4454}}'
-sns.publish(
-TopicArn = topic_arn,
-Subject = 'Order Placed #5678',
-Message = message,
-MessageAttributes = {
-'event_type': {
-'DataType': 'String',
-'StringValue': 'order_placed'
-}
-}
-)</code> 
-<p>The second message published is related to a buyer’s navigation activity on the ecommerce website. The message attribute “<strong>event_type</strong>” with the value “<strong>product_page_visited</strong>” matches only the filter policy associated with the search engine subscription. Therefore, only the Lambda function subscribed to the SNS topic is notified about this navigation event.</p> 
-<code class="lang-python">message = '{&quot;product&quot;: {&quot;id&quot;: 1251, &quot;status&quot;: &quot;in_stock&quot;},' \
-' &quot;buyer&quot;: {&quot;id&quot;: 4454}}'
-sns.publish(
-TopicArn = topic_arn,
-Subject = 'Product Visited #1251',
-Message = message,
-MessageAttributes = {
-'event_type': {
-'DataType': 'String',
-'StringValue': 'product_page_visited'
-}
-}
-)</code> 
-<p>The following diagram represents the architecture for this ecommerce website, with the message filtering mechanism in action. As described earlier, checkout events are pushed only to the SQS queue, whereas navigation events are pushed to the Lambda function only.</p> 
-<p><a href="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_4.png"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/1b6453892473a467d07372d45eb05abc2031647a/2017/11/20/introducing_sns_message_filtering_image_4.png" /></a></p> 
-<b>Message filtering criteria</b> 
-<p>It is important to remember the following things about subscription filter policy matching:</p> 
-<li>A subscription filter policy either matches an incoming message, or it doesn’t. It’s Boolean logic.</li> 
-<li>For a filter policy to match a message, the message must contain all the attribute keys listed in the policy.</li> 
-<li>Attributes of the message not mentioned in the filtering policy are ignored.</li> 
-<li>The value of each key in the filter policy is an array containing one or more values. The policy matches if any of the values in the array match the value in the corresponding message attribute.</li> 
-<li>If the value in the message attribute is an array, then the filter policy matches if the intersection of the policy array and the message array is non-empty.</li> 
-<li>The matching is exact (character-by-character), without case-folding or any other string normalization.</li> 
-<li>The values being matched follow JSON rules: Strings enclosed in quotes, numbers, and the unquoted keywords true, false, and null.</li> 
-<li>Number matching is at the string representation level. Example: 300, 300.0, and 3.0e2 aren’t considered equal.</li> 
-<b>When should I use message filtering?</b> 
-<p>We recommend using message filtering and grouping subscribers into a single topic only when all of the following is true:</p> 
-<li>Subscribers are semantically related to each other</li> 
-<li>Subscribers consume similar types of events</li> 
-<li>Subscribers are supposed to share the same access permissions on the topic</li> 
-<p>Technically, you could get away with creating a single topic for your entire domain to handle all event processing, even unrelated use cases, but this wouldn’t be recommended. This option could result in an unnecessarily large topic, which could potentially impact your message delivery latency. Also, you would lose the ability to implement fine-grained access control on your topics.</p> 
-<p>Finally, if you already use SNS, but had to add filtering logic in your subscribers or routing logic in your publishers (topic-based filtering), you can now immediately benefit from message filtering. This new approach lets you clean up any unnecessary logic in your components, and reduce the number of topics in your architecture.</p> 
-<b>Summary</b> 
-<p>As we’ve shown in this post, the new message filtering capability in Amazon SNS gives you a great amount of flexibility in your messaging pattern. It allows you to really simplify your pub/sub infrastructure requirements.</p> 
-<p>Message filtering can be implemented easily with existing <a href="https://aws.amazon.com/tools/#sdk">AWS SDKs</a>&nbsp;by applying message and subscription attributes across all SNS supported protocols (Amazon SQS, AWS Lambda, HTTP, SMS, email, and mobile push). It’s now available in all AWS commercial regions, at no extra charge.</p> 
-<p>Here’s a few ideas for next steps to get you started:</p> 
-<li>Add filter policies to your subscriptions on the <a href="https://console.aws.amazon.com/sns/">SNS console</a>,</li> 
-<li>Try the 10-minute tutorial, <a href="https://aws.amazon.com/getting-started/tutorials/filter-messages-published-to-topics/">Filter Messages Published to Topics</a></li> 
-<li>Read the <a href="http://docs.aws.amazon.com/sns/latest/dg/message-filtering.html">message filtering section of the SNS documentation</a></li> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-3362');
 });
 </script> 
 </article> 

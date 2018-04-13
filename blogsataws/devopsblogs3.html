@@ -190,6 +190,238 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Build Serverless AWS CodeCommit Workflows using Amazon CloudWatch Events and JGit</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
+<time property="datePublished" datetime="2017-08-03T13:25:33+00:00">03 AUG 2017</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codecommit/" title="View all posts in AWS CodeCommit*"><span property="articleSection">AWS CodeCommit*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/build-serverless-aws-codecommit-workflows-using-amazon-cloudwatch-events-and-jgit/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><img src="https://s3.amazonaws.com/chrisb/samdengler.jpeg" /> Sam Dengler is a Solutions Architect at Amazon Web Services</p> 
+<b>Summary</b> 
+<p><a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/WhatIsCloudWatchEvents.html">Amazon CloudWatch Events</a> now supports <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/welcome.html">AWS CodeCommit</a> <a href="http://docs.aws.amazon.com/AmazonCloudWatch/latest/events/EventTypes.html#codecommit_event_type">Repository State Changes</a> event types for activities like pushing new code to a repository. Using these new event types, customers can build Amazon CloudWatch Event rules to match AWS CodeCommit events and route them to one or more targets like an Amazon SNS Topic, AWS Step Functions state machine, or AWS Lambda function to trigger automated workflows to process repository changes.</p> 
+<p>In this blog, I will provide three examples for using AWS Lambda and JGit to build cost-effective serverless solutions to securely process AWS CodeCommit repository state changes:</p> 
+<li>Replicate CodeCommit Repository</li> 
+<li>Enforce Git Commit Message Policy</li> 
+<li>Backup Git Archive to Amazon S3</li> 
+<p>Source code and Amazon CloudFormation templates for the examples are located in the following GitHub repository: <a href="https://github.com/awslabs/serverless-codecommit-examples">https://github.com/awslabs/serverless-codecommit-examples</a>.</p> 
+<b>AWS CodeCommit CloudWatch Events</b> 
+<p>Amazon CloudWatch Events delivers a near real-time stream of system events that describe changes in AWS resources. Below is an example Amazon CloudWatch Event for one of the new AWS CodeCommit Repository State Changes event types, referenceUpdated. Any change to the repository will trigger a referenceUpdated event, however triggers for particular branches can be filtered using the referenceType and referenceName fields in the event details.</p> 
+<code class="lang-json">{
+&quot;version&quot;: &quot;0&quot;,
+&quot;id&quot;: &quot;01234567-0123-0123-0123-012345678901&quot;,
+&quot;detail-type&quot;: &quot;CodeCommit Repository State Change&quot;,
+&quot;source&quot;: &quot;aws.codecommit&quot;,
+&quot;account&quot;: &quot;123456789012&quot;,
+&quot;time&quot;: &quot;2017-06-12T10:23:43Z&quot;,
+&quot;region&quot;: &quot;us-east-1&quot;,
+&quot;resources&quot;: [
+&quot;arn:aws:codecommit:us-east-1:123456789012:myRepo&quot;
+],
+&quot;detail&quot;: {
+&quot;event&quot;: &quot;referenceUpdated&quot;,
+&quot;repositoryName&quot;: &quot;myRepo&quot;,
+&quot;referenceType&quot;: &quot;head&quot;,
+&quot;referenceName&quot;: &quot;myBranch&quot;,
+&quot;commitId&quot;: &quot;3e5983EXAMPLE&quot;,
+&quot;oldCommitId&quot;: &quot;1a7813EXAMPLE&quot;
+}
+}</code> 
+<p>We will use the Amazon CloudWatch Event’s fields to create a pattern to match the events for which we will trigger a target, in this case an AWS Lambda function.</p> 
+<b>Accessing AWS CodeCommit using HTTPS URLs</b> 
+<p>The HTTPS URL method for accessing an AWS CodeCommit repository is particularly suited to a serverless solution because an Amazon Lambda execution container already provides temporary AWS IAM key credentials associated to the function’s AWS IAM Execution Role. The function’s Execution Role is associated to one or more AWS IAM Policies, in which you specify permissions allowing the function to access AWS resources. For each function, we will limit the AWS IAM polices to only the AWS CodeCommit repository, Amazon S3 bucket, or Amazon SNS topics, following the AWS best practice to <a href="http://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege">grant least privileged access</a>.</p> 
+<p>For example, the AWS IAM Policy snippet below restricts the Amazon Lambda function to pull from the source repository and push to the target repository.</p> 
+<code class="lang-yaml">Policies:
+- Version: '2012-10-17'
+&nbsp;   Statement:
+&nbsp; &nbsp; &nbsp; - Effect: Allow
+&nbsp; &nbsp; &nbsp; &nbsp; Resource: !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepositoryName}'
+&nbsp; &nbsp; &nbsp; &nbsp; Action:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GetRepository'
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GitPull'
+&nbsp; &nbsp; &nbsp; - Effect: Allow
+&nbsp; &nbsp; &nbsp; &nbsp; Resource: !Sub 'arn:aws:codecommit:${TargetRepositoryRegion}:${AWS::AccountId}:${TargetRepositoryName}'
+&nbsp; &nbsp; &nbsp; &nbsp; Action:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GetRepository'
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - 'codecommit:GitPush'</code> 
+<p>When using the HTTPS URL access method, a credential helper is configured for the Git client, which executes the “aws codecommit credential-helper” command to provide a SigV4 compatible user name and password using AWS IAM credentials (<a href="http://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html#setting-up-https-unixes-credential-helper">see more</a>). When using JGit as the Git client, a CredentialsProvider can be supplied to Git commands to achieve the same result.</p> 
+<p>The Spring Cloud Config project provides an implementation of the JGit CredentialsProvider for AwsCodeCommit (<a href="https://github.com/spring-cloud/spring-cloud-config/blob/dd08a3bbf4f0ee0bbde0107f63677f180ac786cc/spring-cloud-config-server/src/main/java/org/springframework/cloud/config/server/support/AwsCodeCommitCredentialProvider.java">source</a>), which conveniently uses the AWS DefaultAWSCredentialsProviderChain to discover AWS credentials in the standard priority order supported by Amazon Lambda. The <a href="https://github.com/spring-cloud/spring-cloud-config/blob/dd08a3bbf4f0ee0bbde0107f63677f180ac786cc/spring-cloud-config-server/src/main/java/org/springframework/cloud/config/server/support/AwsCodeCommitCredentialProvider.java#L207">AwsCodeCommit.calculateCodeCommitPassword</a> method is particularly interesting to review as an example of SigV4 transformation logic.</p> 
+<p>Cloning a repository is repeated across examples, and the functionality has been delegated to a supporting CloneCommandBuilder Class below.</p> 
+<code class="lang-java">public class CloneCommandBuilder {
+&nbsp; &nbsp; private File directory;
+&nbsp; &nbsp; public CloneCommandBuilder() throws IOException {
+&nbsp; &nbsp; &nbsp; &nbsp; directory = Files.createTempDirectory(null).toFile();
+&nbsp; &nbsp; }
+&nbsp; &nbsp; public CloneCommand buildCloneCommand(String sourceUrl) {
+&nbsp; &nbsp; &nbsp; &nbsp; return buildCloneCommand(sourceUrl, new AwsCodeCommitCredentialProvider());
+&nbsp; &nbsp; }
+&nbsp; &nbsp; public CloneCommand buildCloneCommand(String sourceUrl,
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; AwsCodeCommitCredentialProvider credentialsProvider) {
+&nbsp; &nbsp; &nbsp; &nbsp; return new CloneCommand().setDirectory(directory)
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setURI(sourceUrl)
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setCredentialsProvider(credentialsProvider)
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setBare(true);
+&nbsp; &nbsp; }
+}</code> 
+<p>Next we’ll look at some examples to process the repository events using Amazon Lambda.</p> 
+<b>Example 1: Replicate CodeCommit Repository</b> 
+<p>Customers often need to replicate commits from one repository to another to support disaster recovery or cross region CI/CD pipelines. In this example, the Amazon Lambda function will clone a repository from the source and push to the target. This example is intended to update an existing target repository, which should not be empty before configuring replication prior to configuring replication.</p> 
+<p>Please note, Amazon Lambda functions are limited to 1.5GB memory, 512MB ephemeral disk capacity (“/tmp” space), and a 5 minute execution time. If your repository is unable to be processed within these limits, please see the <a href="https://aws.amazon.com/blogs/devops/replicating-and-automating-sync-ups-for-a-repository-with-aws-codecommit/">Replicating and Automating Sync-Ups for a Repository with AWS CodeCommit</a> blog article for an alternative approach to replicate repositories using an Amazon EC2 instance.</p> 
+<p>Let’s take a look at some code!</p> 
+<code class="lang-java">public class ReplicateRepositoryHandler
+&nbsp; &nbsp; &nbsp; &nbsp; implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
+&nbsp; &nbsp; private static Logger logger = Logger.getLogger(ReplicateRepositoryHandler.class);
+&nbsp; &nbsp; private final String targetUrl;
+&nbsp; &nbsp; private final AwsCodeCommitCredentialProvider credentialsProvider;
+&nbsp; &nbsp; public ReplicateRepositoryHandler() {
+&nbsp; &nbsp; &nbsp; &nbsp; String targetName = System.getenv(&quot;TARGET_REPO_NAME&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; String targetRegion = System.getenv(&quot;TARGET_REPO_REGION&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata target = new CodeCommitMetadata(targetName, targetRegion);
+&nbsp; &nbsp; &nbsp; &nbsp; targetUrl = target.getCloneUrlHttp();
+&nbsp; &nbsp; &nbsp; &nbsp; credentialsProvider = new AwsCodeCommitCredentialProvider();
+&nbsp; &nbsp; }
+// ...</code> 
+<p>On instantiation, the Amazon Lambda function discovers the target AWS CodeCommit repository HTTPS URL by querying the repository metadata using the target repository name and region. This discovery process is repeated across the examples, and the code has been delegated to the CodeCommitMetadata class below.</p> 
+<code class="lang-java">public class CodeCommitMetadata {
+&nbsp; &nbsp; private RepositoryMetadata repositoryMetadata;
+&nbsp; &nbsp; public CodeCommitMetadata(String repoName, String repoRegion) {
+&nbsp; &nbsp; &nbsp; &nbsp; AWSCodeCommitClientBuilder builder = AWSCodeCommitClientBuilder.standard();
+&nbsp; &nbsp; &nbsp; &nbsp; AWSCodeCommit client = builder.withRegion(repoRegion).build();
+&nbsp; &nbsp; &nbsp; &nbsp; GetRepositoryRequest request = new GetRepositoryRequest();
+&nbsp; &nbsp; &nbsp; &nbsp; request.withRepositoryName(repoName);
+&nbsp; &nbsp; &nbsp; &nbsp; GetRepositoryResult result = client.getRepository(request);
+&nbsp; &nbsp; &nbsp; &nbsp; repositoryMetadata = result.getRepositoryMetadata();
+&nbsp; &nbsp; }
+&nbsp; &nbsp; public String getCloneUrlHttp() {
+&nbsp; &nbsp; &nbsp; &nbsp; return repositoryMetadata.getCloneUrlHttp();
+&nbsp; &nbsp; }
+}</code> 
+<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the source repository name and region in the event are used to discover the source repository HTTPS URL. We use JGit to clone the source repository from this URL into a local repository stored in a temporary directory in the Amazon Lambda execution container.</p> 
+<code class="lang-java">public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
+&nbsp; &nbsp; try {
+&nbsp; &nbsp; &nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
+&nbsp; &nbsp; &nbsp; &nbsp; String sourceRegion = event.getRegion();
+&nbsp; &nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
+&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
+&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
+&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
+// ...</code> 
+<p>Once we’ve cloned the local repository to the Amazon Lambda execution container, the last step is to set the target AWS CodeCommit repository as a new remote location and push the local references using the reference specification “+refs/*:refs/*”.</p> 
+<code class="lang-java">// push target repository
+git.push().setCredentialsProvider(credentialsProvider)
+&nbsp;  &nbsp; &nbsp;&nbsp; &nbsp; .setRemote(targetUrl)
+&nbsp;&nbsp; &nbsp; &nbsp;&nbsp; &nbsp; .setRefSpecs(new RefSpec(&quot;+refs/*:refs/*&quot;))
+&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp; .call();
+// ...</code> 
+<p>In the next example, we’ll review how we can build a Lambda function to enforce commit message policies.</p> 
+<b>Example 2: Enforce Git Commit Message Policy</b> 
+<p>Some customers choose to enforce policies on a Git repository to maintain code quality. In this example, we use the same tools described above to clone a repository and validate the commit messages from the Git log using a regular expression.</p> 
+<code class="lang-java">public class PolicyEnforcerHandler implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
+&nbsp; &nbsp; private static Logger logger = LoggerFactory.getLogger(ArchiveRepositoryHandler.class);
+&nbsp; &nbsp; private final String mainBranch;
+&nbsp; &nbsp; private final String snsTopicArn;
+&nbsp; &nbsp; private final Pattern pattern;
+&nbsp; &nbsp; private final AmazonSNS snsClient;
+&nbsp; &nbsp; public PolicyEnforcerHandler() {
+&nbsp; &nbsp; &nbsp; &nbsp; mainBranch = System.getenv(&quot;MAIN_BRANCH_NAME&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; snsTopicArn = System.getenv(&quot;SNS_TOPIC_ARN&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; String messageRegex = System.getenv(&quot;MESSAGE_REGEX&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; pattern = Pattern.compile(messageRegex);
+&nbsp; &nbsp; &nbsp; &nbsp; String snsRegion = snsTopicArn.split(&quot;:&quot;)[3];
+&nbsp; &nbsp; &nbsp; &nbsp; snsClient = AmazonSNSClientBuilder.standard().withRegion(snsRegion).build();
+&nbsp; &nbsp; }
+// ...</code> 
+<p>On instantiation, the Amazon Lambda function compiles the regular expression for message validation and creates an Amazon SNS client to send notifications.</p> 
+<code class="lang-java">@Override
+public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
+&nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
+&nbsp; &nbsp; String sourceRegion = event.getRegion();
+&nbsp; &nbsp; String commitId = event.getDetail().getCommitId();
+&nbsp; &nbsp; String oldCommitId = event.getDetail().getOldCommitId();
+&nbsp; &nbsp; try {
+&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
+&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
+&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
+&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
+&nbsp; &nbsp; &nbsp; &nbsp; // ...</code> 
+<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the process to clone the repository is the same, discovering the AWS CodeCommit HTTPS URL from the AWS CloudWatch Event and cloning a bare Git repository to the Amazon Lambda execution container.</p> 
+<code class="lang-java">// use the OldCommitId, or default to the main branch
+String toGitReference = Optional.ofNullable(oldCommitId).orElse(mainBranch);
+Repository repository = git.getRepository();
+ObjectId to = repository.resolve(toGitReference);
+ObjectId from = repository.resolve(commitId);
+// ...</code> 
+<p>JGit RevWalk is used to determine the range of commits over which to validate the message policy. When commits are added to an existing branch, AWS CodeCommit will emit an referenceUpdated event, which includes commitId and oldCommitId fields that establish the range of commits.</p> 
+<p>When commits are added to a new branch, AWS CodeCommit will emit a referenceCreated event, which includes a commitId but not the oldCommitId. In this case, we will use the main branch name to determine the common ancestry of the commit chains, called the <a href="https://git-scm.com/docs/git-merge-base">merge base</a>, in order to establish the range of commits.</p> 
+<code class="lang-java">// create a RevWalk and set the range of commits
+try (RevWalk walk = new RevWalk(repository)) {
+&nbsp; &nbsp; walk.markStart(walk.parseCommit(from));
+&nbsp; &nbsp; walk.markUninteresting(walk.parseCommit(to));
+// iterate the list of commits and validate each message
+&nbsp; &nbsp; for (RevCommit commit : walk) {
+&nbsp; &nbsp;     Matcher matcher = pattern.matcher(commit.getShortMessage());
+// publish a message to the topic if the message does not match
+&nbsp; &nbsp; &nbsp; &nbsp; if (!matcher.find()) {
+&nbsp; &nbsp; &nbsp; &nbsp;     String message = buildMessage(commit);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logger.info(message);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; snsClient.publish(snsTopicArn, message);
+&nbsp; &nbsp; &nbsp; &nbsp; }
+&nbsp; &nbsp; }
+&nbsp; &nbsp;walk.dispose();
+}
+// ...</code> 
+<p>Once the range has been established, we iterate the list of commit messages, testing each against the message policy regular expression. If the message does not match the regular expression, then it is out of compliance from the policy, and a message is published to the Amazon SNS topic for notification.</p> 
+<p>In the next example, I’ll review how to backup an archive of the files in a Git repository.</p> 
+<b>Example 3: Backup Git Archive to Amazon S3</b> 
+<p>The previous examples have focused on the bare Git repository <a href="https://git-scm.com/book/en/v2/Git-Internals-Git-Objects">objects</a>, however there are some use cases for processing the files in the Git repository at a particular reference. In this example, I’ll build a Lambda function to create a zip of the files in the repository and store it in Amazon S3 as a backup.</p> 
+<code class="lang-java">public class ArchiveRepositoryHandler
+&nbsp; &nbsp; &nbsp; &nbsp; implements RequestHandler&lt;CodeCommitEvent, HandlerResponse&gt; {
+&nbsp; &nbsp; private static Logger logger = LoggerFactory.getLogger(ArchiveRepositoryHandler.class);
+private final String ZIP_FORMAT = &quot;zip&quot;
+&nbsp; &nbsp; private final String targetS3Bucket;
+&nbsp; &nbsp; private final AmazonS3 s3Client;
+&nbsp; &nbsp; public ArchiveRepositoryHandler() {
+&nbsp; &nbsp; &nbsp; &nbsp; targetS3Bucket = System.getenv(&quot;TARGET_S3_BUCKET&quot;);
+&nbsp; &nbsp; &nbsp; &nbsp; s3Client = AmazonS3ClientBuilder.defaultClient();
+&nbsp; &nbsp; &nbsp; &nbsp; ArchiveCommand.registerFormat(ZIP_FORMAT, new ZipFormat());
+&nbsp; &nbsp; }
+// ...</code> 
+<p>On instantiation, the Amazon Lambda function creates an Amazon S3 client and registers the ZipFormat with JGit.</p> 
+<code class="lang-java">@Override
+public HandlerResponse handleRequest(CodeCommitEvent event, Context context) {
+&nbsp; &nbsp; String sourceName = event.getDetail().getRepositoryName();
+&nbsp; &nbsp; String sourceRegion = event.getRegion();
+&nbsp; &nbsp; String commitId = event.getDetail().getCommitId();
+&nbsp; &nbsp; try {
+&nbsp; &nbsp; &nbsp; &nbsp; // clone source repository
+&nbsp; &nbsp; &nbsp; &nbsp; CodeCommitMetadata source = new CodeCommitMetadata(sourceName, sourceRegion);
+&nbsp; &nbsp; &nbsp; &nbsp; String sourceUrl = source.getCloneUrlHttp();
+&nbsp; &nbsp; &nbsp; &nbsp; Git git = new CloneCommandBuilder().buildCloneCommand(sourceUrl).call();
+// ...</code> 
+<p>When the Amazon Lambda function is triggered by the AWS CloudWatch Event, the process to clone the repository is the same, discovering the AWS CodeCommit HTTPS URL from the AWS CloudWatch Event and cloning a bare Git repository to the Amazon Lambda execution container.</p> 
+<code class="lang-java">// create and upload archive for commitId
+File file = Files.createTempFile(null, null).toFile();
+try (OutputStream out = new FileOutputStream(file)) {
+ObjectId objectId = git.getRepository().resolve(commitId);
+git.archive().setTree(objectId)
+&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setFormat(ZIP_FORMAT)
+&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .setOutputStream(out)
+&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; .call();
+String key = sourceName + &quot;.&quot; + commitId + &quot;.&quot; + ZIP_FORMAT;
+s3Client.putObject(targetS3Bucket, key, file);
+}
+// ...</code> 
+<p>Once the repository has been cloned, we use a JGit ArchiveCommand to create a zip artifact representing the working files of repository at the commit triggering the event. The generated zip artifact is then uploaded to Amazon S3 using the repository name and commit shortId as the key.</p> 
+<b>Conclusion</b> 
+<p>AWS CloudWatch Event’s support for AWS CodeCommit Repository State Changes event types opens possibilities to build event-driven source code workflow automation using the same AWS CloudWatch Events service that acts as an event bus across many AWS services. Combining this new capability with Amazon Lambda, the JGit client, and AWS IAM policy controls provides builders with a set of tools to build serverless solutions that securely access AWS resources, scale on demand, and are cost effective.</p> 
+<p>In this blog, I’ve demonstrated three example solutions built using these tools, however AWS CodeCommit’s integration with AWS CloudWatch Events allows you to integrate with other AWS CloudWatch Events targets, like Amazon SQS or AWS Step Functions.</p> 
+<p>I encourage you to visit the GitHub repository (<a href="https://github.com/awslabs/serverless-codecommit-examples">https://github.com/awslabs/serverless-codecommit-examples</a>), which has instructions to launch these examples in your own AWS account. Please share your ideas and questions in the comments below, or submit pull requests and issues to the GitHub repository!</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Create Multiple Builds from the Same Source Using Different AWS CodeBuild Build Specification Files</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -2002,93 +2234,6 @@ require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-938');
 });
 </script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Performing Blue/Green Deployments with AWS CodeDeploy and Auto Scaling Groups</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Jeff Levine</span></span> | on 
-<time property="datePublished" datetime="2017-04-18T23:26:52+00:00">18 APR 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/how-to/" title="View all posts in How-To*"><span property="articleSection">How-To*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/performing-bluegreen-deployments-with-aws-codedeploy-and-auto-scaling-groups/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>Jeff Levine is a Solutions Architect for Amazon Web Services.</em></p> 
-<p>Amazon Web Services offers services that enable organizations to leverage the power of the cloud for their development and deployment needs. <a href="https://aws.amazon.com/codedeploy/">AWS CodeDeploy</a> makes it possible to automate the deployment of code to either <a href="https://aws.amazon.com/ec2/">Amazon EC2</a> or on-premises instances. AWS CodeDeploy now supports <a href="https://aws.amazon.com/about-aws/whats-new/2017/01/aws-codedeploy-introduces-blue-green-deployments/">blue/green deployments</a>. In this blog post, I will discuss the benefits of blue/green deployments and show you how to perform one.</p> 
-<p><span id="more-870"></span></p> 
-<p><strong>The benefits of blue/green deployments</strong></p> 
-<p>Blue/green deployment involves two production environments:</p> 
-<li>Blue is the active environment.</li> 
-<li>Green is for the release of a new version.</li> 
-<p>Here are some of the advantages of a blue/green deployment:</p> 
-<li>You can perform testing on the green environment without disrupting the blue environment.</li> 
-<li>Switching to the green environment involves no downtime. It only requires the redirecting of user traffic.</li> 
-<li>Rolling back from the green environment to the blue environment in the event of a problem is easier because you can redirect traffic to the blue environment without having to rebuild it.</li> 
-<li>You can incorporate the principle of infrastructure immutability by provisioning fresh instances when you need to make changes. In this way, you avoid configuration drift.</li> 
-<p>AWS CodeDeploy offers two ways to perform blue/green deployments:</p> 
-<li>In the first approach, AWS CodeDeploy makes a copy of an Auto Scaling group. It, in turn, provisions new Amazon EC2 instances, deploys the application to these new instances, and then redirects traffic to the newly deployed code.</li> 
-<li>In the second approach, you use instance tags or an Auto Scaling group to select the instances that will be used for the green environment. AWS CodeDeploy then deploys the code to the tagged instances.</li> 
-<p>So how do you set up your first blue environment? A best practice is to start with an in-place deployment. You can also start with an existing, empty Auto Scaling group.</p> 
-<p><strong>An example of blue/green deployments</strong></p> 
-<p>Let’s take a look at an example of how to use Auto Scaling groups to perform a blue/green deployment.</p> 
-<p><strong>Overview</strong></p> 
-<p>In the following figure, the example environment includes an Amazon EC2 instance that serves as a workstation for AWS CodeDeploy. A release manager or developer could use this workstation to deploy new versions of code. The blue environment consists of an Auto Scaling group that provisions two more instances to function as web servers. The web servers will initially contain the first version of an application and the AWS CodeDeploy agent. A load balancer directs traffic to the two web servers in a round-robin manner.</p> 
-<p>The release manager uses the workstation instance to push a new version of the application to AWS CodeDeploy and starts a blue-green deployment. AWS CodeDeploy creates a copy of the Auto Scaling group. It launches two new web server instances just like the original two. AWS CodeDeploy installs the new version of the application and then redirects the load balancer to the new instances. The original instances continue to be part of the original Auto Scaling group. They can be reattached to the load balancer, if needed.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/18/CDBG-topology.png" /></p> 
-<p><strong>Prerequisites for building the example</strong></p> 
-<p>Here are the things you will need to build out this example.</p> 
-<li>An IAM user with permissions to use Amazon EC2, Amazon S3, Amazon VPC, AWS CodeDeploy, and AWS CloudFormation.</li> 
-<li>An AWS region and Availability Zone in which you can provision the environment.</li> 
-<li>An Amazon EC2 key pair.</li> 
-<li>Working knowledge of the aforementioned services and the AWS Management Console, and familiarity with connecting to an Amazon EC2 instance.</li> 
-<p><strong>Other Considerations</strong></p> 
-<p>You will incur charges from AWS for the use of the underlying AWS services in this example. The Amazon EC2 t2.micro instances and Amazon S3 storage might be covered under the <a href="https://aws.amazon.com/free/">AWS Free Tier</a>, depending on your eligibility. The resources provided in this example are for training purposes. Be sure to consider the security needs of your organization when implementing techniques similar to those described in this blog post.</p> 
-<p>Step 1: Create the initial environment</p> 
-<ol> 
-<li>Download an archive containing the sample template from this <a href="https://github.com/awslabs/codedeploy-blue-green" target="_blank">location</a> and save it in a convenient location.</li> 
-<li>Sign in to the AWS Management Console and open the AWS CloudFormation console at <a href="https://console.aws.amazon.com/cloudformation/">https://console.aws.amazon.com/cloudformation/</a>.</li> 
-<li>If this is a new AWS CloudFormation account, click <strong>Create New Stack</strong>. Otherwise, click <strong>Create Stack</strong>.</li> 
-<li>Under <strong>Upload a template to Amazon S3</strong>, click <strong>Choose File</strong>, choose the YAML file from the archive you downloaded, and then click <strong>Next</strong>.</li> 
-<li>In <strong>Specify Details</strong>, in <strong>Stack name</strong>, type <code>bluegreen</code>.</li> 
-<li>In <strong>AZName</strong>, select one of the Availability Zones. (In this blog post, I am using us-east-1a.)</li> 
-<li>In <strong>BlueGreenKeyPairName</strong>, select the key pair to use.</li> 
-<li>In <strong>NamePrefix</strong>, use the default value of <code>bluegreen</code>&nbsp;unless you are already running an application with a name that starts with <code>bluegreen</code>. The name prefix is used to assign name tags to the created resources. Click <strong>Next</strong>.</li> 
-<li>On the Options page, click <strong>Next</strong>.</li> 
-<li>Select the acknowledgement box to allow the creation of IAM resources, and then click <strong>Create</strong>. It will take CloudFormation about 10 minutes to create the sample environment. In addition to creating the infrastructure resources shown in the diagram, the CloudFormation template also sets up an AWS CodeDeploy application and blue/green deployment group.</li> 
-</ol> 
-<p>Step 2: Review initial environment</p> 
-<ol> 
-<li>Look at the CloudFormation stack outputs. You should see something similar to the following.&nbsp;<strong>WorkstationIP</strong> is the IP address of the workstation instance.&nbsp;<strong>AutoScalingGroup</strong> and <strong>LoadBalancer</strong> are the DNS names created by CloudFormation for the Auto Scaling group and the Elastic Load Balancing load balancer.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/CloudFormationOutputs2-1.png" /></li> 
-<li>Copy the <strong>LoadBalancer</strong> value into your browser and browse to that link. The following application should be displayed. This PHP application queries the Amazon EC2 instance metadata. If you refresh the page, you will see the IP address and instance ID change in accordance with the round-robin load balancing algorithm.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/appversion1-v2-1.png" /></li> 
-<li>Go to the EC2 console and display the instances. You will see three running instances associated with this example: the workstation and the two web server instances created by the Auto Scaling group. The web server instances make up the blue environment.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/instances1-v2.png" /></li> 
-</ol> 
-<p>Step 3: Deploy the new version of code</p> 
-<ol> 
-<li><a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AccessingInstances.html">Connect to the workstation instance</a> at the address displayed in <strong>WorkStationIP</strong>. This instance is running the Ubuntu operating system, so the user name is <strong>ubuntu</strong>. After you sign in, you will see two directories. The scripts directory contains Bourne shell scripts. The newversion directory contains an update to the PHP application.</li> 
-<li>Here is the PHP code for the new version in newversion/content/index.php. The only difference from the initially installed code is the application version number.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/newappcode-1.png" /></li> 
-<li>Now look at the following scripts/pushnewversion.sh shell script. It uses the <strong>aws deploy push command</strong> to bundle the code and upload it to Amazon S3.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/pushversion.png" /></li> 
-<li>Run the pushnewversion.sh script. You will see a message that tells you how to deploy the code with the AWS command line interpreter, but we will use the AWS CodeDeploy console to do this instead.</li> 
-<li>Open the AWS CodeDeploy console at <a href="https://console.aws.amazon.com/codedeploy">https://console.aws.amazon.com/codedeploy</a>.</li> 
-<li>Click the link for bluegreen-app. If you chose a name other than the default for <strong>NamePrefix</strong>, click that name instead. Expand <strong>Revisions</strong>. You will see the revision you just pushed from the AWS CodeDeploy workstation. Click <strong>Deploy revision</strong>.</li> 
-<li>On the <strong>Create deployment</strong> page, select the bluegreen-app application and the bluegreen-dg deployment group. Leave all the other default values in place, and then click <strong>Deploy</strong>. AWS CodeDeploy will provision the Auto Scaling group and instances, deploy the code, set up health checks, and redirect traffic to the new instances. This process will take a few minutes. When the deployment is complete, the deployment should appear, as shown here. AWS CodeDeploy skips the termination of the original instances because of the settings in the deployment group.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/codedeployresults.png" /></li> 
-</ol> 
-<p>Step 4: Review the updated environment</p> 
-<ol> 
-<li>Browse to the DNS name for the load balancer. You should see the new version of the application, as shown here. The application version has changed from 1 to 2, as expected.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/appversion2-v2.png" /></li> 
-<li>Go to the EC2 console and display the instances. You will see four instances that have been tagged by the Auto Scaling group and launch configuration. The instances with IP addresses 10.200.11.11 and 10.200.11.192 are the ones we saw before in the blue environment. The deployment process created the instances with IP addresses 10.200.11.13 and 10.200.22 that are now part of the green environment.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/instances2-v2-1.png" /></li> 
-<li>Go to the <a href="https://console.aws.amazon.com/ec2/autoscaling/home">Auto Scaling console</a>. You will see that there are now two Auto Scaling groups, each of which has two instances. The Auto Scaling group whose names begins with CodeDeploy was created during the deployment process.<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/04/19/AutoScaling2-v2-1.png" /></li> 
-</ol> 
-<p>You have now successfully completed a blue/green deployment using AWS CodeDeploy.</p> 
-<p>Step 5: Cleanup</p> 
-<ol> 
-<li>Return to the session on the AWS CodeDeploy workstation.</li> 
-<li>Run the scripts/cleanup.sh script. This will remove the deployment bundle and shut down the Auto Scaling groups.</li> 
-<li>Go to the CloudFormation console, select the stack you created, and delete it.</li> 
-</ol> 
-<p><strong>Conclusion</strong></p> 
-<p>AWS CodeDeploy enables developers to automate code deployments to Amazon EC2 and on-premises instances. The blue/green deployment option enables release managers to create a new production environment and makes it easier to roll back to the previous environment if problems arise. For more information about AWS CodeDeploy, see the <a href="https://aws.amazon.com/documentation/codedeploy/">AWS CodeDeploy documentation</a>. You can get started in just a few clicks.</p> 
-<p>Enjoy life in the blue/green world!</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

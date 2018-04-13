@@ -190,6 +190,121 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="mgmtblogs1.html">Page 1</a>|<a href="mgmtblogs2.html">Page 2</a>|<a href="mgmtblogs3.html">Page 3</a>|<a href="mgmtblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/Ha_EC2-Management-tools_SOCIAL.jpg" /> 
+<b class="lb-b blog-post-title" property="name headline">Enable Modular and Reusable Configuration Using Composite AWS Systems Manager Documents</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Ananth Vaidyanathan</span></span> | on 
+<time property="datePublished" datetime="2018-01-11T09:53:33+00:00">11 JAN 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/amazon-ec2-systems-manager/" title="View all posts in Amazon EC2 Systems Manager*"><span property="articleSection">Amazon EC2 Systems Manager*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/mt/enable-modular-and-reusable-configuration-using-composite-aws-systems-manager-documents/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><em>By Melonia Mendonca, Software Development Engineer at Amazon Web Services</em></p> 
+<p>AWS Systems Manager (SSM) documents enable infrastructure as code that allows you to configure, manage, and automate your AWS and on-premises resources using AWS Systems Manager services. These SSM Documents define the actions that you want to perform on managed instances. Systems Manager offers a variety of pre-defined public documents and provides the ability to customize the documents as well.</p> 
+<p>Systems Manager lets you <a href="https://aws.amazon.com/about-aws/whats-new/2017/10/amazon-ec2-systems-manager-now-integrates-with-github/">execute composite documents</a> as part of your configurations. Composite documents are SSM documents that perform the task of executing one or more secondary documents. Using composite documents, you can do the following:</p> 
+<li><span style="text-decoration: underline">Enable modularity</span> – Documents can be broken into small common tasks, and then they can be called from composite documents.</li> 
+<li><span style="text-decoration: underline">Enable reusability</span> – Having the ability to invoke other documents removes the requirement to duplicate the plugin calls within custom documents.</li> 
+<li><span style="text-decoration: underline">Store documents in remote locations</span>– GitHub and Amazon S3 can be used to save documents because these documents in remote locations can be invoked using composite documents.</li> 
+<li><span style="text-decoration: underline">Use YAML in place of JSON in documents</span> – AWS Systems Manager also allows the use of documents written in YAML format that are stored in remote locations.</li> 
+<p>AWS-RunDocument is a new document you can use to execute documents that are stored in Systems Manager, private or public GitHub, or Amazon S3. This is achieved by using <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-downloadContent">aws:downloadContent</a> and <a href="http://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-plugins.html#aws-rundocument">aws:runDocument</a> plugins. The aws:runDocument plugin executes documents that reside in Systems Manager or in the local path.</p> 
+<p>In this blog post, I’ll show you how to create custom composite documents using the aws:runDocument plugin. I’ll demonstrate how to execute documents created in Systems Manager by invoking them from the composite document. I’ll also walk through the method of executing documents that are in GitHub by using the AWS-RunDocument document.</p> 
+<p><span id="more-2450"></span></p> 
+<h3>Walkthrough 1 – Compose a custom document using SSM documents</h3> 
+<p>In this example, I’ll show you how to compose a document that updates SSM Agent and then runs baseline patch and eventually configures an AWS package. Before the introduction of composite documents, this could be done one of two ways. You could send three separate commands to execute these public documents – AWS-UpdateSSMAgent, AWS-RunPatchBaseline, and AWS-ConfigureAWSPackage. &nbsp;Alternatively, you could add the plugin references in another document, but you would have to duplicate the document and not use the pre-defined, public document provided. With the use of composite documents, these documents are executed by sending a single composite document.</p> 
+<p><strong>Step 1: Create the composite document</strong><br /> I’ll use the aws:runDocument plugin to compose plugins in my document. The plugin has the following parameters:</p> 
+<li><span style="text-decoration: underline">documentType</span> – This indicates the type of document. The document could be locally available – LocalPath or from SSM – SSMDocument. In this example, this parameter will be SSMDocument.</li> 
+<li><span style="text-decoration: underline">documentPath</span> – This is the path to the document. It is either the absolute path to the document on disk, or the name of the document if the type is SSMDocument. In this walkthrough, we will use the path to specify the names of the documents – AWS-UpdateSSMAgent, AWS-RunPatchBaseline, and AWS-ConfigureAWSPackage.</li> 
+<li><span style="text-decoration: underline">documentParameters</span> – The parameters for the secondary document. This should be specified as parameter type StringMap with key and value pairs.</li> 
+<p>The document appears as follows. I have named it composite-document.json. This document can be executed on Windows.</p> 
+<code class="lang-json"><strong>~/tmp/docs/composite-document.json</strong> 
+{
+&quot;schemaVersion&quot;: &quot;2.2&quot;,
+&quot;description&quot;: &quot;Compose SSM documents&quot;,
+&quot;parameters&quot;: {},
+&quot;mainSteps&quot;: [
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;AgentUpdate&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-UpdateSSMAgent&quot;
+}
+},
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;ApplyPatchBaseline&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-RunPatchBaseline&quot;,
+&quot;documentParameters&quot;: &quot;{\&quot;Operation\&quot;:\&quot;Install\&quot;}&quot;
+}
+},
+{
+&quot;action&quot;:&quot;aws:runDocument&quot;,
+&quot;name&quot; : &quot;ConfigureAWSPVDriver&quot;,
+&quot;inputs&quot;:{
+&quot;documentType&quot;:&quot;SSMDocument&quot;,
+&quot;documentPath&quot;:&quot;AWS-ConfigureAWSPackage&quot;,
+&quot;documentParameters&quot;: &quot;{\&quot;action\&quot;:\&quot;Install\&quot;, \&quot;name\&quot;:\&quot;AWSPVDriver\&quot;}&quot;
+}
+}
+]
+}</code> 
+<p>You can navigate to the AWS Systems Manager console and paste this document to create a document. You can also do this using the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/create-document.html">create-document</a> command in the AWS CLI:</p> 
+<code class="lang-bash">aws ssm create-document --name composite-document --content file://~/tmp/docs/composite-document.json --document-type Command</code> 
+<p><strong>Step 2: Run the command and check the output</strong></p> 
+<p>After the command is sent, each action will be executed to produce the following output.</p> 
+<p><strong><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru1-step2.png" /></strong></p> 
+<p>Or you can use the <a href="http://docs.aws.amazon.com/cli/latest/reference/ssm/send-command.html">send-command</a> command from the AWS CLI. I am targeting all my Windows value instances by using tagging. To do this I created a new tag – PlatformType. For more information on using tags when you send commands, see <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/send-commands-multiple.html">Sending Commands to a Fleet</a> in the AWS Systems Manager documentation.</p> 
+<code class="lang-bash">aws ssm send-command --document-name &quot;composite-document&quot; --targets Key=tag:PlatformType,Values=Windows</code> 
+<h3>Walkthrough 2 – Compose an SSM custom document using documents from GitHub</h3> 
+<p>In a <a href="https://aws.amazon.com/blogs/mt/run-scripts-stored-in-private-or-public-github-repositories-using-amazon-ec2-systems-manager/">previous blog post</a>, I reviewed the method of executing scripts from GitHub. Today, I’ll demonstrate how to execute Systems Manager documents from GitHub. This method can be used to execute documents from Amazon S3, too. In this composite document, I will update SSM Agent to the latest version and then install Apache and My SQL. The document to install this software resides in GitHub and is written in YAML.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru-github.png" /></p> 
+<p><strong>Step 1:&nbsp; Create composite document</strong><br /> To create a document from a remote resource like GitHub, I’ll use the pre-defined AWS-RunDocument document. This document has the following parameters to help us specify the information to download the document.</p> 
+<li><span style="text-decoration: underline">Source Type</span>: Location of the script – GitHub or Amazon S3. For this example, the value here is GitHub.</li> 
+<li><span style="text-decoration: underline">Source Info</span>: This parameter provides information for accessing the document. The repository mentioned earlier is public and thus, this should be the owner, repository, and the path to the document.</li> 
+<li><span style="text-decoration: underline">Document Parameters</span>: If the document to be executed takes parameters, they can be specified here. In this case, it will be left blank.</li> 
+<p>You can use the composite document below to install the SSM Agent, Apache and MySQL on the instance.</p> 
+<code class="lang-json"><strong>~/tmp/docs/composite-document-mysql.json</strong> 
+{
+&quot;schemaVersion&quot;: &quot;2.2&quot;,
+&quot;description&quot;: &quot;Composite documents from GitHub&quot;,
+&quot;parameters&quot;: {
+},
+&quot;mainSteps&quot;: [
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;AgentUpdate&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-UpdateSSMAgent&quot;
+}
+},
+{
+&quot;action&quot;: &quot;aws:runDocument&quot;,
+&quot;name&quot;: &quot;InstallApacheandMySQL&quot;,
+&quot;inputs&quot;: {
+&quot;documentType&quot;: &quot;SSMDocument&quot;,
+&quot;documentPath&quot;: &quot;AWS-RunDocument&quot;,
+&quot;documentParameters&quot; : &quot;{\&quot;sourceType\&quot;:\&quot;GitHub\&quot;, \&quot;sourceInfo\&quot;:\&quot;{\\\&quot;owner\\\&quot;:\\\&quot;mmendonca3\\\&quot;,\\\&quot;repository\\\&quot;:\\\&quot;dummy-test-public\\\&quot;, \\\&quot;path\\\&quot;:\\\&quot;documents/bootstrap/StateManagerBootstrap.yml\\\&quot;}\&quot;}&quot;
+}
+}
+]
+}</code> 
+<p>You can create it using the AWS Systems Manager console or AWS CLI. The command to create this document would be:</p> 
+<code class="lang-bash">aws ssm create-document --name composite-document-mysql --content file://~/tmp/docs/composite-document-mysql.json --document-type Command</code> 
+<p><strong>Step 2: Run Command and check the output</strong><br /> On sending a command to execute this document, the agent gets updated to the latest version, downloads the document, and then executes it.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2018/01/09/walkthru2-output.png" /></p> 
+<p>The command to run this is follows:</p> 
+<code class="lang-bash">aws ssm send-command --document-name &quot;composite-document-mysql&quot; --targets Key=tag:PlatformType,Values=AmazonLinux</code> 
+<h3>Conclusion</h3> 
+<p>In this blog post, I have shown you how to enable management as code by using composite documents. You can create composite documents to reuse your documents easily, and enable modularity. Documents created using AWS Systems Manager can be referenced using composite documents. Those documents on GitHub and Amazon S3, written in JSON or YAML, can be executed using the AWS-RunDocument document.</p> 
+<h3>About the Author</h3> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/02/melonia.jpg" />Melonia Mendonca is a Software Development Engineer with the Amazon EC2 Systems Manager team. She is a passionate engineer who enjoys the ability to innovate encouraged by Amazon. Outside of work, Melonia likes traveling, playing board games and trying different restaurants/cuisines.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <b class="lb-b blog-post-title" property="name headline">Using AWS OpsWorks for Chef Automate in a federated environment</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
 by 
@@ -1111,46 +1226,6 @@ by
 <hr /> 
 <p><strong>About the author</strong></p> 
 <p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/30/kyle.jpg" />Kyle Somers is a Solutions Architect at Amazon Web Services. He works with startups and Focused Territory customers to provide architectural guidance for building applications in the cloud. His passion is AWS Lambda and he serves as a Serverless SME within the AWS community. In his spare time, he likes to travel, read up on the latest tech, and cheer on the University of Arizona Wildcats.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">Monitoring Service Limits with Trusted Advisor and Amazon CloudWatch</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Stas Neyman</span></span> | on 
-<time property="datePublished" datetime="2017-11-24T13:41:47+00:00">24 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/mt/category/management-tools/aws-trusted-advisor/" title="View all posts in AWS Trusted Advisor*"><span property="articleSection">AWS Trusted Advisor*</span></a>, <a href="https://aws.amazon.com/blogs/mt/category/management-tools/" title="View all posts in Management Tools*"><span property="articleSection">Management Tools*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/mt/monitoring-service-limits-with-trusted-advisor-and-amazon-cloudwatch/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Understanding your <a href="http://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html">service limits</a> (and how close you are to them) is an important part of managing your AWS deployments – continuous monitoring allows you to request limit increases or shut down resources before the limit is reached.</p> 
-<p>One of the easiest ways to do this is via <a href="https://aws.amazon.com/premiumsupport/trustedadvisor/">AWS Trusted Advisor’s</a> Service Limit Dashboard, which currently covers <a href="https://aws.amazon.com/premiumsupport/ta-faqs/#service-limits-check-questions">39 limits across 10 services</a>.</p> 
-<p>With the recent launch of Trusted Advisor metrics in Amazon CloudWatch, <a href="https://aws.amazon.com/premiumsupport/business-support/">Business</a> and <a href="https://aws.amazon.com/premiumsupport/enterprise-support/">Enterprise</a> support customers can create customizable alarms for individual service limits. Let’s look at an example of how to do that.</p> 
-<p><span id="more-2122"></span></p> 
-<h4>Example: Create an alarm for EC2 On-Demand Instance limits</h4> 
-<p>Begin by logging into the <a href="https://console.aws.amazon.com/trustedadvisor/home#/dashboard">Trusted Advisor console</a> and clicking the “Service Limits” link on the left side of the page. After doing so, you should see the new service limits dashboard.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/Console-1024x444.png" /></p> 
-<p>Click the refresh icon in the top-right of the screen to retrieve the most current utilization and limit data for the service limit checks. This can take a while if you have a lot of AWS resources deployed, so be patient! Once complete, a notification will appear at the top of the Trusted Advisor console.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/check_complete-1024x76.png" /></p> 
-<p>This ensures that CloudWatch has the most up-to-date information available from Trusted Advisor.</p> 
-<p>Next, head over to the <a href="https://console.aws.amazon.com/cloudwatch/">CloudWatch console</a>. Trusted Advisor passes a single metric called “ServiceLimitUsage” that represents the percentage of utilization versus the limit. You can filter these limits by region, limit, or service using the available dimensions.</p> 
-<p>Make sure you are in the US East (N. Virginia) region, then click the “Alarms” link on the left side of the page and then click the “Create Alarm” button.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm-1024x461.png" /></p> 
-<p>Click “Service Limits by Region” under the “Trusted Advisor” category.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm2-1024x936.png" /></p> 
-<p>In the search bar, type “Overall On-Demand Instances”. This will filter the list of available limits down to the EC2 overall on-demand instance limits that are tracked by Trusted Advisor. Click the checkbox next to the limit for the us-east-1 region and click “Next”.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm3-1024x940.png" /></p> 
-<p>You can now set up your CloudWatch alarm for this limit. In this example, we’ve configured it to alarm when you’ve reached 60% of the EC2 On-Demand instance limit. Trusted Advisor updates these metrics once per week by default, but refreshing <a href="https://aws.amazon.com/premiumsupport/ta-iam/#table2">checks</a> via the Trusted Advisor console or Support API will send updated metrics on demand.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/create_alarm4-1024x933.png" /></p> 
-<p>You can repeat this process for any or all of the service limits covered by Trusted Advisor. For more information and a guide to creating these for any type of Trusted Advisor check, visit <a href="http://docs.aws.amazon.com/awssupport/latest/user/cloudwatch-metrics-ta.html">Creating Trusted Advisor Alarms Using CloudWatch</a>.</p> 
-<hr /> 
-<h4>About the Author</h4> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/972a67c48192728a34979d9a35164c1295401b71/2017/11/24/Scott_Allison.jpg" />Scott Allison is the Senior Technical Product Manager for Trusted Advisor – an AWS service designed to keep your deployments secure, fault tolerant, and cost-effective. He enjoys working directly with customers and hearing the creative ways people use Trusted Advisor!</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
-<p>&nbsp;</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.

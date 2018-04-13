@@ -190,6 +190,269 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="devopsblogs1.html">Page 1</a>|<a href="devopsblogs2.html">Page 2</a>|<a href="devopsblogs3.html">Page 3</a>|<a href="devopsblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<b class="lb-b blog-post-title" property="name headline">Replicate AWS CodeCommit Repositories between Regions using AWS Fargate</b> 
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Chris Barclay</span></span> | on 
+<time property="datePublished" datetime="2018-04-11T13:23:39+00:00">11 APR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/developer-tools/aws-codecommit/" title="View all posts in AWS CodeCommit*"><span property="articleSection">AWS CodeCommit*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/compute/aws-fargate/" title="View all posts in AWS Fargate"><span property="articleSection">AWS Fargate</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/devops/replicate-aws-codecommit-repository-between-regions-using-aws-fargate/" property="url">Permalink</a> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+<li> <a class="lb-txt" href="mailto:?subject=Replicate%20AWS%20CodeCommit%20Repositories%20between%20Regions%20using%20AWS%20Fargate&amp;body=Replicate%20AWS%20CodeCommit%20Repositories%20between%20Regions%20using%20AWS%20Fargate%0A%0Ahttps://aws.amazon.com/blogs/devops/replicate-aws-codecommit-repository-between-regions-using-aws-fargate/" target="_blank"><span class="icon-envelope-square" aria-label="Share on Email"></span></a> </li> 
+</footer> 
+<p>Thanks to Raja Mani, AWS Solutions Architect, for this great blog.</p> 
+<p>—</p> 
+<p>In this blog post, I’ll walk you through the steps for setting up continuous replication of an <a href="https://aws.amazon.com/codecommit">AWS CodeCommit</a> repository from one AWS region to another AWS region using a serverless architecture. CodeCommit is a fully-managed, highly scalable source control service that stores anything from source code to binaries. It works seamlessly with your existing Git tools and eliminates the need to operate your own source control system. Replicating an AWS CodeCommit repository from one AWS region to another AWS region enables you to achieve lower latency pulls for global developers. This same approach can also be used to automatically back up repositories currently hosted on other services (for example, GitHub or BitBucket) to AWS CodeCommit.</p> 
+<p>This solution uses <a href="https://aws.amazon.com/lambda/">AWS Lambda</a> and <a href="https://aws.amazon.com/fargate/">AWS Fargate</a> for continuous replication. Benefits of this approach include:</p> 
+<li>The replication process can be easily setup to trigger based on events, such as commits made to the repository.</li> 
+<li>Setting up a serverless architecture means you don’t need to provision, maintain, or administer servers.</li> 
+<li>You can incorporate this solution into your own DevOps pipeline. For more information, see the blog <a href="https://docs.aws.amazon.com/codepipeline/latest/userguide/actions-invoke-lambda-function.html">Invoke an AWS Lambda function in a pipeline in AWS CodePipeline</a>.</li> 
+<p><strong>Note:</strong> AWS Fargate has a limitation of 10 GB for storage and is available in US East (N. Virginia) region. A similar solution that uses Amazon EC2 instances to replicate the repositories on a schedule was <a href="https://aws.amazon.com/blogs/devops/replicating-and-automating-sync-ups-for-a-repository-with-aws-codecommit/">published in a previous blog</a> and can be used if your repository does not meet these conditions.</p> 
+<b>Replication using Fargate</b> 
+<p>As you follow this blog post, you’ll set up an architecture that looks like this:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/04/03/codecommit-fargate1.png" /></p> 
+<p>Any change in the AWS CodeCommit repository will trigger a Lambda function. The Lambda function will call the Fargate task that replicates the repository using a Git command line tool.</p> 
+<p>Let us assume a user wants to replicate a repository (Source) from US East (N. Virginia/us-east-1) region to a repository (Destination) in US West (Oregon/us-west-2) region. I’ll walk you through the steps for it:</p> 
+<h3>Prerequisites</h3> 
+<p>Create an AWS Service IAM role for Amazon EC2 that has permission for both source and destination repositories, IAM CreateRole, AttachRolePolicy and Amazon ECR privileges. Here is the EC2 role policy I used:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Sid&quot;: &quot; &quot;,
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;codecommit:*&quot;,
+&quot;ecr:*&quot;,
+&quot;iam:CreateRole&quot;,
+&quot;iam:AttachRolePolicy&quot;
+],
+&quot;Resource&quot;: &quot;*&quot;
+}
+]
+}</code> 
+<li>You need a Docker environment to build this solution. You can launch an EC2 instance and install Docker (or) you can use <a href="https://aws.amazon.com/cloud9/">AWS Cloud9</a> that comes with Docker and Git preinstalled. I used an <a href="https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-basics.html">EC2 instance and installed Docker</a> in it. Use the IAM role created in the previous step when creating the EC2 instance. I am going to refer this environment as “Docker Environment” in the following steps.</li> 
+<li>You need to install the AWS CLI on the Docker environment. For AWS CLI installation, refer this <a href="https://docs.aws.amazon.com/cli/latest/userguide/installing.html">page</a>.</li> 
+<li>You need to install Git, including a Git command line on the Docker environment.</li> 
+<h3>Step 1: Create the Docker image</h3> 
+<p>To create the Docker image, first it needs a Dockerfile. A Dockerfile is a manifest that describes the base image to use for your Docker image and what you want installed and running on it. For more information about Dockerfiles, go to the <a href="https://docs.docker.com/engine/reference/builder/">Dockerfile Reference</a>.</p> 
+<p>1. Choose a directory in the Docker environment and perform the following steps in that directory. I used /home/ec2-user directory to perform the following steps.</p> 
+<p>2. Clone the AWS CodeCommit repository in the Docker environment. Open the terminal to the Docker environment and run the following commands to <a href="https://docs.aws.amazon.com/codecommit/latest/userguide/how-to-connect.html">clone your source AWS CodeCommit repository</a> (I ran the commands from /home/ec2-user directory):</p> 
+<code class="lang-bash">$ git config --global credential.helper '!aws codecommit credential-helper $@'
+$ git config --global credential.UseHttpPath true
+$ git clone --mirror <span style="color: #ff0000">https://git-codecommit.us-east-1.amazonaws.com/v1/repos/Source</span> LocalRepository
+$ cd LocalRepository
+$ git remote set-url --push origin <span style="color: #ff0000">https://git-codecommit.us-east2.amazonaws.com/v1/repos/Destination</span></code> 
+<p><strong>Note:</strong> Change the URL marked in red to your source and destination repository URL.</p> 
+<p>3. Create a file called Dockerfile (case sensitive) with the following content (I created it in /home/ec2-user directory):</p> 
+<code class="lang-yaml"># Pull the Amazon Linux latest base image
+FROM amazonlinux:latest
+#Install aws-cli and git command line tools
+RUN yum -y install unzip aws-cli
+RUN yum -y install git
+WORKDIR /home/ec2-user
+RUN mkdir LocalRepository
+WORKDIR /home/ec2-user/LocalRepository
+#Copy Cloned CodeCommit repository to Docker container
+COPY ./LocalRepository /home/ec2-user/LocalRepository
+#Copy shell script that does the replication
+COPY ./repl_repository.bash /home/ec2-user/LocalRepository
+RUN chmod ugo+rwx /home/ec2-user/LocalRepository/repl_repository.bash
+WORKDIR /home/ec2-user/LocalRepository
+#Call this script when Docker starts the container 
+ENTRYPOINT [&quot;/home/ec2-user/LocalRepository/repl_repository.bash&quot;]</code> 
+<p>4. Copy the following shell script into a file called repl_repository.bash to the DockerFile directory location in the Docker environment (I created it in /home/ec2-user directory)</p> 
+<code class="lang-bash">#!/bin/bash
+git config --global credential.helper '!aws codecommit credential-helper $@'
+git config --global credential.UseHttpPath true
+git fetch -p origin
+git push --mirror
+</code> 
+<p>5. Your directory structure will look like this after completing the above steps:</p> 
+<code class="lang-bash">-rw-r--r--   1      0    Apr  3 13:21 Dockerfile
+drwxr-xr-x   2     68    Apr  3 13:21 LocalRepository
+-rw-r--r--   1      0    Apr  3 13:21 repl_repository.bash</code> 
+<p>6. Verify whether the replication is working by running the repl_repository.bash script from the LocalRepository directory. Go to LocalRepository directory and run this command: . ../repl_repository.bash<br /> If it is successful, you will get the “Everything up-to-date” at the last line of the result like this:</p> 
+<code class="lang-bash">$ . ../repl_repository.bash
+Everything up-to-date </code> 
+<h3>Step 2: Build the Docker Image</h3> 
+<p>1. Build the Docker image by running this command from the directory where you created the DockerFile in the Docker environment in the previous step (I ran it from /home/ec2-user directory):</p> 
+<code class="lang-bash">$ docker build . –t ccrepl</code> 
+<p>Output: It installs various packages and set environment variables as part of steps 1 to 3 from the Dockerfile. The steps 4 to 11 from the Dockerfile should produce an output similar to the following:</p> 
+<code class="lang-bash">Step 4/11 : WORKDIR /home/ec2-user
+---&gt; 37a5113bd2ce
+Removing intermediate container ed89954b9a4f
+Step 5/11 : RUN mkdir LocalRepository
+---&gt; Running in b9e4fab2b264
+---&gt; 816b553261c9
+Removing intermediate container b9e4fab2b264
+Step 6/11 : WORKDIR /home/ec2-user
+---&gt; 60ad564a70be
+Removing intermediate container 0897cfb7dd5d
+Step 7/11 : COPY ./LocalRepository/ /home/ec2-user/LocalRepository/
+---&gt; 03420e4e7d0a
+Step 8/11 : COPY ./repl_repository.bash /home/ec2-user/LocalRepository
+---&gt; 7eea3f045f38
+Step 9/11 : RUN chmod ugo+rwx /home/ec2-user/LocalRepository/repl_repository.bash
+---&gt; Running in 7ef77a0ad886
+---&gt; 2ff00242c190
+Removing intermediate container 7ef77a0ad886
+Step 10/11 : WORKDIR /home/ec2-user/LocalRepository
+---&gt; 41f2aa473cf8
+Removing intermediate container 9f233487943b
+Step 11/11 : ENTRYPOINT /home/ec2-user/LocalRepository/repl_repository.bash
+---&gt; Running in 0aaff1cc2e29
+---&gt; 2066cf6a9c7d
+Removing intermediate container 0aaff1cc2e29
+Successfully built 2066cf6a9c7d
+Successfully tagged ccrepl:latest</code> 
+<p>2. Run the following command to verify that the image was created successfully. It will display “Everything up-to-date” at the end if it is successful.</p> 
+<code class="lang-bash">[ec2-user@ip-172-1-1-210 LocalRepository]$ docker run ccrepl
+Everything up-to-date
+</code> 
+<h3>Step 3: Push the Docker Image to Amazon Elastic Container Registry (ECR)</h3> 
+<p>Perform the following steps in the Docker Environment.</p> 
+<p>1. Run the <a href="https://aws.amazon.com/cli/"><code>AWS CLI</code></a> configure command and set default region as your source repository region (I used us-east-1).</p> 
+<code class="lang-bash">$ aws configure set default.region <span style="color: #ff0000">&lt;Source Repository Region&gt;</span></code> 
+<p>2. Create an Amazon ECR repository using this command to store your ccrepl image (Note the repositoryUri in the output):</p> 
+<code class="lang-bash">$ aws ecr create-repository --repository-name ccrepl</code> 
+<p>Output:</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/04/03/codecommit-fargate2-300x62.png" /></p> 
+<p>3. Tag the ccrepl image with repositoryUri value from the previous step using this command:</p> 
+<code class="lang-bash">$ docker tag ccrepl:latest aws_account_id.dkr.ecr.us-east-1.amazonaws.com/ccrepl</code> 
+<p>4. Get the Docker login credentials using the following command:</p> 
+<code class="lang-bash">$ aws ecr get-login --no-include-email</code> 
+<p>5. Run the Docker login command returned from the previous step. If the command is successful, you will get a message “Login Succeeded”</p> 
+<p>6. Push the docker image to Amazon ECR with the repositoryUri from step 2 using this command:</p> 
+<code class="lang-bash">$ docker push <span style="color: #ff0000">aws_account_id</span>.dkr.ecr.us-east-1.amazonaws.com/ccrepl</code> 
+<h3>Step 4: Create Fargate Task Definition and cluster</h3> 
+<p>1. Create a text file called trustpolicyforecs.json with the following content in the Docker Environment:</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Principal&quot;: {
+&quot;Service&quot;: &quot;ecs-tasks.amazonaws.com&quot;
+},
+&quot;Action&quot;: &quot;sts:AssumeRole&quot;
+}
+]
+}</code> 
+<p>2. Create a role called AccessRoleForCCfromFG using the following command in the DockerEnvironment:</p> 
+<code class="lang-bash">$ aws iam create-role --role-name AccessRoleForCCfromFG --assume-role-policy-document file://trustpolicyforecs.json</code> 
+<p>3. Assign CodeCommit service full access to the above role using the following command in the DockerEnvironment:</p> 
+<code class="lang-bash">$ aws iam attach-role-policy --policy-arn arn:aws:iam::aws:policy/AWSCodeCommitFullAccess --role-name AccessRoleForCCfromFG</code> 
+<p>4. In the <a href="https://console.aws.amazon.com/ecs/">Amazon ECS Console</a>, choose Repositories and select the ccrepl repository that was created in the previous step. Copy the Repository URI.</p> 
+<p>5.&nbsp;&nbsp; In the Amazon ECS Console, choose Task Definitions and click Create New Task Definition.</p> 
+<p>6.&nbsp;&nbsp; Select launch type compatibility as FARGATE and click Next Step.</p> 
+<p>7.&nbsp;&nbsp; &nbsp;In the create task definition screen, do the following:</p> 
+<li>In Task Definition Name, type ccrepl</li> 
+<li>In Task Role, choose AccessRoleForCCfromFG</li> 
+<li>In Task Memory, choose 2GB</li> 
+<li>In Task CPU, choose 1 vCPU</li> 
+<li>Click Add Container under Container Definitions in the same screen. In the Add Container screen, do the following: 
+<li>Enter Container name as ccreplcont</li> 
+<li>Enter Image URL copied from step 4</li> 
+<li>Enter Memory Limits as 128 and click Add.</li> 
+</ul> </li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/04/03/codecommit-fargate3.png" /></p> 
+<p><strong>Note:</strong> Select TaskExecutionRole as “ecsTaskExecutionRole” if it already exists. If not, select create new role and it will create “ecsTaskExecutionRole” for you.</p> 
+<p>8.&nbsp;&nbsp; Click the Create button in the task definition screen to create the task. It will successfully create the task, execution role and AWS CloudWatch Log groups.</p> 
+<p>9.&nbsp;&nbsp; In the Amazon ECS Console, click Clusters and create cluster. Select template as “Networking only, Powered by AWS Fargate” and click next step.</p> 
+<p>10.&nbsp;&nbsp; Enter cluster name as ccreplcluster and click create.</p> 
+<h3>Step 5: Create the Lambda Function</h3> 
+<p>In this section, I used Amazon Elastic Container Service (ECS) run task API from Lambda to invoke the Fargate task.</p> 
+<p>1. In the <a href="https://console.aws.amazon.com/iam/home">IAM Console</a>, create a new role called ECSLambdaRole with the permissions to AWS CodeCommit, Amazon ECS as well as pass roles privileges needed to run the ECS task. Your statement should look similar to the following (replace <span style="color: #ff0000">&lt;your account id&gt;</span>):</p> 
+<code class="lang-json">{
+&quot;Version&quot;: &quot;2012-10-17&quot;,
+&quot;Statement&quot;: [
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;codecommit:*&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;logs:CreateLogGroup&quot;,
+&quot;logs:CreateLogStream&quot;,
+&quot;logs:PutLogEvents&quot;
+],
+&quot;Resource&quot;: &quot;arn:aws:logs:*:*:*&quot;
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;ecs:RunTask&quot;
+],
+&quot;Resource&quot;: [
+&quot;*&quot;
+]
+},
+{
+&quot;Effect&quot;: &quot;Allow&quot;,
+&quot;Action&quot;: [
+&quot;iam:PassRole&quot;
+],
+&quot;Resource&quot;: [
+&quot;arn:aws:iam::<span style="color: #ff0000">&lt;your account id&gt;</span>:role/ecsTaskExecutionRole&quot;,
+&quot;arn:aws:iam::<span style="color: #ff0000">&lt;your account id&gt;</span>:role/AccessRoleForCCfromFG&quot;
+]
+}
+]
+}</code> 
+<p>2. In AWS management console, select VPC service and click subnets in the left navigation screen. Note down the Subnet IDs that you want to run the Fargate task in.</p> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/04/03/codecommit-fargate4.png" /></p> 
+<p>3.&nbsp;&nbsp; Create a new Lambda Node.js function called FargateTaskExecutionFunc and assign the role ECSLambdaRole with the following content:</p> 
+<p><strong>Note:</strong> Replace subnets values (marked in red color) with the subnet IDs you identified as the subnets you wanted to run the Fargate task on in Step 2 of this section.</p> 
+<code class="lang-js">var AWS = require('aws-sdk');
+var ecs = new AWS.ECS();
+exports.handler = (event, context, callback) =&gt; {
+var params = {
+cluster: &quot;ccreplcluster&quot;, 
+launchType: 'FARGATE',
+taskDefinition: &quot;ccrepl:1&quot;,
+count: 1,
+platformVersion: 'LATEST',
+networkConfiguration: {
+awsvpcConfiguration: {
+subnets: [ /* required */
+'<span style="color: #ff0000">&lt;subnet ID1&gt;</span>',
+'<span style="color: #ff0000">&lt;subnet ID2&gt;</span>'
+],
+assignPublicIp: 'ENABLED',
+}      
+}
+};
+ecs.runTask(params, function(err, data) {
+if (err) console.log(err, err.stack); // an error occurred
+else     console.log(data);           // successful response
+});
+};</code> 
+<h3>Step 6: Assign Lambda to CodeCommit Trigger</h3> 
+<p>1. In the <a href="https://console.aws.amazon.com/lambda/home">Lambda Console</a>, click FargateTaskExecutionFunc under functions.</p> 
+<p>2. Under Add triggers in the Designer, select CodeCommit</p> 
+<p>3. In the Configure triggers screen, do the following:</p> 
+<li>Enter Repository name as Source (your source repository name)</li> 
+<li>Enter trigger name as LambdaTrigger</li> 
+<li>Leave the Events as “All repository events”</li> 
+<li>Leave the Branch names as “All branches”</li> 
+<li>Click Add button</li> 
+<li>Click Save button to save the changes</li> 
+<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/04/03/codecommit-fargate5.png" /></p> 
+<h3>Step 6: Verification</h3> 
+<p>To test the application, make a commit and push the changes to the source repository in AWS CodeCommit. That should automatically trigger the Lambda function and replicate the changes in the destination repository. You can verify this by checking CloudWatch Logs for Lambda and ECS, or simply going to the destination repository and verifying the change appears.</p> 
+<b>Conclusion</b> 
+<p>Congratulations! You have successfully configured repository replication of an AWS CodeCommit repository using AWS Lambda and AWS Fargate. You can use this technique in a deployment pipeline. You can also tweak the trigger configuration in AWS CodeCommit to call the Lambda function in response to any supported trigger event in AWS CodeCommit.</p> 
+<p>For more information about CodeCommit, see the <a href="http://docs.aws.amazon.com/codecommit/latest/userguide/welcome.html">AWS CodeCommit documentation</a>.</p> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2018/03/29/codestar-featured_image.jpg" /> 
 <b class="lb-b blog-post-title" property="name headline">Performing Unit Testing in an AWS CodeStar Project</b> 
 <footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
@@ -1403,116 +1666,6 @@ by
 <p>To clean up resources used in this solution, delete the AWS CloudFormation stack.</p> 
 <h3>Conclusion</h3> 
 <p>We hope you find this blog post useful for injecting source control metadata into your CI/CD pipeline. As always, chime in with your thoughts and suggestions in the comments.</p> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<b class="lb-b blog-post-title" property="name headline">UI Testing at Scale with AWS Lambda</b> 
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Stas Neyman</span></span> | on 
-<time property="datePublished" datetime="2017-11-24T13:45:14+00:00">24 NOV 2017</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/devops/category/compute/aws-lambda/" title="View all posts in AWS Lambda*"><span property="articleSection">AWS Lambda*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/compute/" title="View all posts in Compute*"><span property="articleSection">Compute*</span></a>, <a href="https://aws.amazon.com/blogs/devops/category/devops/" title="View all posts in DevOps*"><span property="articleSection">DevOps*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/devops/ui-testing-at-scale-with-aws-lambda/" property="url">Permalink</a> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p><em>This is a guest blog post by Wes Couch and Kurt Waechter from the Blackboard Internal Product Development team about their experience using AWS Lambda.</em></p> 
-<p>One year ago, one of our UI test suites took hours to run. Last month, it took 16 minutes. Today, it takes <strong>39 seconds</strong>. Here’s how we did it.</p> 
-<h4>The backstory:</h4> 
-<p>Blackboard is a global leader in delivering robust and innovative education software and services to clients in higher education, government, K12, and corporate training. We have a large product development team working across the globe in at least 10 different time zones, with an internal tools team providing support for quality and workflows. We have been using Selenium Webdriver to perform automated cross-browser UI testing since 2007. Because we are now practicing continuous delivery, the automated UI testing challenge has grown due to the faster release schedule. On top of that, every commit made to each branch triggers an execution of our automated UI test suite. If you have ever implemented an automated UI testing infrastructure, you know that it can be very challenging to scale and maintain. Although there are services that are useful for testing different browser/OS combinations, they don’t meet our scale needs.</p> 
-<p>It used to take three hours to synchronously run our functional UI suite, which revealed the obvious need for parallel execution. Previously, we used Mesos to orchestrate a Selenium Grid Docker container for each test run. This way, we were able to run eight concurrent threads for test execution, which took an average of 16 minutes. Although this setup is fine for a single workflow, the cracks started to show when we reached the scale required for Blackboard’s mature product lines. Going beyond eight concurrent sessions on a single container introduced performance problems that impact the reliability of tests (for example, issues in Webdriver or the browser popping up frequently). We tried Mesos and considered Kubernetes for Selenium Grid orchestration, but the answer to scaling a Selenium Grid was to think smaller, not larger. This led to our breakthrough with AWS Lambda.</p> 
-<p><span id="more-1936"></span></p> 
-<h4>The solution:</h4> 
-<p>We started using AWS Lambda for UI testing because it doesn’t require costly infrastructure or countless man hours to maintain. The steps we outline in this blog post took one work day, from inception to implementation. By simply packaging the UI test suite into a Lambda function, we can execute these tests in parallel on a massive scale. We use a custom JUnit test runner that invokes the Lambda function with a request to run each test from the suite. The runner then aggregates the results returned from each Lambda test execution.</p> 
-<p>Selenium is the industry standard for testing UI at scale. Although there are other options to achieve the same thing in Lambda, we chose this mature suite of tools. Selenium is backed by Google, Firefox, and others to help the industry drive their browsers with code. This makes Lambda and Selenium a compelling stack for achieving UI testing at scale.</p> 
-<h4>Making Chrome Run in Lambda</h4> 
-<p>Currently, Chrome for Linux will not run in Lambda due to an absent mount point. By rebuilding Chrome with a slight modification, as Marco L&uuml;thy originally <a href="https://github.com/adieuadieu/serverless-chrome/tree/master/chrome">demonstrated</a>, you can run it inside Lambda anyway! It took about two hours to build the current master branch of Chromium to build on a c4.4xlarge. Unfortunately, the current version of ChromeDriver, 2.33, does not support any version of Chrome above 62, so we’ll be using Marco’s modified version of version 60 for the near future.</p> 
-<h4>Required System Libraries</h4> 
-<p>The Lambda runtime environment comes with a subset of common shared libraries. This means we need to include some extra libraries to get Chrome and ChromeDriver to work. Anything that exists in the java resources folder during compile time is included in the base directory of the compiled jar file. When this jar file is deployed to Lambda, it is placed in the /var/task/ directory. This allows us to simply place the libraries in the java resources folder under a folder named lib/ so they are <a href="http://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html">right where they need to be</a> when the Lambda function is invoked.</p> 
-<p>To get these libraries, create an EC2 instance and choose the Amazon Linux AMI.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Choose_an_AMI.png" /></p> 
-<p>Next, use ssh to connect to the server. After you connect to the new instance, search for the libraries to find their locations.</p> 
-<code class="lang-markup">sudo find / -name libgconf-2.so.4
-sudo find / -name libORBit-2.so.0
-</code> 
-<p>Now that you have the locations of the libraries, copy these files from the EC2 instance and place them in the java resources folder under lib/.</p> 
-<h4>Packaging the Tests</h4> 
-<p>To deploy the test suite to Lambda, we used a simple Gradle tool called <a href="https://github.com/johnrengelman/shadow">ShadowJar</a>, which is similar to the <a href="https://maven.apache.org/plugins/maven-shade-plugin/">Maven Shade Plugin</a>. It packages the libraries and dependencies inside the jar that is built. Usually test dependencies and sources aren’t included in a jar, but for this instance we want to include them. To include the test dependencies, add this section to the build.gradle file.</p> 
-<code class="lang-markup">shadowJar {
-from sourceSets.test.output
-configurations = [project.configurations.testRuntime]
-}
-</code> 
-<h4>Deploying the Test Suite</h4> 
-<p>Now that our tests are packaged with the dependencies in a jar, we need to get them into a running Lambda function. We use &nbsp;simple SAM &nbsp;templates to upload the packaged jar into S3, and then deploy it to Lambda with our settings.</p> 
-<code class="lang-json">{
-&quot;AWSTemplateFormatVersion&quot;: &quot;2010-09-09&quot;,
-&quot;Transform&quot;: &quot;AWS::Serverless-2016-10-31&quot;,
-&quot;Resources&quot;: {
-&quot;LambdaTestHandler&quot;: {
-&quot;Type&quot;: &quot;AWS::Serverless::Function&quot;,
-&quot;Properties&quot;: {
-&quot;CodeUri&quot;: &quot;./build/libs/your-test-jar-all.jar&quot;,
-&quot;Runtime&quot;: &quot;java8&quot;,
-&quot;Handler&quot;: &quot;com.example.LambdaTestHandler::handleRequest&quot;,
-&quot;Role&quot;: &quot;&lt;YourLambdaRoleArn&gt;&quot;,
-&quot;Timeout&quot;: 300,
-&quot;MemorySize&quot;: 1536
-}
-}
-}
-}</code> 
-<p>We use the maximum timeout available to ensure our tests have plenty of time to run. We also use the maximum memory size because this ensures our Lambda function can support Chrome and other resources required to run a UI test.</p> 
-<p>Specifying the handler is important because this class executes the desired test. The test handler should be able to receive a test class and method. With this information it will then execute the test and respond with the results.</p> 
-<code class="lang-json">public LambdaTestResult handleRequest(TestRequest testRequest, Context context) {
-LoggerContainer.LOGGER = new Logger(context.getLogger());
-BlockJUnit4ClassRunner runner = getRunnerForSingleTest(testRequest);
-Result result = new JUnitCore().run(runner);
-return new LambdaTestResult(result);
-}
-</code> 
-<h4>Creating a Lambda-Compatible ChromeDriver</h4> 
-<p>We provide developers with an easily accessible ChromeDriver for local test writing and debugging. When we are running tests on AWS, we have configured ChromeDriver to run them in Lambda.</p> 
-<p>To configure ChromeDriver, we first need to tell ChromeDriver where to find the Chrome binary. Because we know that ChromeDriver is going to be unzipped into the root task directory, we should point the ChromeDriver configuration at that location.</p> 
-<p>The settings for getting ChromeDriver running are mostly related to Chrome, which must have its working directories pointed at the tmp/ folder.</p> 
-<p>Start with the default DesiredCapabilities for ChromeDriver, and then add the following settings to enable your ChromeDriver to start in Lambda.</p> 
-<code class="lang-json">public ChromeDriver createLambdaChromeDriver() {
-ChromeOptions options = new ChromeOptions();
-// Set the location of the chrome binary from the resources folder
-options.setBinary(&quot;/var/task/chrome&quot;);
-// Include these settings to allow Chrome to run in Lambda
-options.addArguments(&quot;--disable-gpu&quot;);
-options.addArguments(&quot;--headless&quot;);
-options.addArguments(&quot;--window-size=1366,768&quot;);
-options.addArguments(&quot;--single-process&quot;);
-options.addArguments(&quot;--no-sandbox&quot;);
-options.addArguments(&quot;--user-data-dir=/tmp/user-data&quot;);
-options.addArguments(&quot;--data-path=/tmp/data-path&quot;);
-options.addArguments(&quot;--homedir=/tmp&quot;);
-options.addArguments(&quot;--disk-cache-dir=/tmp/cache-dir&quot;);
-DesiredCapabilities desiredCapabilities = DesiredCapabilities.chrome();
-desiredCapabilities.setCapability(ChromeOptions.CAPABILITY, options);
-return new ChromeDriver(desiredCapabilities);
-}
-</code> 
-<h4>Executing Tests in Parallel</h4> 
-<p>You can approach parallel test execution in Lambda in many different ways. Your approach depends on the structure and design of your test suite. For our solution, we implemented a custom test runner that uses reflection and JUnit libraries to create a list of test cases we want run. When we have the list, we create a TestRequest object to pass into the Lambda function that we have deployed. In this TestRequest, we place the class name, test method, and the test run identifier. When the Lambda function receives this TestRequest, our LambdaTestHandler generates and runs the JUnit test. After the test is complete, the test result is sent to the test runner. The test runner compiles a result after all of the tests are complete. By executing the same Lambda function multiple times with different test requests, we can effectively run the entire test suite in parallel.</p> 
-<p>To get screenshots and other test data, we pipe those files during test execution to an S3 bucket under the test run identifier prefix. When the tests are complete, we link the files to each test execution in the report generated from the test run. This lets us easily investigate test executions.</p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Parallell_testing.png" /></p> 
-<p><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/7719a1c782a1ba91c031a682a0a2f8658209adbf/2017/11/24/Parallell_testing2.png" /></p> 
-<h4>Pro Tip: Dynamically Loading Binaries</h4> 
-<p><a href="http://docs.aws.amazon.com/lambda/latest/dg/limits.html">AWS Lambda has a limit of 250 MB of uncompressed space</a> for packaged Lambda functions. Because we have libraries and other dependencies to our test suite, we hit this limit when we tried to upload a function that contained Chrome and ChromeDriver (~140 MB). This test suite was not originally intended to be used with Lambda. Otherwise, we would have scrutinized some of the included libraries. To get around this limit, we used the Lambda functions temporary directory, which allows up to 500 MB of space at runtime. Downloading these binaries at runtime moves some of that space requirement into the temporary directory. This allows more room for libraries and dependencies. You can do this by grabbing Chrome and ChromeDriver from an S3 bucket and marking them as executable using built-in Java libraries. If you take this route, be sure to point to the new location for these executables in order to create a ChromeDriver.</p> 
-<code class="lang-json">private static void downloadS3ObjectToExecutableFile(String key) throws IOException {
-File file = new File(&quot;/tmp/&quot; + key);
-GetObjectRequest request = new GetObjectRequest(&quot;s3-bucket-name&quot;, key);
-FileUtils.copyInputStreamToFile(s3client.getObject(request).getObjectContent(), file);
-file.setExecutable(true);
-}
-</code> 
-<h4>Lambda-Selenium Project Source</h4> 
-<p>We have compiled an open source example that you can grab from the Blackboard Github repository. Grab the code and try it out!</p> 
-<p><a href="https://blackboard.github.io/lambda-selenium/">https://blackboard.github.io/lambda-selenium/</a></p> 
-<h4>Conclusion</h4> 
-<p>One year ago, one of our UI test suites took hours to run. Last month, it took 16 minutes. Today, it takes <strong>39 seconds</strong>. Thanks to AWS Lambda, we can reduce our build times and perform automated UI testing at scale!</p> 
 </article> 
 <p>
 © 2018 Amazon Web Services, Inc. or its affiliates. All rights reserved.
