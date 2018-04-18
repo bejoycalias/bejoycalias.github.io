@@ -190,6 +190,172 @@ c0 80 -92 114 -151 56z m99 -33 c3 -15 -4 -18 -37 -18 -43 0 -50 7 -29 28 18
 <p><a href="secblogs1.html">Page 1</a>|<a href="secblogs2.html">Page 2</a>|<a href="secblogs3.html">Page 3</a>|<a href="secblogs4.html">Page 4</a></p>
 <article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
 <meta property="inLanguage" content="en-US" /> 
+<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM_for-social-800x400.png" /> 
+<b class="lb-b blog-post-title" property="name headline">Understanding AWS CloudHSM Cluster Synchronization</b> 
+<p style="margin: 0; padding:0;">=======================<p>
+<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
+by 
+<span property="author" typeof="Person"><span property="name">Jeff Levine</span></span> | on 
+<time property="datePublished" datetime="2018-04-17T06:25:55+00:00">17 APR 2018</time> | in 
+<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/aws-cloudhsm/" title="View all posts in AWS CloudHSM*"><span property="articleSection">AWS CloudHSM*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
+<a href="https://aws.amazon.com/blogs/security/understanding-aws-cloudhsm-cluster-synchronization/" property="url">Permalink</a> | 
+<a id="aws-comment-trigger-7676" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7676&amp;disqus_title=Understanding+AWS+CloudHSM+Cluster+Synchronization&amp;disqus_url=https://aws.amazon.com/blogs/security/understanding-aws-cloudhsm-cluster-synchronization/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7676');
+});
+</script> | 
+<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
+<p><a title="AWS CloudHSM" href="https://aws.amazon.com/cloudhsm/" target="_blank" rel="noopener noreferrer">AWS CloudHSM</a> provides fully managed, single-tenant hardware security modules (HSMs) in the AWS cloud. A CloudHSM cluster contains either one or multiple HSMs. Multiple HSMs support higher throughput levels for cryptographic operations and provide redundancy. For clusters with multiple HSMs, the CloudHSM service supports server-side automated synchronization of keys and policies. Users, however, are synchronized from the client-side and the synchronization is driven by configuration files which <a title="Refresh when the cluster size changes" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/troubleshooting-keep-hsm-users-in-sync.html" target="_blank" rel="noopener noreferrer">must be refreshed when the cluster size changes</a>. If you do not refresh the configuration files, your CloudHSM user configurations could become unsynchronized and affect the ability of your CloudHSM cluster to provide consistent support of cryptographic information.</p> 
+<p>In this blog post, I’ll provide a general overview of a CloudHSM architecture, discuss the cluster synchronization process, build a CloudHSM environment, show how the cluster users can become unsynchronized, and then restore user synchronization to bring your cluster back to a consistent state to meet your needs for consistency and redundancy.</p> 
+<b>CloudHSM Architectural Overview</b> 
+<p>When you provision an HSM instance in CloudHSM, the HSM instance provides an elastic network interface (ENI) in <em>your</em> <a title="Amazon VPC" href="https://aws.amazon.com/vpc/" target="_blank" rel="noopener noreferrer">Amazon VPC</a> while the HSM itself resides in a <em>separate</em> VPC managed by AWS CloudHSM. Your applications use the CloudHSM cluster ID to add or remove HSMs from the cluster and the ENI(s) of the HSM instance(s) to access the HSM instances.</p> 
+<p>You configure your cluster and its HSM instances using CloudHSM client software you deploy on <a title="Amazon EC2" href="https://aws.amazon.com/ec2/" target="_blank" rel="noopener noreferrer">Amazon EC2</a> instances in your VPC. You only need one such EC2 instance to manage a CloudHSM cluster, but it’s common to deploy additional EC2 instances in other availability zones to provide for client redundancy. Your applications communicate with the HSM instances using the client daemon. You manage and configure the cluster with command line tools including <span style="font-family: courier">cloudhsm_mgmt_util</span>, <span style="font-family: courier">key_mgmt_util</span>, and <span style="font-family: courier">configure</span>. An example of a CloudHSM architecture appears below.</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/12/CloudHSM-01.png" /> 
+<p class="wp-caption-text">Figure 1: A 3-Node CloudHSM architecture</p> 
+<p>The diagram shows a three-node CloudHSM cluster deployed in the us-west-2 (Oregon) region with three Amazon EC2 instances with the CloudHSM software. The client in Availability Zone 2 is communicating with the cluster through the elastic network interfaces in each availability zone.</p> 
+<b>CloudHSM Synchronization Process</b> 
+<p>Having discussed the architecture of AWS CloudHSM, let’s turn our attention to the matter of cluster synchronization. There are three events that require synchronization: cluster expansion, key management operations, and user management operations. Let’s look at each of these in more detail.</p> 
+<h3>Cluster Expansion</h3> 
+<p>When you add an HSM to an existing cluster, AWS CloudHSM clones all users, keys, and policies from another HSM in the cluster. No additional steps are required on your part.</p> 
+<h3>Key Management Operations</h3> 
+<p>Key management with the <a title="key_mgmt_util" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/key_mgmt_util.html" target="_blank" rel="noopener noreferrer"><span style="font-family: courier">key_mgmt_util</span></a> tool uses the CloudHSM client to communicate with the HSM cluster. Additionally, a fallback, HSM-based synchronization protocol keeps keys in sync.</p> 
+<h3>User Management</h3> 
+<p>You perform user management tasks, such as adding users or changing passwords, using the <a title="cloudhsm_mgmt_util" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/cloudhsm_mgmt_util.html" target="_blank" rel="noopener noreferrer"><span style="font-family: courier">cloudhsm_mgmt_util</span></a> tool. This tool communicates directly with the HSMs, bypassing the client daemon. <span style="font-family: courier">cloudhsm_mgmt_util</span> uses its own configuration files to determine the HSMs that it should connect to within the cluster. These configuration files aren’t updated dynamically when HSM instances are added. To prevent user synchronization errors, you must update the configuration files before running <span style="font-family: courier">cloudhsm_mgmt_util</span>. You must also not add new HSM instances to the cluster while you’re using the tool. This helps ensure that no HSM instances are accidentally left out of user updates that would in turn result in user synchronization problems.</p> 
+<p>Again, these safeguards are only necessary when using <span style="font-family: courier">cloudhsm_mgmt_util</span>. For all other applications and utilities using CloudHSM, the client daemon automatically reconfigures itself as you add and remove HSM instances from your cluster. In the remainder of this post, I will build a CloudHSM infrastructure as shown in the above diagram. I’ll then show you how users on your CloudHSM instances can become unsynchronized, and how to restore proper synchronization.</p> 
+<b>Prerequisites and Assumptions</b> 
+<li>You’ll need to have an AWS account that allows you to provision Amazon VPCs, Amazon EC2 instances, and CloudHSMs.</li> 
+<li>I’ll use the us-west-2 (Oregon) region, but you can use any region that offers CloudHSM.</li> 
+<li>You’ll need an Amazon EC2 key pair in the region.</li> 
+<li>You should have a working knowledge of the services I’ve mentioned.</li> 
+<blockquote> 
+<p><strong>Important</strong>: You’ll incur charges for the resources used in this example. You can find the cost of each service on that service’s pricing page.</p> 
+</blockquote> 
+<b>Building a CloudHSM Infrastructure</b> 
+<ol> 
+<li>Create an Amazon VPC with subnets in the us-west-2a, us-west-2b, and us-east-2c availability zones. I’ll use the <a title="Amazon VPC Architecture Quick Start" href="https://aws.amazon.com/quickstart/architecture/vpc/" target="_blank" rel="noopener noreferrer">Amazon VPC Architecture Quick Start</a>, which is an <a title="AWS CloudFormation" href="https://aws.amazon.com/cloudformation/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a> template that will do this on your behalf. Make sure you select the correct region after you load the Quick Start. Select the following parameters:<br /> 
+<table style="margin-left: 45px" border="1" width="0"> 
+<tbody> 
+<tr> 
+<td style="padding-left: 10px" width="233"><strong>Parameter</strong></td> 
+<td style="padding-left: 10px" width="301"><strong>Value</strong></td> 
+</tr> 
+<tr style="padding-left: 10px"> 
+<td style="padding-left: 10px" width="233">Availability Zones</td> 
+<td style="padding-left: 10px" width="301">us-west-2a, us-west-2b, us-west-2c</td> 
+</tr> 
+<tr style="padding-left: 10px"> 
+<td style="padding-left: 10px" width="233">Number of Availability Zones</td> 
+<td style="padding-left: 10px" width="301">3</td> 
+</tr> 
+<tr style="padding-left: 10px"> 
+<td style="padding-left: 10px" width="233">Create private subnets</td> 
+<td style="padding-left: 10px" width="301">False</td> 
+</tr> 
+<tr style="padding-left: 10px"> 
+<td style="padding-left: 10px" width="233">Create additional private subnets with dedicated network ACLs</td> 
+<td style="padding-left: 10px" width="301">False</td> 
+</tr> 
+<tr style="padding-left: 10px"> 
+<td style="padding-left: 10px" width="233">Key pair name</td> 
+<td style="padding-left: 10px" width="301">The name of your Amazon EC2 key pair</td> 
+</tr> 
+</tbody> 
+</table> <p>Accept the default values for all other parameters.</p></li> 
+<li>Follow these instructions to <a title="Create a CloudHSM cluster" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/create-cluster.html" target="_blank" rel="noopener noreferrer">create a CloudHSM cluster</a> in your new VPC in the us-west-2a, us-west-2b and us-west-2c availability zones. Note that the cluster will not have any HSMs after it’s created.</li> 
+<li>Follow these instructions to <a title="Initialize the cluster" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/initialize-cluster.html" target="_blank" rel="noopener noreferrer">initialize the cluster</a> with an HSM in the us-west-2a availability zone. After the cluster is initialized, note the ENI IP address from the cluster details section in the console as shown here: <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-02.png" /> 
+<p class="wp-caption-text">Figure 2: Details of CloudHSM Cluster</p> 
+<li><a title="Launch an Amazon Linux or Ubuntu EC2 instance" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/launch-client-instance.html" target="_blank" rel="noopener noreferrer">Launch an Amazon Linux or Ubuntu EC2 instance</a>. From the instance dashboard, note the public IP of the instance as shown below. <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-03.png" /> 
+<p class="wp-caption-text">Figure 3: Client Instance Details</p> 
+<li>Install the <a title="Client software" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/install-and-configure-client.html" target="_blank" rel="noopener noreferrer">client software</a> on the EC2 instance you launched in step 4.</li> 
+<li><a title="Add the IP" href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_SecurityGroups.html#AddRemoveRules" target="_blank" rel="noopener noreferrer">Add the IP</a> of the EC2 instance that you identified in step 4 to the security group you identified in step 3.</li> 
+<li><a title="Activate the cluster" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/activate-cluster.html" target="_blank" rel="noopener noreferrer">Activate the cluster</a>. The activation instructions will guide you through connecting to the EC2 instance you launched in step 4. Remain logged into the EC2 instance following the activation of the cluster for the steps below.</li> 
+<li>While you are still logged into the EC2 instance you just launched, follow the steps below to add a crypto user named <span style="font-family: courier">example_user</span> to the cluster: 
+<ol type="a"> 
+<li>Ensure the CloudHSM daemon is stopped:<span style="font-family: courier">$ sudo stop cloudhsm-client</span></li> 
+<li>Configure the IP address of the initial HSM using the ENI IP address from step 3:<span style="font-family: courier">$ sudo /opt/cloudhsm/bin/configure –a 10.0.129.209</span><br /> 
+<blockquote> 
+<p><strong>Note</strong>: the configure tool updates two configuration files: one for the CloudHSM client, and the other for the <span style="font-family: courier">cloudhsm_mgmt_util</span> program that is used to administer users.</p> 
+</blockquote> </li> 
+<li>Start the CloudHSM client:<span style="font-family: courier">$ sudo start cloudhsm-client</span></li> 
+<li>Ensure the <span style="font-family: courier">cloudhsm_mgmt_util</span> configuration file is up to date. We need to do this to ensure <span style="font-family: courier">cloudhsm_mgmt_util</span> is aware of all the HSM instances in the cluster:<span style="font-family: courier">$ sudo /opt/cloudhsm/bin/configure –m</span></li> 
+<li>Connect to the HSM instances, enable end-to-end encryption, and log in to the HSM instances. Enabling end-to-end encryption encrypts the communication between <span style="font-family: courier">cloudhsm_mgmt_util</span>&nbsp;and the HSM to prevent interception of sensitive information such as passwords:<span style="font-family: courier">$ /opt/cloudhsm/bin/cloudhsm_mgmt_util /opt/cloudhsm/etc/cloudhsm_mgmt_util.cfg</span> <p><span style="font-family: courier">aws-cloudhsm&gt; enable_e2e</span></p> <p><span style="font-family: courier">aws-cloudhsm&gt; loginHSM CO admin</span></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-04-1.png" /> 
+<p class="wp-caption-text">Figure 4: Connecting to a Single CloudHSM</p> 
+<blockquote> 
+<p><strong>Note</strong>: The connection or log in is automatically executed on every HSM instance that <span style="font-family: courier">cloudhsm_mgmt_util</span> is aware of. Note also that for each of the commands that you enter, the <span style="font-family: courier">cloudhsm_mgmt_util</span> program identifies the IP address of the HSM to which it is communicating.</p> 
+</blockquote> </li> 
+<li>Add the user <span style="font-family: courier">example_user</span> and then confirm the addition by listing the users in the HSM:<span style="font-family: courier">aws-cloudhsm&gt; createUser CU example_user yourpassword</span> <p><span style="font-family: courier">aws-cloudhsm&gt; listUsers</span></p></li> 
+<li>Use the <span style="font-family: courier">quit</span> command to log out and exit the program:<span style="font-family: courier">aws-cloudhsm&gt; quit</span></li> 
+</ol> </li> 
+<li>Now that we’ve added a user to the CloudHSM, let’s add a key so we can see how users and keys are synchronized as the cluster changes. 
+<ol type="a"> 
+<li>Start the <span style="font-family: courier">key_mgmt_util</span> program:<span style="font-family: courier">$ /opt/cloudhsm/bin/key_mgmt_util</span></li> 
+<li>Log in to the HSM:<span style="font-family: courier">Command: loginHSM –u CU –s example_user</span></li> 
+<li>Now, generate the key:<span style="font-family: courier">Command: genSymKey –t 31 –s 32 –l aes256</span></li> 
+<li>Display the keys in the cluster:<span style="font-family: courier">Command: findKey</span> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-05-1.png" /> 
+<p class="wp-caption-text">Figure 5: Looking Up a Key in a Single CloudHSM</p> 
+<li>Use the <span style="font-family: courier">exit</span> command to leave the program:<span style="font-family: courier">exit</span></li> 
+</ol> </li> 
+<li><a title="Add another HSM" href="https://docs.aws.amazon.com/cloudhsm/latest/userguide/add-remove-hsm.html#add-hsm" target="_blank" rel="noopener noreferrer">Add another HSM</a> to the cluster in the us-west-2b availability zone and note the ENI IP address from the cluster details section in the console, as shown here: <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-06.png" /> 
+<p class="wp-caption-text">Figure 6: The ENI IP address</p> 
+<li>Update the cluster configuration files and use cloud_mgmt_util to examine the user configuration:<br /> <span style="font-family: courier"><span style="font-family: courier">$ sudo stop cloudhsm-client</span></span>$ sudo /opt/cloudhsm/bin/configure –a 10.0.129.209<p></p> <p>$ sudo start cloudhsm-client</p> <p>$ sudo /opt/cloudhsm/bin/configure –m</p> <p>$ /opt/cloudhsm/bin/cloudhsm_mgmt_util /opt/cloudhsm/etc/cloudhsm_mgmt_util.cfg</p> <p>aws-cloudhsm&gt; enable_e2e</p> <p>aws-cloudhsm&gt; loginHSM CO admin</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-07.png" /> 
+<p class="wp-caption-text">Figure 7: Connecting to the 2-node CloudHSM cluster</p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-08.png" /> 
+<p class="wp-caption-text">Figure 8: Showing proper user synchronization across two CloudHSMs</p> 
+<li>Now, use <span style="font-family: courier">key_mgmt_util</span> to examine the keys:<span style="font-family: courier">Command: findKey</span> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-09.png" /> 
+<p class="wp-caption-text">Figure 9: Showing that keys are properly synchronized across a 2-node CloudHSM cluster</p> 
+</ol> 
+<b>The CloudHSM Cluster Users Become Unsynchronized</b> 
+<ol> 
+<li>Start <span style="font-family: courier">cloudhsm_mgmt_util</span> and enable end-to-end encryption:<span style="font-family: courier">$ /opt/cloudhsm/bin/cloudhsm_mgmt_util /opt/cloudhsm/etc/cloudhsm_mgmt_util.cfg</span> <p><span style="font-family: courier">aws-cloudhsm&gt; enable_e2e</span></p> <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-10.png" /> 
+<p class="wp-caption-text">Figure 10: Connecting to the 2-node CloudHSM cluster</p> 
+<li>While <span style="font-family: courier">cloudhsm_mgmt_util</span> is left running, add a third HSM in us-west-2c through the console and note the ENI IP address, as shown here: <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-11.png" /> 
+<p class="wp-caption-text">Figure 11: Connecting to the 2-node CloudHSM cluster</p> 
+<li>Going back to <span style="font-family: courier">cloudhsm_mgmt_util</span>, let’s add a user named newest_user to our cluster. Note that we have not exited <span style="font-family: courier">cloudhsm_mgmt_util</span> and refreshed its configuration file. So it’s still connected only to the first two HSM instances.<span style="font-family: courier">aws-cloudhsm&gt; enable_e2e</span> <p><span style="font-family: courier">aws-cloudhsm&gt; loginHSM CO admin yourpassword</span></p> <p><span style="font-family: courier">aws-cloudhsm&gt; createUser CU newest_user yourpassword</span></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-12.png" /> 
+<p class="wp-caption-text">Figure 12: Adding a User to only two nodes of a 3-node CloudHSM Cluster and breaking synchronization</p> 
+<li>Let’s fix this by exiting <span style="font-family: courier">cloudhsm_mgmt_util</span>. Refresh the configuration, and then run the management utility again.<span style="font-family: courier">$sudo stop cloudhsm-client</span> <p><span style="font-family: courier">$sudo /opt/cloudhsm/bin/configure –a 10.0.129.209</span></p> <p><span style="font-family: courier">$sudo start cloudhsm-client</span></p> <p><span style="font-family: courier">$sudo /opt/cloudhsm/bin/configure –m</span></p> <p><span style="font-family: courier">$ /opt/cloudhsm/bin/cloudhsm_mgmt_util /opt/cloudhsm/etc/cloudhsm_mgmt_util.cfgaws-cloudhsm&gt; enable_e2e</span></p> <p><span style="font-family: courier">aws-cloudhsm&gt; loginHSM CO admin</span></p> <p>You can now see <span style="font-family: courier">cloudhsm_mgmt_util</span> is communicating with all of the cluster nodes.</p> <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-13.png" /> 
+<p class="wp-caption-text">Figure 13: Connecting to a 3-node CloudHSM cluster</p> 
+<li>Let’s see what happens when we list the users:<span style="font-family: courier">aws-cloudhsm&gt; listUsers</span> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-14.png" /> 
+<p class="wp-caption-text">Figure 14: Showing that users are now unsynchronized</p> 
+</ol> 
+<b>Restoring User Synchronization to the CloudHSM Cluster</b> 
+<p>We now want to add the user <span style="font-family: courier">newest_user</span> to the single HSM (server 1) that is out of sync. Normally, <span style="font-family: courier">cloudhsm_mgmt_util</span> works in <em>cluster mode</em> and applies your commands to all HSMs in the cluster. Since we want to work on a single HSM, we’re going to enter the <span style="font-family: courier">server</span> command to tell <span style="font-family: courier">cloudhsm_mgmt_util</span> to work in <em>server mode</em> and apply our commands just to that one HSM.</p> 
+<ol> 
+<li>In the <span style="font-family: courier">server</span> command below, we specify the number of the HSM that we want to change based on the figure above. In the <span style="font-family: courier">createUser</span> command, you must use the same password that you used in step 3 (in the section titled “The CloudHSM Cluster Users Become Unsynchronized”) on the other HSMs in the cluster so that all HSMs in the cluster have identical user names and passwords. After we make this change, we use the <span style="font-family: courier">exit</span> command to transition from <em>server mode</em> back to <em>cluster mode</em>.<span style="font-family: courier">aws-cloudhsm&gt; server 1</span> <p><span style="font-family: courier">server1&gt; createUser CU newest_user yourpassword</span></p> <p><span style="font-family: courier">exit</span></p> <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-15.png" /> 
+<p class="wp-caption-text">Figure 15: Adding a user to a single-node of a 3-node CloudHSM cluster</p> 
+<li>Now that we have transitioned back to cluster mode, let’s confirm that the HSM user tables are now synchronized by listing the users:<span style="font-family: courier">aws-cloudhsm&gt; listUsers</span> <p></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-16.png" /> 
+<p class="wp-caption-text">Figure 16: Showing that users are now synchronized across the 3-node CloudHSM cluster</p> 
+<li>Let’s take a look at the keys using <span style="font-family: courier">key_mgmt_util</span>:<span style="font-family: courier">Command: loginHSM –u CU –s example_user –p yourpassword</span> <p><span style="font-family: courier">Command: findKey</span></p> 
+<img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/13/CloudHSM-17.png" /> 
+<p class="wp-caption-text">Figure 17: Showing that keys continued to be synchronized across a 3-node CloudHSM Cluster</p> 
+</ol> 
+<b>Conclusion</b> 
+<p>AWS CloudHSM provides the ability to create scalable clusters of HSM instances to support the high volumes of cryptographic operations and provide resiliency by supporting multiple availability zones. As mentioned, it’s important to be aware of the various modes of synchronization used in CloudHSM so that each HSM can provide consistent service. In particular, users are synchronized only by the client. Since <span style="font-family: courier">cloudhsm_mgmt_util</span> doesn’t rely on the client daemon to talk to HSM instances in your cluster, it doesn’t automatically update its configuration. By following the steps above and refreshing the configuration information before changing users or passwords, CloudHSM will keep users and passwords synchronized within the cluster and provide consistent responses to cryptographic operations if the level of redundancy within the HSM cluster changes.</p> 
+<p>If you have feedback about this blog post, submit comments in the Comments section below. If you have questions about this blog post, start a new thread on the <a title="Amazon CloudHSM forum" href="https://forums.aws.amazon.com/forum.jspa?forumID=156" target="_blank" rel="noopener noreferrer">Amazon CloudHSM forum</a> or contact <a title="AWS Support" href="https://console.aws.amazon.com/support/home" target="_blank" rel="noopener noreferrer">AWS Support</a>.</p> 
+<p><strong>Want more AWS Security news? Follow us on <a title="Twitter" href="https://twitter.com/AWSsecurityinfo" target="_blank" rel="noopener noreferrer">Twitter</a>.</strong></p> 
+<script>
+require(['blog'], function() {
+AWS.Blog.commenting('#aws-comment-trigger-7676');
+});
+</script> 
+</article> 
+<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
+<meta property="inLanguage" content="en-US" /> 
 <meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/04/14/AmazonEBS-for-social-800x400.jpg" /> 
 <b class="lb-b blog-post-title" property="name headline">Now You Can Create Encrypted Amazon EBS Volumes by Using Your Custom Encryption Keys When You Launch an Amazon EC2 Instance</b> 
 <p style="margin: 0; padding:0;">=======================<p>
@@ -207,6 +373,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7715');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p><a href="http://aws.amazon.com/ebs/" title="undefined" target="_blank">Amazon Elastic Block Store</a> (EBS) offers an encryption solution for your Amazon EBS volumes so you don’t have to build, maintain, and secure your own infrastructure for managing encryption keys for block storage. Amazon EBS encryption uses <a href="https://aws.amazon.com/kms/" title="undefined" target="_blank">AWS Key Management Service</a> (AWS KMS) <a href="http://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#master_keys" title="undefined" target="_blank">customer master keys</a> (CMKs) when creating encrypted <a href="http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSVolumeTypes.html" title="undefined" target="_blank">Amazon EBS volumes</a>, providing you all the <a href="https://aws.amazon.com/kms/faqs/" title="undefined" target="_blank">benefits</a> associated with using AWS KMS. You can specify either an AWS managed CMK or a customer-managed CMK to encrypt your Amazon EBS volume. If you use a customer-managed CMK, you retain granular control over your encryption keys, such as having AWS KMS <a href="http://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html" title="undefined" target="_blank">rotate your CMK</a> every year. To learn more about creating CMKs, see <a href="http://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html" title="undefined" target="_blank">Creating Keys</a>.</p> 
 <p>In this post, we demonstrate how to create an encrypted Amazon EBS volume using a customer-managed CMK when you launch an EC2 instance from the EC2 console, AWS CLI, and AWS SDK.</p> 
 <b>Creating an encrypted Amazon EBS volume from the EC2 console</b> 
@@ -255,6 +422,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7657');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p><a href="https://aws.amazon.com/sns/" title="Amazon Simple Notification Service" target="_blank" rel="noopener noreferrer">Amazon Simple Notification Service</a> (SNS) now supports <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/vpc-endpoints.html" title="VPC Endpoints" target="_blank" rel="noopener noreferrer">VPC Endpoints</a> (VPCE) via <a href="https://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Introduction.html#what-is-privatelink" title="AWS PrivateLink" target="_blank" rel="noopener noreferrer">AWS PrivateLink</a>. You can use VPC Endpoints to privately publish messages to SNS topics, from an <a href="https://aws.amazon.com/vpc/" title="Amazon Virtual Private Cloud" target="_blank" rel="noopener noreferrer">Amazon Virtual Private Cloud</a> (VPC), without traversing the public internet. When you use AWS PrivateLink, you don’t need to set up an Internet Gateway (IGW), Network Address Translation (NAT) device, or Virtual Private Network (VPN) connection. You don’t need to use public IP addresses, either.</p> 
 <p>VPC Endpoints doesn’t require code changes and can bring additional security to <a href="https://aws.amazon.com/pub-sub-messaging/" title="Pub/Sub Messaging" target="_blank" rel="noopener noreferrer">Pub/Sub Messaging</a> use cases that rely on SNS. VPC Endpoints helps promote data privacy and is aligned with assurance programs, including the <a href="https://aws.amazon.com/compliance/hipaa-compliance/" title="Health Insurance Portability and Accountability Act" target="_blank" rel="noopener noreferrer">Health Insurance Portability and Accountability Act</a> (HIPAA), <a href="https://aws.amazon.com/compliance/fedramp/" title="FedRAMP" target="_blank" rel="noopener noreferrer">FedRAMP</a>, and others discussed below.</p> 
 <b>VPC Endpoints for SNS in action</b> 
@@ -307,6 +475,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7278');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p><img width="100%" src="https://d1.awsstatic.com/Digital%20Marketing/House/Hero/products/certificate-manager/ha_hero_certificate-manager.d0ab7b1a8bb871a42a5651a59b110c528fa83553.png" /></p> 
 <p><strong>Update from March 27, 2018</strong>: On March 27, 2018, we updated ACM APIs so that you can disable Certificate Transparency logging on a per-certificate basis.</p> 
 <hr /> 
@@ -348,6 +517,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7627');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p>Recently, we launched <a href="https://aws.amazon.com/secrets-manager/" target="_blank" rel="noopener noreferrer">AWS Secrets Manager</a>, a service that makes it easier to rotate, manage, and retrieve database credentials, API keys, and other secrets throughout their lifecycle. You can configure Secrets Manager to rotate secrets automatically, which can help you meet your security and compliance needs. Secrets Manager offers built-in integrations for MySQL, PostgreSQL, and Amazon Aurora on Amazon RDS, and can rotate credentials for these databases natively. You can control access to your secrets by using fine-grained <a href="https://aws.amazon.com/iam/" target="_blank" rel="noopener noreferrer">AWS Identity and Access Management</a> (IAM) policies. To retrieve secrets, employees replace plaintext secrets with a call to Secrets Manager APIs, eliminating the need to hard-code secrets in source code or update configuration files and redeploy code when secrets are rotated.</p> 
 <p>In this post, I introduce the <a href="https://aws.amazon.com/secrets-manager/features/" target="_blank" rel="noopener noreferrer">key features of Secrets Manager</a>. I then show you how to store a database credential for a MySQL database hosted on Amazon RDS and how your applications can access this secret. Finally, I show you how to configure Secrets Manager to rotate this secret automatically.</p> 
 <b>Key features of Secrets Manager</b> 
@@ -424,6 +594,7 @@ AWS.Blog.commenting('#aws-comment-trigger-7543');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p>In this post, I’ll show you how to create a sample dataset for <a href="https://docs.aws.amazon.com/macie/latest/userguide/what-is-macie.html" target="_blank" rel="noopener noreferrer">Amazon Macie</a>, and how you can use Amazon Macie to implement data-centric compliance and security analytics in your Amazon S3 environment. I’ll also dive into the different kinds of credentials, document types, and PII detections supported by Macie. First, I’ll walk through creating a “getting started” sample set of artificial, generated data that you can use to test Macie capabilities and start building your own policies and alerts.</p> 
 <b>Create a realistic data sample set in S3</b> 
 <p>I’ll use <span style="font-family: courier"><a href="https://github.com/aws-samples/amazon-macie-activity-generator" title="undefined" target="_blank">amazon-macie-activity-generator</a></span>, which we call “<span style="font-family: courier">AMG</span>” for short, a sample application developed by AWS that generates realistic content and accesses your test account to create the data. <span style="font-family: courier">AMG</span> uses <a href="https://aws.amazon.com/cloudformation/aws-cloudformation-templates/" target="_blank" rel="noopener noreferrer">AWS CloudFormation</a>, <a href="https://aws.amazon.com/lambda/" target="_blank" rel="noopener noreferrer">AWS Lambda</a>, and Python’s excellent <a href="https://faker.readthedocs.io/en/latest/index.html" target="_blank" rel="noopener noreferrer">Faker</a> library to create a data set with artificial—but realistic—data classifications and access patterns to help test some of the features and capabilities of <a href="https://aws.amazon.com/macie/" target="_blank" rel="noopener noreferrer">Macie</a>. <span style="font-family: courier">AMG</span> is released under Amazon Software License 1.0, and we’ll accept pull requests on our GitHub repository and monitor any issues that are opened so we can try to fix bugs and consider new feature requests.</p> 
@@ -747,6 +918,7 @@ AWS.Blog.commenting('#aws-comment-trigger-5777');
 });
 </script> | 
 <a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
+</footer> 
 <p style="text-align: center"><img width="100%" src="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2017/10/25/AWSCertificateManager_2b.png" /></p> 
 <p><strong>Update from March 28, 2018</strong>: We updated the Amazon Trust Services table by replacing an out-of-date value with a new value.</p> 
 <hr /> 
@@ -826,36 +998,6 @@ AWS.Blog.commenting('#aws-comment-trigger-5777');
 <script>
 require(['blog'], function() {
 AWS.Blog.commenting('#aws-comment-trigger-5777');
-});
-</script> 
-</article> 
-<article class="blog-post" vocab="http://schema.org/" typeof="TechArticle"> 
-<meta property="inLanguage" content="en-US" /> 
-<meta property="image" content="https://d2908q01vomqb2.cloudfront.net/22d200f8670dbdb3e253a90eee5098477c95c23d/2018/03/13/AustraliaFlag800x400.jpg" /> 
-<b class="lb-b blog-post-title" property="name headline">Newly released guide provides Australian public sector the ability to evaluate AWS at PROTECTED level</b> 
-<p style="margin: 0; padding:0;">=======================<p>
-<footer class="blog-post-meta" data-lb-comp="aws-blog:share-dialog">
-by 
-<span property="author" typeof="Person"><span property="name">Oliver Bell</span></span> | on 
-<time property="datePublished" datetime="2018-03-28T07:08:20+00:00">28 MAR 2018</time> | in 
-<span class="blog-post-categories"><a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/compliance/" title="View all posts in Compliance*"><span property="articleSection">Compliance*</span></a>, <a href="https://aws.amazon.com/blogs/security/category/security-identity-compliance/" title="View all posts in Security, Identity, &amp; Compliance*"><span property="articleSection">Security, Identity, &amp; Compliance*</span></a></span> | 
-<a href="https://aws.amazon.com/blogs/security/newly-released-guide-provides-australian-public-sector-the-ability-to-evaluate-aws-at-protected-level/" property="url">Permalink</a> | 
-<a id="aws-comment-trigger-7503" href="https://commenting.awsblogs.com/embed.html?disqus_shortname=aws-security-blog&amp;disqus_identifier=7503&amp;disqus_title=Newly+released+guide+provides+Australian+public+sector+the+ability+to+evaluate+AWS+at+PROTECTED+level&amp;disqus_url=https://aws.amazon.com/blogs/security/newly-released-guide-provides-australian-public-sector-the-ability-to-evaluate-aws-at-protected-level/" data-sandbox-attr="allow-forms allow-scripts allow-popups allow-same-origin" property="discussionUrl"><i class="icon-comment"></i> Comments</a> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7503');
-});
-</script> | 
-<a href="#" role="button" data-share-dialog-toggle=""><span class="span icon-share"></span>&nbsp;Share</a> 
-</footer> 
-<p>Australian public sector customers now have a clear roadmap to use our secure services for sensitive workloads at the PROTECTED level. For the first time, we’ve released our Information Security Registered Assessors Program (IRAP) PROTECTED documentation via <a href="https://aws.amazon.com/artifact/" title="undefined" target="_blank">AWS Artifact</a>. This information provides the ability to plan, architect, and self-assess systems built in AWS under the <a href="https://www.dta.gov.au/what-we-do/policies-and-programs/secure-cloud/" title="undefined" target="_blank">Digital Transformation Agency’s Secure Cloud Guidelines</a>.</p> 
-<p>In short, this documentation gives public sector customers everything needed to evaluate AWS at the PROTECTED level. And we’re making this resource available to download on-demand through AWS Artifact. When you download the guide, you’ll find a mapping of how AWS meets each requirement to securely and compliantly process PROTECTED data.</p> 
-<p>With the AWS IRAP PROTECTED documentation, the process of adopting our secure services has never been easier. The information enables individual agencies to complete their own assessments and adopt AWS, but we also continue to work with the <a href="https://www.asd.gov.au/" title="undefined" target="_blank">Australian Signals Directorate</a> to include our services at the PROTECTED level on the <a href="https://www.asd.gov.au/infosec/irap/certified_clouds.htm" title="undefined" target="_blank">Certified Cloud Services List</a>.</p> 
-<p>Meanwhile, we’re also excited to announce that there are now 46 services in scope, which mean more options to build secure and innovative solutions, while also saving money and gaining the productivity of the cloud.</p> 
-<p>If you have questions about this announcement or would like to inquire about how to use AWS for your regulated workloads, contact your account team.</p> 
-<script>
-require(['blog'], function() {
-AWS.Blog.commenting('#aws-comment-trigger-7503');
 });
 </script> 
 </article> 
